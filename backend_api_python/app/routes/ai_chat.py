@@ -467,10 +467,18 @@ def _normalize_attachments(raw_attachments: Any) -> list[dict]:
 
 
 def _attachment_meta(attachments: list[dict]) -> list[dict]:
-    return [
-        {"name": a.get("name"), "mime_type": a.get("mime_type"), "size": a.get("size")}
-        for a in attachments
-    ]
+    stored: list[dict] = []
+    for a in attachments:
+        item = {
+            "name": a.get("name"),
+            "mime_type": a.get("mime_type"),
+            "size": a.get("size"),
+        }
+        data_url = a.get("data_url")
+        if isinstance(data_url, str) and data_url.startswith("data:image/"):
+            item["data_url"] = data_url
+        stored.append(item)
+    return stored
 
 
 def _get_session(cur, user_id: int, session_id: int | None) -> dict | None:
@@ -1314,7 +1322,7 @@ def _macro_setup_guidance(indicator: str, provider_status: dict) -> list[dict]:
         },
         {
             "target": "Other search providers",
-            "settings": ["SEARCH_GOOGLE_API_KEY + SEARCH_GOOGLE_CX", "SEARCH_BING_API_KEY", "TAVILY_API_KEYS"],
+            "settings": ["SEARCH_SEARXNG_BASE_URL", "SEARCH_GOOGLE_API_KEY + SEARCH_GOOGLE_CX", "SEARCH_BING_API_KEY", "TAVILY_API_KEYS"],
             "reason": "Lets Copilot verify newly released macro figures when the calendar provider is missing them.",
         },
     ]
@@ -1451,7 +1459,8 @@ def _build_research_context(context: dict, has_image: bool = False) -> dict:
     if not candidates and search_context.get("web_results"):
         candidates.extend(_discover_symbol_candidates_from_search(search_context, candidates))
     primary = candidates[0] if candidates else None
-    macro_context = _macro_intelligence(message) if flags["needs_macro"] else {}
+    raw_macro_context = _macro_intelligence(message) if flags["needs_macro"] else {}
+    macro_context = raw_macro_context if isinstance(raw_macro_context, dict) else {}
 
     selected_snapshot = context.get("market_snapshot")
     primary_snapshot = None
@@ -1467,8 +1476,11 @@ def _build_research_context(context: dict, has_image: bool = False) -> dict:
         data_gaps.append("No usable quote/K-line snapshot was available for the inferred entity. Resolve the symbol or configure the relevant data source.")
     if flags["needs_news"] and not search_context.get("web_results"):
         data_gaps.append("No web/news search result was available. Check search engine configuration or network access.")
-    macro_lookup = macro_context.get("release_lookup") if isinstance(macro_context, dict) else {}
-    if flags["needs_macro"] and not (macro_lookup.get("answerable") or macro_context.get("events")):
+    macro_lookup = macro_context.get("release_lookup") or {}
+    if not isinstance(macro_lookup, dict):
+        macro_lookup = {}
+    macro_events = macro_context.get("events") or []
+    if flags["needs_macro"] and not (macro_lookup.get("answerable") or macro_events):
         data_gaps.append("No exact macro release value was available for this question. Check BLS/Trading Economics/search configuration.")
     if primary and primary.get("market") in {"private_company", "private_business_unit"}:
         data_gaps.append("The inferred entity is not directly exchange-traded; do not answer with a fake public stock price.")
@@ -1478,7 +1490,7 @@ def _build_research_context(context: dict, has_image: bool = False) -> dict:
         recommended_actions.append({"type": "answer", "label": "Use market snapshot for technical levels and risk plan."})
     if search_context.get("web_results"):
         recommended_actions.append({"type": "answer", "label": "Use recent search/news evidence and cite title/source briefly."})
-    if macro_context.get("events"):
+    if macro_events:
         recommended_actions.append({"type": "answer", "label": "Use macro event context and distinguish released values from upcoming events."})
     if primary and not primary.get("symbol"):
         recommended_actions.append({"type": "workflow", "label": "Explain non-tradable/private status and suggest related tradable proxies or search actions."})
@@ -1542,17 +1554,133 @@ def _legacy_intelligence_context(research_context: dict) -> dict:
     }
 
 
-def _enrich_context(context: dict) -> dict:
+def _enrich_context(context: dict, has_image: bool = False) -> dict:
     enriched = dict(context or {})
     if "market_snapshot" not in enriched:
         snapshot = _build_market_snapshot(enriched)
         if snapshot:
             enriched["market_snapshot"] = snapshot
-    research = _build_research_context(enriched)
+    research = _build_research_context(enriched, has_image=has_image)
     if research:
         enriched["research_context"] = research
         enriched["intelligence_context"] = _legacy_intelligence_context(research)
     return enriched
+
+
+def _compact_memory_text(value: Any, limit: int = 900) -> str:
+    text = re.sub(r"\s+", " ", _plain_text(value)).strip()
+    if len(text) > limit:
+        return text[:limit].rstrip() + "..."
+    return text
+
+
+def _first_match(patterns: list[str], text: str) -> str:
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return (match.group(1) if match.groups() else match.group(0)).strip()
+    return ""
+
+
+def _extract_session_known_fields(text: str, context: dict) -> dict:
+    known: dict[str, Any] = {}
+    market = context.get("market")
+    symbol = context.get("symbol")
+    if market or symbol:
+        known["selected_target"] = {"market": market, "symbol": symbol}
+
+    interval = _first_match(
+        [
+            r"\b(\d+\s*(?:m|min|minute|minutes|h|hour|hours|d|day|days|w|week|weeks))\b",
+            r"\b(\d+[mhdw])\b",
+            r"\b(daily|weekly|hourly|1h|4h|15m|30m)\b",
+            r"(每(?:天|日|周|小时)|\d+\s*(?:分钟|小时|天|日|周)|15分钟|30分钟|1小时|4小时|日线|周线)",
+        ],
+        text,
+    )
+    if interval:
+        known["interval_or_timeframe"] = interval
+
+    channels: list[str] = []
+    channel_patterns = {
+        "in_app": r"(站内|站内消息|应用内|in[- ]?app|browser notification)",
+        "email": r"(邮箱|邮件|email|e-mail)",
+        "webhook": r"(webhook|回调)",
+        "sms": r"(短信|sms)",
+        "telegram": r"(telegram|tg)",
+    }
+    for channel, pattern in channel_patterns.items():
+        if re.search(pattern, text, re.IGNORECASE):
+            channels.append(channel)
+    if channels:
+        known["notification_channels"] = channels
+
+    focus = _first_match(
+        [
+            r"(?:重点关注|关注条件|提醒条件|触发条件|监控条件|focus(?: on)?|watch(?: for)?|conditions?)[:：]?\s*([^。；;\n]{4,260})",
+            r"(突破[^。；;\n]{2,180})",
+            r"(跌破[^。；;\n]{2,180})",
+        ],
+        text,
+    )
+    if focus:
+        known["focus_conditions"] = focus
+
+    if re.search(r"(止损|stop loss|sl\b)", text, re.IGNORECASE):
+        known["mentions_stop_loss"] = True
+    if re.search(r"(止盈|take profit|tp\b)", text, re.IGNORECASE):
+        known["mentions_take_profit"] = True
+    if re.search(r"(策略|strategy|脚本|script|指标|indicator)", text, re.IGNORECASE):
+        known["strategy_related"] = True
+    if re.search(r"(新闻|事件|news|event|macro|宏观|经济数据)", text, re.IGNORECASE):
+        known["research_related"] = True
+    return known
+
+
+def _build_session_working_memory(history: list[dict], current_message: str, context: dict, language: str) -> dict:
+    user_facts: list[str] = []
+    assistant_prompts: list[str] = []
+    for item in history[-16:]:
+        role = "assistant" if item.get("role") == "assistant" else "user"
+        content = _compact_memory_text(item.get("content"), 900)
+        if not content:
+            continue
+        if role == "user":
+            user_facts.append(content)
+        elif (
+            "?" in content
+            or "？" in content
+            or re.search(r"(please provide|missing|need|补充|缺少|请选择|请填写|需要)", content, re.IGNORECASE)
+        ):
+            assistant_prompts.append(content)
+
+    current = _compact_memory_text(current_message, 1200)
+    if current:
+        user_facts.append(current)
+
+    combined = "\n".join(user_facts[-10:])
+    known = _extract_session_known_fields(combined, context)
+    agent_task = context.get("agent_task")
+    if isinstance(agent_task, dict) and agent_task:
+        known["active_agent_task"] = {
+            "type": agent_task.get("type") or agent_task.get("id"),
+            "title": agent_task.get("title") or agent_task.get("label"),
+            "required_fields": agent_task.get("required_fields") or agent_task.get("missing_fields"),
+        }
+
+    memory = {
+        "purpose": "session_task_state",
+        "language": language,
+        "known_fields": known,
+        "recent_user_facts": user_facts[-8:],
+        "recent_assistant_questions": assistant_prompts[-3:],
+        "instruction": (
+            "Use this as working memory for the current chat session. "
+            "Do not ask again for fields already present in known_fields or recent_user_facts. "
+            "When enough information has been provided, proceed to the next workflow step instead of restarting the checklist."
+        ),
+    }
+    return memory
 
 
 def _build_system_prompt(language: str, context: dict, intent: str, has_image: bool, json_response: bool = True) -> str:
@@ -1576,6 +1704,11 @@ def _build_system_prompt(language: str, context: dict, intent: str, has_image: b
         "For strategy work, first clarify missing requirements, then propose design, then generate runnable code only when the user confirms or asks to generate. "
         "If the user asks for market/chart diagnosis, separate observable facts from inference. "
         "If market_snapshot is provided, use its actual numbers and avoid generic textbook checklists. "
+        "Treat recent conversation history as active memory. Do not ask again for details already provided in the same session. "
+        "Keep answers decision-first and compact: conclusion first, then evidence, then levels/plan/data gaps. Avoid long generic frameworks unless the user asks for a full report. "
+        "Default to high-signal output: simple questions should be answered in no more than 220 Chinese characters or 120 English words; market diagnosis should use at most five bullets unless the user requests a full report. "
+        "Avoid filler such as generic risk education, repeated disclaimers, long checklists, and process narration. Every useful answer should include a verdict, the key evidence, invalidation or next step, and only the missing data that truly blocks action. "
+        "When information is missing, ask for at most two missing fields at a time and never re-ask for fields already present in the session memory. "
         "If research_context is provided, treat it as the structured research workspace. First resolve the entity, then choose skills, then use market snapshot, search/news, macro events, fundamentals context, and data gaps before answering. "
         "If intelligence_context is provided, treat it as a legacy compatibility summary of research_context. "
         "For macro/current-data questions, inspect provided system context, market_snapshot, economic_calendar_context, tools and skills before saying data is unavailable. "
@@ -1594,6 +1727,16 @@ def _build_system_prompt(language: str, context: dict, intent: str, has_image: b
         base += (
             f"\n[QuantDinger agent task]\n{_json_dumps(context.get('agent_task'))}\n"
             "Treat this as a workflow state, not a casual chat. Keep the next action explicit.\n"
+        )
+    session_memory = context.get("session_working_memory")
+    if isinstance(session_memory, dict) and session_memory:
+        base += (
+            "\n[Session working memory]\n"
+            + _json_dumps(session_memory)[:9000]
+            + "\n"
+            "This memory is authoritative for the current session. Merge new user answers into this task state. "
+            "If the user has already supplied a requested field, acknowledge it briefly and ask only for the next missing field. "
+            "If no required fields are missing, produce the result or action now.\n"
         )
     research_context = context.get("research_context")
     if isinstance(research_context, dict) and research_context:
@@ -1619,10 +1762,10 @@ def _build_system_prompt(language: str, context: dict, intent: str, has_image: b
         base += "\n[Economic calendar context]\n" + _json_dumps(calendar_context[:30])[:5000] + "\n"
     if not json_response:
         return base + (
-            "Respond in clean Markdown. Prefer concise but deep analysis over broad frameworks. "
-            "Use this structure when the user asks for a symbol analysis: "
-            "1) Current read, 2) Key levels, 3) Volume/participation, 4) Funding/capital flow status, 5) Trading plan with bull/base/bear scenarios, 6) Risks. "
-            "Each scenario must include trigger, invalidation, and what to watch next. "
+            "Respond in clean Markdown. Prefer concise, evidence-dense analysis over broad frameworks. "
+            "For symbol analysis, use at most three short sections by default: verdict, key evidence/levels, and action plan. "
+            "Only expand into a full six-part report when the user asks for a report or deep analysis. "
+            "If scenarios are useful, keep them to bull/base/bear with trigger, invalidation, and what to watch next. "
             "Use headings, bullet lists, tables when useful, and fenced code blocks for code. "
             "Do not wrap the full response in JSON."
         )
@@ -1638,12 +1781,23 @@ def _build_system_prompt(language: str, context: dict, intent: str, has_image: b
 def _build_llm_messages(history: list[dict], message: str, attachments: list[dict], context: dict, language: str, intent: str, json_response: bool = True) -> list[dict]:
     context = dict(context or {})
     context["user_message"] = message or ""
+    context["session_working_memory"] = _build_session_working_memory(history, message or "", context, language)
     messages: list[dict] = [
         {"role": "system", "content": _build_system_prompt(language, context, intent, bool(attachments), json_response=json_response)}
     ]
-    for h in history[-8:]:
+    for h in history[-12:]:
         role = "assistant" if h.get("role") == "assistant" else "user"
-        messages.append({"role": role, "content": str(h.get("content") or "")[:4000]})
+        content = str(h.get("content") or "")[:4000]
+        hist_attachments = _json_loads(h.get("attachments_json"), [])
+        if isinstance(hist_attachments, list) and hist_attachments:
+            names = ", ".join(
+                str(att.get("name") or "image")[:80]
+                for att in hist_attachments
+                if isinstance(att, dict)
+            )
+            if names:
+                content += f"\n[Historical attachment(s): {names}. Image bytes are stored for UI history; ask the user to reattach if visual detail is needed again.]"
+        messages.append({"role": role, "content": content})
 
     context_note = ""
     if context:
@@ -2017,7 +2171,7 @@ def chat_message():
     context["intent"] = intent
     context["agent_intent"] = agent_plan
     context["language"] = language
-    context = _enrich_context(context)
+    context = _enrich_context(context, has_image=bool(attachments))
 
     try:
         with get_db_connection() as db:
@@ -2041,7 +2195,7 @@ def chat_message():
                 }), 402
 
             context["user_memories"] = _get_user_memories(cur, user_id)
-            history = _load_recent_messages(cur, sid, limit=10)
+            history = _load_recent_messages(cur, sid, limit=20)
             llm_messages = _build_llm_messages(history[:-1], message or "Please analyze the attached chart image.", attachments, context, language, intent)
             raw = LLMService().call_llm_api(llm_messages, temperature=0.35, use_json_mode=True)
             parsed = _parse_llm_json(raw)
@@ -2106,7 +2260,7 @@ def chat_message_stream():
     context["intent"] = intent
     context["agent_intent"] = agent_plan
     context["language"] = language
-    context = _enrich_context(context)
+    context = _enrich_context(context, has_image=bool(attachments))
 
     @stream_with_context
     def generate():
@@ -2132,7 +2286,7 @@ def chat_message_stream():
                     return
 
                 context["user_memories"] = _get_user_memories(cur, user_id)
-                history = _load_recent_messages(cur, sid, limit=10)
+                history = _load_recent_messages(cur, sid, limit=20)
                 llm_messages = _build_llm_messages(
                     history[:-1],
                     message or "Please analyze the attached chart image.",
@@ -2294,7 +2448,6 @@ def save_local_chat_message():
         return jsonify({"code": 0, "msg": "Missing message content", "data": None}), 400
 
     context = data.get("context") if isinstance(data.get("context"), dict) else {}
-    context = _enrich_context(context)
     intent = str(data.get("intent") or data.get("meta") or "local_agent").strip()[:64]
     session_id = data.get("session_id") or data.get("chatId")
     message_id = data.get("message_id")
@@ -2304,6 +2457,7 @@ def save_local_chat_message():
         attachments = _normalize_attachments(data.get("attachments") or [])
     except ValueError as e:
         return jsonify({"code": 0, "msg": str(e), "data": None}), 400
+    context = _enrich_context(context, has_image=bool(attachments))
 
     try:
         with get_db_connection() as db:

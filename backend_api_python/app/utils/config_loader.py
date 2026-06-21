@@ -190,6 +190,11 @@ def load_addon_config() -> Dict[str, Any]:
         ('SEARCH_GOOGLE_API_KEY', 'search.google.api_key', 'string'),
         ('SEARCH_GOOGLE_CX', 'search.google.cx', 'string'),
         ('SEARCH_BING_API_KEY', 'search.bing.api_key', 'string'),
+        ('SEARCH_SEARXNG_BASE_URL', 'search.searxng.base_url', 'string'),
+        ('SEARCH_SEARXNG_ENGINES', 'search.searxng.engines', 'string'),
+        ('SEARCH_SEARXNG_CATEGORIES', 'search.searxng.categories', 'string'),
+        ('SEARCH_SEARXNG_LANGUAGE', 'search.searxng.language', 'string'),
+        ('SEARCH_SEARXNG_TIMEOUT', 'search.searxng.timeout', 'int'),
         
         # Tavily (AI-optimized search)
         ('TAVILY_API_KEYS', 'tavily.api_keys', 'string'),

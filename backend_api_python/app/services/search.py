@@ -4,10 +4,12 @@ Search service v2.0 - 增强版搜索服务
 
 支持的搜索引擎（按优先级）：
 1. Tavily - 专为AI设计，免费1000次/月
-2. SerpAPI - Google/Bing 结果抓取
-3. Google CSE - 自定义搜索引擎
-4. Bing Search API
-5. DuckDuckGo - 免费兜底
+2. SearXNG - 自建聚合搜索服务
+3. GDELT - 免费全球新闻兜底
+4. SerpAPI - Google/Bing 结果抓取
+5. Google CSE - 自定义搜索引擎
+6. Bing Search API
+7. DuckDuckGo - 免费兜底
 
 参考：daily_stock_analysis-main/src/search_service.py
 """
@@ -25,7 +27,7 @@ from urllib.parse import urlparse
 
 from app.utils.logger import get_logger
 from app.utils.config_loader import load_addon_config
-from app.config.data_sources import AlphaVantageConfig, GDELTConfig
+from app.config.data_sources import AlphaVantageConfig, GDELTConfig, SearXNGConfig
 
 logger = get_logger(__name__)
 
@@ -630,6 +632,105 @@ class GDELTSearchProvider(BaseSearchProvider):
             return SearchResponse(query=query, results=[], provider=self.name, success=False, error_message=str(e))
 
 
+class SearXNGSearchProvider(BaseSearchProvider):
+    """Self-hosted SearXNG metasearch provider."""
+
+    def __init__(self):
+        super().__init__(['free'], "SearXNG")
+
+    @property
+    def is_available(self) -> bool:
+        return bool(SearXNGConfig.BASE_URL)
+
+    def _search_endpoint(self) -> str:
+        base_url = SearXNGConfig.BASE_URL.rstrip('/')
+        if base_url.endswith('/search'):
+            return base_url
+        return f"{base_url}/search"
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        if not SearXNGConfig.BASE_URL:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message="SearXNG 未配置 Base URL",
+            )
+
+        try:
+            params = {
+                "q": query,
+                "format": "json",
+                "pageno": 1,
+            }
+            if SearXNGConfig.CATEGORIES:
+                params["categories"] = SearXNGConfig.CATEGORIES
+            if SearXNGConfig.ENGINES:
+                params["engines"] = SearXNGConfig.ENGINES
+            if SearXNGConfig.LANGUAGE and SearXNGConfig.LANGUAGE != "auto":
+                params["language"] = SearXNGConfig.LANGUAGE
+
+            headers = {
+                "Accept": "application/json",
+                "User-Agent": "QuantDinger/4.0 SearXNGSearchProvider",
+            }
+            response = requests.get(
+                self._search_endpoint(),
+                params=params,
+                headers=headers,
+                timeout=SearXNGConfig.TIMEOUT,
+            )
+
+            if response.status_code != 200:
+                return SearchResponse(
+                    query=query,
+                    results=[],
+                    provider=self.name,
+                    success=False,
+                    error_message=f"HTTP {response.status_code}: {response.text[:200]}",
+                )
+
+            data = response.json()
+            raw_results = data.get("results") if isinstance(data, dict) else []
+            results: List[SearchResult] = []
+            for item in raw_results or []:
+                if len(results) >= max_results:
+                    break
+                if not isinstance(item, dict):
+                    continue
+                url = item.get("url") or ""
+                title = item.get("title") or url or query
+                if not url:
+                    continue
+                published = item.get("publishedDate") or item.get("published_date") or ""
+                source = item.get("engine") or item.get("category") or self._extract_domain(url) or "SearXNG"
+                results.append(SearchResult(
+                    title=title,
+                    snippet=(item.get("content") or item.get("snippet") or "")[:500],
+                    url=url,
+                    source=source,
+                    published_date=published,
+                ))
+
+            return SearchResponse(
+                query=query,
+                results=results,
+                provider=self.name,
+                success=bool(results),
+                error_message=None if results else "SearXNG 未返回结果",
+            )
+
+        except Exception as e:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message=str(e),
+            )
+
+
 class AlphaVantageNewsProvider(BaseSearchProvider):
     """Company news and sentiment supplement backed by Alpha Vantage NEWS_SENTIMENT."""
 
@@ -847,6 +948,10 @@ class SearchService:
 
         provider_map["gdelt"] = GDELTSearchProvider()
 
+        if SearXNGConfig.CONFIGURED:
+            provider_map["searxng"] = SearXNGSearchProvider()
+            logger.info("SearXNG search is configured")
+
         serpapi_keys = APIKeys.SERPAPI_KEYS
         if serpapi_keys:
             provider_map["serpapi"] = SerpAPISearchProvider(serpapi_keys)
@@ -874,7 +979,7 @@ class SearchService:
         if preferred:
             self._providers.append(provider_map.pop(preferred))
 
-        for key in ("tavily", "gdelt", "serpapi", "alpha_vantage", "google", "bing", "duckduckgo"):
+        for key in ("tavily", "searxng", "gdelt", "serpapi", "alpha_vantage", "google", "bing", "duckduckgo"):
             provider = provider_map.pop(key, None)
             if provider:
                 self._providers.append(provider)
@@ -897,6 +1002,7 @@ class SearchService:
             "Google": bool(google_api_key and google_cx),
             "Bing": bool(bing_api_key),
             "Tavily": bool(APIKeys.TAVILY_API_KEYS),
+            "SearXNG": bool(SearXNGConfig.CONFIGURED),
             "SerpAPI": bool(APIKeys.SERPAPI_KEYS),
             "AlphaVantage": bool(APIKeys.ALPHA_VANTAGE_API_KEY),
             "GDELT": self.provider not in {"none", "off", "disabled"},
@@ -912,7 +1018,7 @@ class SearchService:
                 "available": bool(active_available.get(name)),
                 "note": _search_provider_note(name, bool(configured.get(name)), name in active_names),
             }
-            for name in ("Tavily", "GDELT", "SerpAPI", "AlphaVantage", "Google", "Bing", "DuckDuckGo")
+            for name in ("Tavily", "SearXNG", "GDELT", "SerpAPI", "AlphaVantage", "Google", "Bing", "DuckDuckGo")
         ]
     
     def search(self, query: str, num_results: int = None, date_restrict: str = None, days: int = 7) -> List[Dict[str, Any]]:
@@ -1049,6 +1155,8 @@ def _search_provider_note(name: str, configured: bool, registered: bool) -> str:
         return "Set SEARCH_BING_API_KEY to enable Bing fallback."
     if name == "Tavily" and not configured:
         return "Set TAVILY_API_KEYS to enable Tavily AI search."
+    if name == "SearXNG" and not configured:
+        return "Set SEARCH_SEARXNG_BASE_URL to enable SearXNG metasearch fallback."
     if name == "SerpAPI" and not configured:
         return "Set SERPAPI_KEYS to enable SerpAPI Google/Bing search."
     if name == "AlphaVantage" and not configured:

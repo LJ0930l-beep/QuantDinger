@@ -4,7 +4,12 @@ import os
 
 def _addon(section: str, key: str):
     from app.utils.config_loader import load_addon_config
-    return load_addon_config().get(section, {}).get(key)
+    value = load_addon_config()
+    for part in section.split('.'):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part, {})
+    return value.get(key) if isinstance(value, dict) else None
 
 
 def _config_str(section: str, key: str, env_name: str, default: str = "") -> str:
@@ -202,6 +207,37 @@ class MetaGDELTConfig(type):
 
 class GDELTConfig(metaclass=MetaGDELTConfig):
     """GDELT DOC 2.0 global news fallback configuration."""
+    pass
+
+
+class MetaSearXNGConfig(type):
+    @property
+    def BASE_URL(cls):
+        return _config_str('search.searxng', 'base_url', 'SEARCH_SEARXNG_BASE_URL')
+
+    @property
+    def ENGINES(cls):
+        return _config_str('search.searxng', 'engines', 'SEARCH_SEARXNG_ENGINES')
+
+    @property
+    def CATEGORIES(cls):
+        return _config_str('search.searxng', 'categories', 'SEARCH_SEARXNG_CATEGORIES', 'general')
+
+    @property
+    def LANGUAGE(cls):
+        return _config_str('search.searxng', 'language', 'SEARCH_SEARXNG_LANGUAGE', 'auto')
+
+    @property
+    def TIMEOUT(cls):
+        return _config_int('search.searxng', 'timeout', 'SEARCH_SEARXNG_TIMEOUT', 12)
+
+    @property
+    def CONFIGURED(cls):
+        return bool(cls.BASE_URL)
+
+
+class SearXNGConfig(metaclass=MetaSearXNGConfig):
+    """Self-hosted SearXNG metasearch configuration."""
     pass
 
 
