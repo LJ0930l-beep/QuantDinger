@@ -7,7 +7,11 @@ routes, policy checks, smoke tests, and execution helpers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Iterable, Set
+from typing import Dict, FrozenSet, Iterable, Set, Tuple
+
+
+class VenueCapabilityValidationError(ValueError):
+    """Raised when a venue is not explicitly safe for automatic live use."""
 
 
 @dataclass(frozen=True)
@@ -15,6 +19,13 @@ class VenueCapability:
     exchange_id: str
     market_types: FrozenSet[str]
     aliases: FrozenSet[str] = frozenset()
+    supports_client_order_id: bool = False
+    supports_query_by_client_order_id: bool = False
+    supports_exchange_fill_id: bool = False
+    supports_order_history: bool = False
+    supports_cancel_status_query: bool = False
+    supports_reduce_only: bool = False
+    auto_live_eligible: bool = False
 
     @property
     def supports_spot(self) -> bool:
@@ -23,6 +34,36 @@ class VenueCapability:
     @property
     def supports_swap(self) -> bool:
         return "swap" in self.market_types
+
+    def missing_auto_live_requirements(self) -> Tuple[str, ...]:
+        required = (
+            "supports_client_order_id",
+            "supports_query_by_client_order_id",
+            "supports_exchange_fill_id",
+            "supports_order_history",
+            "supports_cancel_status_query",
+            "supports_reduce_only",
+        )
+        return tuple(name for name in required if not getattr(self, name))
+
+    def validate_for_auto_live(self) -> None:
+        """Fail closed unless safety capabilities and approval are explicit."""
+
+        missing = self.missing_auto_live_requirements()
+        if not self.auto_live_eligible or missing:
+            reasons = list(missing)
+            if not self.auto_live_eligible:
+                reasons.append("auto_live_eligible")
+            raise VenueCapabilityValidationError(
+                f"venue {self.exchange_id or '<unknown>'} is not auto-live eligible: "
+                + ", ".join(reasons)
+            )
+
+
+def validate_for_auto_live(capability: VenueCapability) -> None:
+    if not isinstance(capability, VenueCapability):
+        raise VenueCapabilityValidationError("unknown venue capability")
+    capability.validate_for_auto_live()
 
 
 CRYPTO_VENUE_CAPABILITIES: Dict[str, VenueCapability] = {
