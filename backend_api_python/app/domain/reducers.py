@@ -35,6 +35,26 @@ class FillSequenceConflictError(ReducerContractError):
     """Raised when two different fill events claim the same sequence."""
 
 
+class ReducerScopeMismatchError(ReducerContractError):
+    """Raised when a fill is outside the reducer's declared scope."""
+
+
+class FillEconomicOrderMismatchError(ReducerScopeMismatchError):
+    """Raised when a fill belongs to another economic order."""
+
+
+class FillInstrumentMismatchError(ReducerScopeMismatchError):
+    """Raised when a fill belongs to another instrument."""
+
+
+class FillAccountScopeMismatchError(ReducerScopeMismatchError):
+    """Raised when a fill belongs to another account scope."""
+
+
+class FillSideMismatchError(ReducerScopeMismatchError):
+    """Raised when a fill side conflicts with an economic order."""
+
+
 class FillSide(str, Enum):
     BUY = "BUY"
     SELL = "SELL"
@@ -75,6 +95,54 @@ def _coerce_position_side(value: PositionSide | str) -> PositionSide:
 
 
 @dataclass(frozen=True, slots=True)
+class EconomicOrderScope:
+    economic_order_id: str
+    instrument_id: str
+    account_scope: str
+    expected_side: FillSide
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "economic_order_id", _required_text(self.economic_order_id, "economic_order_id")
+        )
+        object.__setattr__(
+            self, "instrument_id", _required_text(self.instrument_id, "instrument_id")
+        )
+        object.__setattr__(
+            self, "account_scope", _required_text(self.account_scope, "account_scope")
+        )
+        object.__setattr__(self, "expected_side", _coerce_fill_side(self.expected_side))
+
+    def to_canonical_dict(self) -> dict[str, str]:
+        return {
+            "economic_order_id": self.economic_order_id,
+            "instrument_id": self.instrument_id,
+            "account_scope": self.account_scope,
+            "expected_side": self.expected_side.value,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PositionScope:
+    instrument_id: str
+    account_scope: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "instrument_id", _required_text(self.instrument_id, "instrument_id")
+        )
+        object.__setattr__(
+            self, "account_scope", _required_text(self.account_scope, "account_scope")
+        )
+
+    def to_canonical_dict(self) -> dict[str, str]:
+        return {
+            "instrument_id": self.instrument_id,
+            "account_scope": self.account_scope,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Fee:
     asset: str
     amount: FeeAmount
@@ -105,6 +173,9 @@ class FillEvent:
 
     event_id: str
     sequence: int
+    economic_order_id: str
+    instrument_id: str
+    account_scope: str
     side: FillSide
     price: Price
     quantity: Quantity
@@ -114,6 +185,15 @@ class FillEvent:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "event_id", _required_text(self.event_id, "event_id"))
+        object.__setattr__(
+            self, "economic_order_id", _required_text(self.economic_order_id, "economic_order_id")
+        )
+        object.__setattr__(
+            self, "instrument_id", _required_text(self.instrument_id, "instrument_id")
+        )
+        object.__setattr__(
+            self, "account_scope", _required_text(self.account_scope, "account_scope")
+        )
         if isinstance(self.sequence, bool) or not isinstance(self.sequence, int):
             raise ReducerContractError("fill sequence must be an integer")
         if self.sequence < 0:
@@ -186,6 +266,7 @@ def aggregate_fees_by_asset(fees: Iterable[Fee]) -> tuple[FeeTotal, ...]:
 
 @dataclass(frozen=True, slots=True)
 class EconomicOrderReduction:
+    scope: EconomicOrderScope
     target_quantity: Quantity
     quantity_tolerance: Quantity
     cumulative_filled_quantity: Quantity
@@ -200,6 +281,8 @@ class EconomicOrderReduction:
     calculation_policy_version: str = CALCULATION_POLICY_VERSION
 
     def __post_init__(self) -> None:
+        if not isinstance(self.scope, EconomicOrderScope):
+            raise ReducerContractError("scope must be EconomicOrderScope")
         decimal_fields = (
             ("target_quantity", self.target_quantity, Quantity),
             ("quantity_tolerance", self.quantity_tolerance, Quantity),
@@ -232,6 +315,7 @@ class EconomicOrderReduction:
 
     def to_canonical_dict(self) -> dict[str, object]:
         return {
+            "scope": self.scope.to_canonical_dict(),
             "target_quantity": self.target_quantity.to_string(),
             "quantity_tolerance": self.quantity_tolerance.to_string(),
             "cumulative_filled_quantity": self.cumulative_filled_quantity.to_string(),
@@ -258,8 +342,11 @@ def reduce_economic_order(
     target_quantity: Quantity,
     fills: Iterable[FillEvent],
     *,
+    scope: EconomicOrderScope,
     quantity_tolerance: Quantity,
 ) -> EconomicOrderReduction:
+    if not isinstance(scope, EconomicOrderScope):
+        raise ReducerContractError("scope must be EconomicOrderScope")
     if not isinstance(target_quantity, Quantity) or target_quantity.value <= 0:
         raise ReducerContractError("target_quantity must be a positive Quantity")
     if not isinstance(quantity_tolerance, Quantity):
@@ -268,6 +355,23 @@ def reduce_economic_order(
         raise ReducerContractError("quantity_tolerance cannot exceed target_quantity")
 
     ordered = _canonicalize_fills(fills)
+    for fill in ordered:
+        if fill.economic_order_id != scope.economic_order_id:
+            raise FillEconomicOrderMismatchError(
+                f"fill {fill.event_id} economic_order_id does not match reducer scope"
+            )
+        if fill.instrument_id != scope.instrument_id:
+            raise FillInstrumentMismatchError(
+                f"fill {fill.event_id} instrument_id does not match reducer scope"
+            )
+        if fill.account_scope != scope.account_scope:
+            raise FillAccountScopeMismatchError(
+                f"fill {fill.event_id} account_scope does not match reducer scope"
+            )
+        if fill.side is not scope.expected_side:
+            raise FillSideMismatchError(
+                f"fill {fill.event_id} side does not match reducer expected_side"
+            )
     cumulative_quantity = Decimal(0)
     cumulative_quote = Decimal(0)
     weighted_price_numerator = Decimal(0)
@@ -300,6 +404,7 @@ def reduce_economic_order(
         overfill = max(cumulative_quantity - target_quantity.value, Decimal(0))
 
     return EconomicOrderReduction(
+        scope=scope,
         target_quantity=target_quantity,
         quantity_tolerance=quantity_tolerance,
         cumulative_filled_quantity=Quantity(cumulative_quantity),
@@ -336,6 +441,7 @@ def calculate_realized_pnl(
 class PositionState:
     """Rebuildable one-way position; positive quantity is long, negative short."""
 
+    scope: PositionScope
     signed_quantity: SignedQuantity
     average_entry_price: Price | None
     realized_pnl: PnLAmount
@@ -344,6 +450,8 @@ class PositionState:
     calculation_policy_version: str = CALCULATION_POLICY_VERSION
 
     def __post_init__(self) -> None:
+        if not isinstance(self.scope, PositionScope):
+            raise ReducerContractError("scope must be PositionScope")
         if not isinstance(self.signed_quantity, SignedQuantity):
             raise ReducerContractError("signed_quantity must be SignedQuantity")
         if not isinstance(self.realized_pnl, PnLAmount):
@@ -364,6 +472,7 @@ class PositionState:
 
     def to_canonical_dict(self) -> dict[str, object]:
         return {
+            "scope": self.scope.to_canonical_dict(),
             "signed_quantity": self.signed_quantity.to_string(),
             "average_entry_price": (
                 self.average_entry_price.to_string()
@@ -380,10 +489,23 @@ class PositionState:
         return _stable_hash(self.to_canonical_dict())
 
 
-def reduce_position(fills: Iterable[FillEvent]) -> PositionState:
+def reduce_position(
+    fills: Iterable[FillEvent], *, scope: PositionScope
+) -> PositionState:
     """Rebuild a one-way position from zero using normalized fill events."""
 
+    if not isinstance(scope, PositionScope):
+        raise ReducerContractError("scope must be PositionScope")
     ordered = _canonicalize_fills(fills)
+    for fill in ordered:
+        if fill.instrument_id != scope.instrument_id:
+            raise FillInstrumentMismatchError(
+                f"fill {fill.event_id} instrument_id does not match reducer scope"
+            )
+        if fill.account_scope != scope.account_scope:
+            raise FillAccountScopeMismatchError(
+                f"fill {fill.event_id} account_scope does not match reducer scope"
+            )
     signed_quantity = Decimal(0)
     average_entry_price: Decimal | None = None
     realized_pnl = Decimal(0)
@@ -441,6 +563,7 @@ def reduce_position(fills: Iterable[FillEvent]) -> PositionState:
             signed_quantity = new_signed_quantity
 
     return PositionState(
+        scope=scope,
         signed_quantity=SignedQuantity(signed_quantity),
         average_entry_price=(
             Price(average_entry_price) if average_entry_price is not None else None
