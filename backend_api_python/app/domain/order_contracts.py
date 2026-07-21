@@ -41,11 +41,21 @@ class EconomicOrderState(str, Enum):
     SUBMISSION_UNKNOWN = "SUBMISSION_UNKNOWN"
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
-    CANCEL_PENDING = "CANCEL_PENDING"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
+    CANCELLING = "CANCELLING"
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
     FAILED = "FAILED"
     RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
+
+
+class SubmissionAttemptState(str, Enum):
+    READY = "READY"
+    SUBMITTING = "SUBMITTING"
+    ACKED = "ACKED"
+    UNKNOWN = "UNKNOWN"
+    CONFIRMED_ABSENT = "CONFIRMED_ABSENT"
+    REJECTED = "REJECTED"
 
 
 class RiskEffect(str, Enum):
@@ -114,7 +124,7 @@ _TRANSITIONS: Mapping[EconomicOrderState, FrozenSet[EconomicOrderState]] = Mappi
             {
                 EconomicOrderState.PARTIALLY_FILLED,
                 EconomicOrderState.FILLED,
-                EconomicOrderState.CANCEL_PENDING,
+                EconomicOrderState.CANCEL_REQUESTED,
                 EconomicOrderState.CANCELLED,
                 EconomicOrderState.REJECTED,
                 EconomicOrderState.RECONCILIATION_REQUIRED,
@@ -124,17 +134,24 @@ _TRANSITIONS: Mapping[EconomicOrderState, FrozenSet[EconomicOrderState]] = Mappi
             {
                 EconomicOrderState.PARTIALLY_FILLED,
                 EconomicOrderState.FILLED,
-                EconomicOrderState.CANCEL_PENDING,
+                EconomicOrderState.CANCEL_REQUESTED,
                 EconomicOrderState.CANCELLED,
                 EconomicOrderState.RECONCILIATION_REQUIRED,
             }
         ),
-        EconomicOrderState.CANCEL_PENDING: frozenset(
+        EconomicOrderState.CANCEL_REQUESTED: frozenset(
+            {
+                EconomicOrderState.CANCELLING,
+                EconomicOrderState.FILLED,
+                EconomicOrderState.CANCELLED,
+                EconomicOrderState.RECONCILIATION_REQUIRED,
+            }
+        ),
+        EconomicOrderState.CANCELLING: frozenset(
             {
                 EconomicOrderState.PARTIALLY_FILLED,
                 EconomicOrderState.FILLED,
                 EconomicOrderState.CANCELLED,
-                EconomicOrderState.FAILED,
                 EconomicOrderState.RECONCILIATION_REQUIRED,
             }
         ),
@@ -148,14 +165,22 @@ _TRANSITIONS: Mapping[EconomicOrderState, FrozenSet[EconomicOrderState]] = Mappi
                 EconomicOrderState.FAILED,
             }
         ),
-        EconomicOrderState.FILLED: frozenset(),
-        EconomicOrderState.CANCELLED: frozenset(),
-        EconomicOrderState.REJECTED: frozenset(),
-        EconomicOrderState.FAILED: frozenset(),
+        EconomicOrderState.FILLED: frozenset(
+            {EconomicOrderState.RECONCILIATION_REQUIRED}
+        ),
+        EconomicOrderState.CANCELLED: frozenset(
+            {EconomicOrderState.RECONCILIATION_REQUIRED}
+        ),
+        EconomicOrderState.REJECTED: frozenset(
+            {EconomicOrderState.RECONCILIATION_REQUIRED}
+        ),
+        EconomicOrderState.FAILED: frozenset(
+            {EconomicOrderState.RECONCILIATION_REQUIRED}
+        ),
     }
 )
 
-_TERMINAL_STATES = frozenset(
+_BUSINESS_TERMINAL_STATES = frozenset(
     {
         EconomicOrderState.FILLED,
         EconomicOrderState.CANCELLED,
@@ -164,13 +189,16 @@ _TERMINAL_STATES = frozenset(
     }
 )
 
+_ABSOLUTE_TERMINAL_STATES: FrozenSet[EconomicOrderState] = frozenset()
+
 _RETRYABLE_STATES = frozenset(
     {
         EconomicOrderState.CREATED,
         EconomicOrderState.RISK_PENDING,
         EconomicOrderState.RISK_RESERVED,
         EconomicOrderState.SUBMISSION_UNKNOWN,
-        EconomicOrderState.CANCEL_PENDING,
+        EconomicOrderState.CANCEL_REQUESTED,
+        EconomicOrderState.CANCELLING,
         EconomicOrderState.RECONCILIATION_REQUIRED,
     }
 )
@@ -178,7 +206,35 @@ _RETRYABLE_STATES = frozenset(
 _QUERY_BEFORE_RETRY_STATES = frozenset(
     {
         EconomicOrderState.SUBMISSION_UNKNOWN,
+        EconomicOrderState.CANCELLING,
         EconomicOrderState.RECONCILIATION_REQUIRED,
+    }
+)
+
+_ATTEMPT_TRANSITIONS: Mapping[
+    SubmissionAttemptState, FrozenSet[SubmissionAttemptState]
+] = MappingProxyType(
+    {
+        SubmissionAttemptState.READY: frozenset(
+            {SubmissionAttemptState.SUBMITTING}
+        ),
+        SubmissionAttemptState.SUBMITTING: frozenset(
+            {
+                SubmissionAttemptState.ACKED,
+                SubmissionAttemptState.UNKNOWN,
+                SubmissionAttemptState.REJECTED,
+            }
+        ),
+        SubmissionAttemptState.UNKNOWN: frozenset(
+            {
+                SubmissionAttemptState.ACKED,
+                SubmissionAttemptState.CONFIRMED_ABSENT,
+                SubmissionAttemptState.REJECTED,
+            }
+        ),
+        SubmissionAttemptState.ACKED: frozenset(),
+        SubmissionAttemptState.CONFIRMED_ABSENT: frozenset(),
+        SubmissionAttemptState.REJECTED: frozenset(),
     }
 )
 
@@ -221,9 +277,32 @@ def validate_transition(
     return target_state in _TRANSITIONS[current_state]
 
 
-def is_terminal_state(state: EconomicOrderState | str) -> bool:
+def is_business_terminal_state(state: EconomicOrderState | str) -> bool:
+    """Return whether normal business submission work is complete.
+
+    Business-terminal states may still transition to
+    ``RECONCILIATION_REQUIRED`` when late or conflicting external facts arrive.
+    """
+
     parsed = _coerce_enum(state, EconomicOrderState)
-    return parsed in _TERMINAL_STATES if parsed is not None else False
+    return parsed in _BUSINESS_TERMINAL_STATES if parsed is not None else False
+
+
+def is_absolute_terminal_state(state: EconomicOrderState | str) -> bool:
+    """Return whether no future fact can move the state.
+
+    The approved order graph has no absolute terminal states because even a
+    business-terminal order can receive contradictory exchange evidence.
+    """
+
+    parsed = _coerce_enum(state, EconomicOrderState)
+    return parsed in _ABSOLUTE_TERMINAL_STATES if parsed is not None else False
+
+
+def is_terminal_state(state: EconomicOrderState | str) -> bool:
+    """Backward-compatible alias for ``is_business_terminal_state``."""
+
+    return is_business_terminal_state(state)
 
 
 def may_retry(state: EconomicOrderState | str) -> bool:
@@ -240,6 +319,39 @@ def requires_exchange_query_before_retry(state: EconomicOrderState | str) -> boo
     if parsed is None:
         return True
     return parsed in _QUERY_BEFORE_RETRY_STATES
+
+
+def allowed_attempt_transitions(
+    state: SubmissionAttemptState | str,
+) -> FrozenSet[SubmissionAttemptState]:
+    """Return the explicit attempt transition set; unknown states fail closed."""
+
+    current = _coerce_enum(state, SubmissionAttemptState)
+    if current is None:
+        return frozenset()
+    return _ATTEMPT_TRANSITIONS.get(current, frozenset())
+
+
+def validate_attempt_transition(
+    current: SubmissionAttemptState | str,
+    target: SubmissionAttemptState | str,
+) -> bool:
+    """Return whether a submission-attempt transition is explicitly allowed."""
+
+    current_state = _coerce_enum(current, SubmissionAttemptState)
+    target_state = _coerce_enum(target, SubmissionAttemptState)
+    if current_state is None or target_state is None:
+        return False
+    return target_state in _ATTEMPT_TRANSITIONS[current_state]
+
+
+def attempt_requires_exchange_query(state: SubmissionAttemptState | str) -> bool:
+    """Require exchange evidence for UNKNOWN and fail closed for unknown input."""
+
+    parsed = _coerce_enum(state, SubmissionAttemptState)
+    if parsed is None:
+        return True
+    return parsed is SubmissionAttemptState.UNKNOWN
 
 
 def classify_risk_effect(

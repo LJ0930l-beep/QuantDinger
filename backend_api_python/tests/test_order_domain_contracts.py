@@ -24,6 +24,7 @@ EconomicOrderState = contracts.EconomicOrderState
 OrderAction = contracts.OrderAction
 ReconciliationHealth = contracts.ReconciliationHealth
 RiskEffect = contracts.RiskEffect
+SubmissionAttemptState = contracts.SubmissionAttemptState
 
 
 class EconomicOrderStateContractTests(unittest.TestCase):
@@ -39,7 +40,8 @@ class EconomicOrderStateContractTests(unittest.TestCase):
                 "SUBMISSION_UNKNOWN",
                 "PARTIALLY_FILLED",
                 "FILLED",
-                "CANCEL_PENDING",
+                "CANCEL_REQUESTED",
+                "CANCELLING",
                 "CANCELLED",
                 "REJECTED",
                 "FAILED",
@@ -82,7 +84,7 @@ class EconomicOrderStateContractTests(unittest.TestCase):
             EconomicOrderState.SUBMITTED: {
                 "PARTIALLY_FILLED",
                 "FILLED",
-                "CANCEL_PENDING",
+                "CANCEL_REQUESTED",
                 "CANCELLED",
                 "REJECTED",
                 "RECONCILIATION_REQUIRED",
@@ -90,15 +92,20 @@ class EconomicOrderStateContractTests(unittest.TestCase):
             EconomicOrderState.PARTIALLY_FILLED: {
                 "PARTIALLY_FILLED",
                 "FILLED",
-                "CANCEL_PENDING",
+                "CANCEL_REQUESTED",
                 "CANCELLED",
                 "RECONCILIATION_REQUIRED",
             },
-            EconomicOrderState.CANCEL_PENDING: {
+            EconomicOrderState.CANCEL_REQUESTED: {
+                "CANCELLING",
+                "FILLED",
+                "CANCELLED",
+                "RECONCILIATION_REQUIRED",
+            },
+            EconomicOrderState.CANCELLING: {
                 "PARTIALLY_FILLED",
                 "FILLED",
                 "CANCELLED",
-                "FAILED",
                 "RECONCILIATION_REQUIRED",
             },
             EconomicOrderState.RECONCILIATION_REQUIRED: {
@@ -109,10 +116,10 @@ class EconomicOrderStateContractTests(unittest.TestCase):
                 "REJECTED",
                 "FAILED",
             },
-            EconomicOrderState.FILLED: set(),
-            EconomicOrderState.CANCELLED: set(),
-            EconomicOrderState.REJECTED: set(),
-            EconomicOrderState.FAILED: set(),
+            EconomicOrderState.FILLED: {"RECONCILIATION_REQUIRED"},
+            EconomicOrderState.CANCELLED: {"RECONCILIATION_REQUIRED"},
+            EconomicOrderState.REJECTED: {"RECONCILIATION_REQUIRED"},
+            EconomicOrderState.FAILED: {"RECONCILIATION_REQUIRED"},
         }
         for current in EconomicOrderState:
             with self.subTest(current=current):
@@ -127,18 +134,36 @@ class EconomicOrderStateContractTests(unittest.TestCase):
                         target.value in expected[current],
                     )
 
-    def test_terminal_states_have_no_exit(self):
-        terminals = {
+    def test_business_terminal_states_only_exit_to_reconciliation(self):
+        business_terminals = {
             EconomicOrderState.FILLED,
             EconomicOrderState.CANCELLED,
             EconomicOrderState.REJECTED,
             EconomicOrderState.FAILED,
         }
         for state in EconomicOrderState:
-            self.assertEqual(contracts.is_terminal_state(state), state in terminals)
-        for current in terminals:
+            expected = state in business_terminals
+            self.assertEqual(contracts.is_business_terminal_state(state), expected)
+            self.assertEqual(contracts.is_terminal_state(state), expected)
+            self.assertFalse(contracts.is_absolute_terminal_state(state))
+        for current in business_terminals:
             for target in EconomicOrderState:
-                self.assertFalse(contracts.validate_transition(current, target))
+                with self.subTest(current=current, target=target):
+                    self.assertEqual(
+                        contracts.validate_transition(current, target),
+                        target is EconomicOrderState.RECONCILIATION_REQUIRED,
+                    )
+
+    def test_business_terminal_states_never_return_to_submission(self):
+        for current in (
+            EconomicOrderState.FILLED,
+            EconomicOrderState.CANCELLED,
+            EconomicOrderState.REJECTED,
+            EconomicOrderState.FAILED,
+        ):
+            self.assertFalse(
+                contracts.validate_transition(current, EconomicOrderState.SUBMITTING)
+            )
 
     def test_retry_and_exchange_query_contracts(self):
         retryable = {
@@ -146,11 +171,13 @@ class EconomicOrderStateContractTests(unittest.TestCase):
             EconomicOrderState.RISK_PENDING,
             EconomicOrderState.RISK_RESERVED,
             EconomicOrderState.SUBMISSION_UNKNOWN,
-            EconomicOrderState.CANCEL_PENDING,
+            EconomicOrderState.CANCEL_REQUESTED,
+            EconomicOrderState.CANCELLING,
             EconomicOrderState.RECONCILIATION_REQUIRED,
         }
         query_required = {
             EconomicOrderState.SUBMISSION_UNKNOWN,
+            EconomicOrderState.CANCELLING,
             EconomicOrderState.RECONCILIATION_REQUIRED,
         }
         for state in EconomicOrderState:
@@ -162,6 +189,66 @@ class EconomicOrderStateContractTests(unittest.TestCase):
         self.assertFalse(contracts.may_retry("NOT_A_STATE"))
         self.assertTrue(contracts.requires_exchange_query_before_retry("NOT_A_STATE"))
         self.assertFalse(contracts.validate_transition("NOT_A_STATE", "CREATED"))
+
+
+class SubmissionAttemptStateContractTests(unittest.TestCase):
+    def test_attempt_vocabulary_is_exact(self):
+        self.assertEqual(
+            {item.value for item in SubmissionAttemptState},
+            {
+                "READY",
+                "SUBMITTING",
+                "ACKED",
+                "UNKNOWN",
+                "CONFIRMED_ABSENT",
+                "REJECTED",
+            },
+        )
+
+    def test_attempt_transition_graph_is_explicit_and_fail_closed(self):
+        expected = {
+            SubmissionAttemptState.READY: {"SUBMITTING"},
+            SubmissionAttemptState.SUBMITTING: {"ACKED", "UNKNOWN", "REJECTED"},
+            SubmissionAttemptState.UNKNOWN: {
+                "ACKED",
+                "CONFIRMED_ABSENT",
+                "REJECTED",
+            },
+            SubmissionAttemptState.ACKED: set(),
+            SubmissionAttemptState.CONFIRMED_ABSENT: set(),
+            SubmissionAttemptState.REJECTED: set(),
+        }
+        for current in SubmissionAttemptState:
+            self.assertEqual(
+                {item.value for item in contracts.allowed_attempt_transitions(current)},
+                expected[current],
+            )
+            for target in SubmissionAttemptState:
+                with self.subTest(current=current, target=target):
+                    self.assertEqual(
+                        contracts.validate_attempt_transition(current, target),
+                        target.value in expected[current],
+                    )
+
+    def test_unknown_attempt_requires_query_and_cannot_blindly_resubmit(self):
+        self.assertTrue(
+            contracts.attempt_requires_exchange_query(SubmissionAttemptState.UNKNOWN)
+        )
+        self.assertFalse(
+            contracts.validate_attempt_transition(
+                SubmissionAttemptState.UNKNOWN,
+                SubmissionAttemptState.SUBMITTING,
+            )
+        )
+        for state in SubmissionAttemptState:
+            self.assertEqual(
+                contracts.attempt_requires_exchange_query(state),
+                state is SubmissionAttemptState.UNKNOWN,
+            )
+        self.assertTrue(contracts.attempt_requires_exchange_query("NOT_A_STATE"))
+        self.assertFalse(
+            contracts.validate_attempt_transition("NOT_A_STATE", "SUBMITTING")
+        )
 
 
 class RiskActionContractTests(unittest.TestCase):
