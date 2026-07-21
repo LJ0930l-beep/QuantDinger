@@ -1,0 +1,324 @@
+[
+  {
+    "path": "backend_api_python/app/routes/agent_v1/quick_trade.py",
+    "symbol": "_place_live_order",
+    "pattern": "alias:place_order_from_signal->place_order_from_signal",
+    "fingerprint": "ba706fac304a81e50f78de2e",
+    "line": 197
+  },
+  {
+    "path": "backend_api_python/app/routes/agent_v1/quick_trade.py",
+    "symbol": "_place_live_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "3a7875202e897b81b5ff5b1b",
+    "line": 207
+  },
+  {
+    "path": "backend_api_python/app/routes/alpaca.py",
+    "symbol": "cancel_order",
+    "pattern": "client.cancel_order",
+    "fingerprint": "277f0c2801a142427a4e5590",
+    "line": 420
+  },
+  {
+    "path": "backend_api_python/app/routes/alpaca.py",
+    "symbol": "place_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "9777f71158bde88175511c63",
+    "line": 388
+  },
+  {
+    "path": "backend_api_python/app/routes/alpaca.py",
+    "symbol": "place_order",
+    "pattern": "client.place_market_order",
+    "fingerprint": "5d828bfbcee0442d9c078067",
+    "line": 393
+  },
+  {
+    "path": "backend_api_python/app/routes/ibkr.py",
+    "symbol": "cancel_order",
+    "pattern": "client.cancel_order",
+    "fingerprint": "27236f99901ab98a72b36f2e",
+    "line": 299
+  },
+  {
+    "path": "backend_api_python/app/routes/ibkr.py",
+    "symbol": "place_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "c27bbdeb9872393d30520a21",
+    "line": 249
+  },
+  {
+    "path": "backend_api_python/app/routes/ibkr.py",
+    "symbol": "place_order",
+    "pattern": "client.place_market_order",
+    "fingerprint": "0859db8f6d7bd67af60679ff",
+    "line": 257
+  },
+  {
+    "path": "backend_api_python/app/routes/quick_trade.py",
+    "symbol": "close_position",
+    "pattern": "alias:place_order_from_signal->place_order_from_signal",
+    "fingerprint": "65934e6b25b37d5c65b5b4fd",
+    "line": 1589
+  },
+  {
+    "path": "backend_api_python/app/routes/quick_trade.py",
+    "symbol": "place_order",
+    "pattern": "alias:place_order_from_signal->place_order_from_signal",
+    "fingerprint": "5104a6cd20842c618bc0e356",
+    "line": 533
+  },
+  {
+    "path": "backend_api_python/app/routes/quick_trade.py",
+    "symbol": "place_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "a3718b13a312858c57a5a241",
+    "line": 545
+  },
+  {
+    "path": "backend_api_python/app/services/grid/engine.py",
+    "symbol": "GridEngine._dedupe_open_entry_orders",
+    "pattern": "alias:cancel_grid_order->cancel_grid_order",
+    "fingerprint": "d8fcfd037dd1e40cde952785",
+    "line": 767
+  },
+  {
+    "path": "backend_api_python/app/services/grid/engine.py",
+    "symbol": "GridEngine._dedupe_open_exit_orders",
+    "pattern": "alias:cancel_grid_order->cancel_grid_order",
+    "fingerprint": "20fbd55a83ad8545be11c2f2",
+    "line": 803
+  },
+  {
+    "path": "backend_api_python/app/services/grid/engine.py",
+    "symbol": "GridEngine._place_limit",
+    "pattern": "alias:cancel_grid_order->cancel_grid_order",
+    "fingerprint": "fd9cf665f11cd5194489888b",
+    "line": 1054
+  },
+  {
+    "path": "backend_api_python/app/services/grid/engine.py",
+    "symbol": "GridEngine._place_limit",
+    "pattern": "alias:place_grid_limit_order->place_grid_limit_order",
+    "fingerprint": "3b4225eaf8df72d6d2d98df5",
+    "line": 1019
+  },
+  {
+    "path": "backend_api_python/app/services/grid/engine.py",
+    "symbol": "GridEngine._sync_initial_market_leg",
+    "pattern": "alias:execute_grid_market_order->execute_grid_market_order",
+    "fingerprint": "bfa1d61f2c09473e3c05afe3",
+    "line": 331
+  },
+  {
+    "path": "backend_api_python/app/services/grid/engine.py",
+    "symbol": "GridEngine.cancel_all_orders_on_exchange",
+    "pattern": "alias:cancel_grid_order->cancel_grid_order",
+    "fingerprint": "6509763425fad1c0fbbb3d6c",
+    "line": 1281
+  },
+  {
+    "path": "backend_api_python/app/services/grid/engine.py",
+    "symbol": "GridEngine.cancel_entry_orders_on_exchange",
+    "pattern": "alias:cancel_grid_order->cancel_grid_order",
+    "fingerprint": "22f094ebba5fefe77872212f",
+    "line": 1249
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "cancel_grid_order",
+    "pattern": "client.cancel_order",
+    "fingerprint": "5b1459282978b5bfdbb17e62",
+    "line": 399
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "cancel_grid_order",
+    "pattern": "client.cancel_order",
+    "fingerprint": "6f53217c945caca7bf50003f",
+    "line": 408
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "cancel_grid_order",
+    "pattern": "client.cancel_order",
+    "fingerprint": "768a92c0bd4f712d8d69d8d6",
+    "line": 425
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "cancel_grid_order",
+    "pattern": "client.cancel_order",
+    "fingerprint": "90de4c94fd0d8273bbe91a3f",
+    "line": 389
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "execute_grid_market_order",
+    "pattern": "alias:place_order_from_signal->place_order_from_signal",
+    "fingerprint": "21bcb0c23675a8463bef7247",
+    "line": 351
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "2aa52c039206cdbbb6e998cb",
+    "line": 90
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "31ad8ab604dbd4ed066aa188",
+    "line": 80
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "4041e2e9801337dd8ab6d815",
+    "line": 172
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "5d2a6d6a0a9d6f1e01ff0d5a",
+    "line": 190
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "6468f005eaef300aabcce3c4",
+    "line": 154
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "72d8154342356dd2e8c00db9",
+    "line": 182
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "8b7dbea7333326f052856bb8",
+    "line": 164
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "8c58cf850691d019ad2e2cf7",
+    "line": 204
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "a6f1eb270113d35764ea410e",
+    "line": 168
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "bde435939ebd35474462a065",
+    "line": 136
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "c4b05f471e4a9be291bede6e",
+    "line": 150
+  },
+  {
+    "path": "backend_api_python/app/services/grid/exchange_orders.py",
+    "symbol": "place_grid_limit_order",
+    "pattern": "client.place_limit_order",
+    "fingerprint": "da02954d1abadef2f3757a88",
+    "line": 109
+  },
+  {
+    "path": "backend_api_python/app/services/live_trading/native_protection.py",
+    "symbol": "_place_binance",
+    "pattern": "client._signed_request",
+    "fingerprint": "352c2f6b917f87ec4616dc8e",
+    "line": 137
+  },
+  {
+    "path": "backend_api_python/app/services/live_trading/native_protection.py",
+    "symbol": "_place_binance",
+    "pattern": "client._signed_request",
+    "fingerprint": "96873a220fdf9216f5a8140e",
+    "line": 130
+  },
+  {
+    "path": "backend_api_python/app/services/live_trading/native_protection.py",
+    "symbol": "_place_bitget",
+    "pattern": "client._signed_request",
+    "fingerprint": "09f9c8b71e39bc970a22a4f1",
+    "line": 215
+  },
+  {
+    "path": "backend_api_python/app/services/live_trading/native_protection.py",
+    "symbol": "_place_bitget",
+    "pattern": "client._signed_request",
+    "fingerprint": "3c43342d716274c7a8b28ec0",
+    "line": 204
+  },
+  {
+    "path": "backend_api_python/app/services/live_trading/native_protection.py",
+    "symbol": "_place_bybit",
+    "pattern": "client._signed_request",
+    "fingerprint": "202a68f5b388d4925a990a0c",
+    "line": 247
+  },
+  {
+    "path": "backend_api_python/app/services/live_trading/native_protection.py",
+    "symbol": "_place_bybit",
+    "pattern": "client._signed_request",
+    "fingerprint": "cbd74f9b4e46a16b917812f4",
+    "line": 257
+  },
+  {
+    "path": "backend_api_python/app/services/live_trading/native_protection.py",
+    "symbol": "_place_gate",
+    "pattern": "client._signed_request",
+    "fingerprint": "54839e74b40984f1a4ecfea0",
+    "line": 291
+  },
+  {
+    "path": "backend_api_python/app/services/live_trading/native_protection.py",
+    "symbol": "_place_htx",
+    "pattern": "client._swap_private_request_raw",
+    "fingerprint": "320e8dd7c0fee6a5b6a379b9",
+    "line": 327
+  },
+  {
+    "path": "backend_api_python/app/services/live_trading/native_protection.py",
+    "symbol": "_place_okx",
+    "pattern": "client._signed_request",
+    "fingerprint": "1b904713e5b915a904885dfd",
+    "line": 174
+  },
+  {
+    "path": "backend_api_python/app/services/live_trading/native_protection.py",
+    "symbol": "_place_okx",
+    "pattern": "client._signed_request",
+    "fingerprint": "d4fd3c336ea4725130d89d03",
+    "line": 168
+  },
+  {
+    "path": "backend_api_python/app/services/quick_trade/orders.py",
+    "symbol": "attach_quick_trade_protection",
+    "pattern": "alias:place_native_protection_orders->place_native_protection_orders",
+    "fingerprint": "5085ebe706dbd2bdf1b97f9f",
+    "line": 153
+  }
+]
