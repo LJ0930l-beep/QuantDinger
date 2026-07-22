@@ -93,7 +93,6 @@ CREATE TABLE IF NOT EXISTS qd_economic_orders (
     cumulative_filled_qty NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (cumulative_filled_qty >= 0),
     cumulative_fee_quote NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (cumulative_fee_quote >= 0),
     overfill_qty NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (overfill_qty >= 0),
-    reconcile_health VARCHAR(16) NOT NULL CHECK (reconcile_health IN ('HEALTHY','DEGRADED','UNHEALTHY')),
     last_event_seq BIGINT NOT NULL DEFAULT 0 CHECK (last_event_seq >= 0),
     active_fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (active_fencing_token >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -347,8 +346,7 @@ CREATE TABLE IF NOT EXISTS qd_reconciliation_checkpoints (
     market_type VARCHAR(20) NOT NULL,
     account_scope VARCHAR(160) NOT NULL,
     instrument_id VARCHAR(100) NOT NULL DEFAULT '',
-    health_status VARCHAR(16) NOT NULL CHECK (health_status IN ('HEALTHY','DEGRADED','UNHEALTHY')),
-    health_reason VARCHAR(16) NOT NULL DEFAULT '' CHECK (health_reason IN ('','STALE','FAILED','CONFLICT')),
+    status VARCHAR(16) NOT NULL CHECK (status IN ('HEALTHY','STALE','FAILED','CONFLICT')),
     last_orders_cursor VARCHAR(256) NOT NULL DEFAULT '',
     last_fills_cursor VARCHAR(256) NOT NULL DEFAULT '',
     last_positions_cursor VARCHAR(256) NOT NULL DEFAULT '',
@@ -361,11 +359,10 @@ CREATE TABLE IF NOT EXISTS qd_reconciliation_checkpoints (
     sla_deadline TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CHECK ((health_status = 'HEALTHY' AND health_reason = '') OR (health_status = 'DEGRADED' AND health_reason = 'STALE') OR (health_status = 'UNHEALTHY' AND health_reason IN ('FAILED','CONFLICT'))),
     UNIQUE(credential_id, exchange, market_type, account_scope, instrument_id)
 );
 CREATE INDEX IF NOT EXISTS idx_qd_reconciliation_checkpoints_health
-    ON qd_reconciliation_checkpoints(credential_id, market_type, health_status, last_success_at);
+    ON qd_reconciliation_checkpoints(credential_id, market_type, status, last_success_at);
 
 CREATE TABLE IF NOT EXISTS qd_reconciliation_issues (
     id UUID PRIMARY KEY,
