@@ -36,6 +36,17 @@ class VenueCapabilityProfile:
     supports_order_history: bool = False
     supports_cancel_status_query: bool = False
     supports_reduce_only: bool = False
+    # PR-04 separates three facts that must never be inferred from one another:
+    # whether the venue accepts an external ID, whether our rules can safely
+    # generate one, and whether an existing ID can be used for a read-only lookup.
+    accepts_external_client_order_id: bool = False
+    can_generate_safe_client_order_id: bool = False
+    query_by_exchange_order_id: bool = False
+    query_by_client_order_id: bool = False
+    list_order_fills: bool = False
+    stable_fill_id: bool = False
+    client_id_max_length: int | None = None
+    client_id_pattern: str | None = None
     contract_tested: bool = False
     auto_live_eligible: bool = False
 
@@ -181,15 +192,47 @@ def normalize_market_type(market_type: str) -> str:
     return mt
 
 
-VENUE_CAPABILITY_PROFILES: Mapping[
-    Tuple[str, str], VenueCapabilityProfile
-] = MappingProxyType(
+_DEFAULT_VENUE_CAPABILITY_PROFILES = {
+    (exchange_id, market_type): VenueCapabilityProfile(exchange_id, market_type)
+    for exchange_id, capability in CRYPTO_VENUE_CAPABILITIES.items()
+    for market_type in capability.market_types
+}
+
+# These read-only facts are intentionally profile-scoped.  In particular,
+# Binance Spot accepts an externally supplied client ID but its safe-generation
+# rule remains unknown: no Futures length or regex is inherited here.
+_DEFAULT_VENUE_CAPABILITY_PROFILES.update(
     {
-        (exchange_id, market_type): VenueCapabilityProfile(exchange_id, market_type)
-        for exchange_id, capability in CRYPTO_VENUE_CAPABILITIES.items()
-        for market_type in capability.market_types
+        ("binance", "swap"): VenueCapabilityProfile(
+            "binance",
+            "swap",
+            accepts_external_client_order_id=True,
+            can_generate_safe_client_order_id=True,
+            query_by_exchange_order_id=True,
+            query_by_client_order_id=True,
+            list_order_fills=True,
+            stable_fill_id=True,
+            client_id_max_length=36,
+            client_id_pattern=r"^[\.A-Z\:/a-z0-9_-]{1,36}$",
+        ),
+        ("binance", "spot"): VenueCapabilityProfile(
+            "binance",
+            "spot",
+            accepts_external_client_order_id=True,
+            can_generate_safe_client_order_id=False,
+            query_by_exchange_order_id=True,
+            query_by_client_order_id=True,
+            list_order_fills=True,
+            stable_fill_id=True,
+            client_id_max_length=None,
+            client_id_pattern=None,
+        ),
     }
 )
+
+VENUE_CAPABILITY_PROFILES: Mapping[
+    Tuple[str, str], VenueCapabilityProfile
+] = MappingProxyType(_DEFAULT_VENUE_CAPABILITY_PROFILES)
 
 
 def get_venue_capability_profile(
