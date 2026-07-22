@@ -2158,14 +2158,15 @@ CREATE TABLE IF NOT EXISTS qd_order_intents_v2 (
     CHECK (limit_price IS NULL OR limit_price > 0),
     CHECK (quote_notional IS NULL OR quote_notional > 0),
     UNIQUE(command_id, intent_version),
-    UNIQUE(id, tenant_id, credential_id, account_scope, instrument_id)
+    UNIQUE(id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    UNIQUE(id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
 );
 CREATE INDEX IF NOT EXISTS idx_qd_order_intents_v2_scope
     ON qd_order_intents_v2(account_scope, instrument_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS qd_economic_orders (
     id UUID PRIMARY KEY,
-    intent_id UUID NOT NULL UNIQUE REFERENCES qd_order_intents_v2(id) ON DELETE RESTRICT,
+    intent_id UUID NOT NULL UNIQUE,
     tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
     user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
     credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
@@ -2182,9 +2183,9 @@ CREATE TABLE IF NOT EXISTS qd_economic_orders (
     active_fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (active_fencing_token >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(id, tenant_id, credential_id, account_scope, instrument_id),
-    FOREIGN KEY(intent_id, tenant_id, credential_id, account_scope, instrument_id)
-        REFERENCES qd_order_intents_v2(id, tenant_id, credential_id, account_scope, instrument_id) ON DELETE RESTRICT
+    UNIQUE(id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    FOREIGN KEY(intent_id, id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_order_intents_v2(id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS idx_qd_economic_orders_scope_state
     ON qd_economic_orders(account_scope, instrument_id, state);
@@ -2232,9 +2233,12 @@ CREATE INDEX IF NOT EXISTS idx_qd_order_state_events_occurred
 
 CREATE TABLE IF NOT EXISTS qd_submission_attempts (
     id UUID PRIMARY KEY,
-    economic_order_id UUID NOT NULL REFERENCES qd_economic_orders(id) ON DELETE RESTRICT,
+    economic_order_id UUID NOT NULL,
     exchange VARCHAR(50) NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
     credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
     market_type VARCHAR(20) NOT NULL,
     child_seq INTEGER NOT NULL CHECK (child_seq >= 1),
     attempt_no INTEGER NOT NULL CHECK (attempt_no >= 1),
@@ -2252,25 +2256,30 @@ CREATE TABLE IF NOT EXISTS qd_submission_attempts (
     last_error_class VARCHAR(128) NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(economic_order_id, child_seq, attempt_no),
-    UNIQUE(exchange, credential_id, market_type, venue_client_order_id)
+    UNIQUE(exchange, credential_id, market_type, venue_client_order_id),
+    UNIQUE(id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_economic_orders(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS idx_qd_submission_attempts_recovery
     ON qd_submission_attempts(exchange, credential_id, state, unknown_since);
 
 CREATE TABLE IF NOT EXISTS qd_exchange_orders (
     id UUID PRIMARY KEY,
-    attempt_id UUID NOT NULL UNIQUE REFERENCES qd_submission_attempts(id) ON DELETE RESTRICT,
-    economic_order_id UUID NOT NULL REFERENCES qd_economic_orders(id) ON DELETE RESTRICT,
+    attempt_id UUID NOT NULL UNIQUE,
+    economic_order_id UUID NOT NULL,
     parent_exchange_order_id UUID REFERENCES qd_exchange_orders(id) ON DELETE RESTRICT,
     child_role VARCHAR(32) NOT NULL,
     exchange VARCHAR(50) NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
     credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
     market_type VARCHAR(20) NOT NULL,
     account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
     exchange_order_id VARCHAR(160),
     venue_client_order_id VARCHAR(128) NOT NULL CHECK (venue_client_order_id <> ''),
     raw_status VARCHAR(64) NOT NULL DEFAULT '',
-    normalized_state VARCHAR(32) NOT NULL,
+    normalized_state VARCHAR(32) NOT NULL CHECK (normalized_state IN ('SUBMITTED','PARTIALLY_FILLED','FILLED','SUBMISSION_UNKNOWN','CANCEL_REQUESTED','CANCELLING','CANCELLED','REJECTED','RECONCILIATION_REQUIRED')),
     requested_qty NUMERIC(38,18) NOT NULL CHECK (requested_qty > 0),
     cumulative_filled_qty NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (cumulative_filled_qty >= 0),
     avg_fill_price NUMERIC(38,18),
@@ -2282,7 +2291,11 @@ CREATE TABLE IF NOT EXISTS qd_exchange_orders (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (avg_fill_price IS NULL OR avg_fill_price > 0),
     UNIQUE(exchange, credential_id, market_type, venue_client_order_id),
-    UNIQUE(exchange, credential_id, exchange_order_id)
+    UNIQUE(exchange, credential_id, exchange_order_id),
+    FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_economic_orders(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT,
+    FOREIGN KEY(attempt_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_submission_attempts(id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT
 );
 
 CREATE TABLE IF NOT EXISTS qd_exchange_order_observations (
@@ -2294,9 +2307,14 @@ CREATE TABLE IF NOT EXISTS qd_exchange_order_observations (
     payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     observed_at TIMESTAMPTZ NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CHECK (exchange_order_id IS NOT NULL OR attempt_id IS NOT NULL),
-    UNIQUE(exchange_order_id, observation_source, payload_hash)
+    CHECK (exchange_order_id IS NOT NULL OR attempt_id IS NOT NULL)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_exchange_order_observations_order_evidence
+    ON qd_exchange_order_observations(exchange_order_id, observation_source, payload_hash)
+    WHERE exchange_order_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_exchange_order_observations_attempt_evidence
+    ON qd_exchange_order_observations(attempt_id, observation_source, payload_hash)
+    WHERE attempt_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS qd_exchange_fill_events (
     id UUID PRIMARY KEY,
@@ -2306,6 +2324,7 @@ CREATE TABLE IF NOT EXISTS qd_exchange_fill_events (
     tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
     credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
     account_scope VARCHAR(160) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
     exchange_order_pk UUID REFERENCES qd_exchange_orders(id) ON DELETE RESTRICT,
     economic_order_id UUID NOT NULL REFERENCES qd_economic_orders(id) ON DELETE RESTRICT,
     intent_id UUID NOT NULL REFERENCES qd_order_intents_v2(id) ON DELETE RESTRICT,
@@ -2334,10 +2353,10 @@ CREATE TABLE IF NOT EXISTS qd_exchange_fill_events (
     quarantine_state VARCHAR(32) NOT NULL DEFAULT 'CLEAR' CHECK (quarantine_state IN ('CLEAR','QUARANTINED','RECONCILIATION_REQUIRED')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(exchange, credential_id, dedupe_key, key_version),
-    FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id)
-        REFERENCES qd_economic_orders(id, tenant_id, credential_id, account_scope, instrument_id) ON DELETE RESTRICT,
-    FOREIGN KEY(intent_id, tenant_id, credential_id, account_scope, instrument_id)
-        REFERENCES qd_order_intents_v2(id, tenant_id, credential_id, account_scope, instrument_id) ON DELETE RESTRICT
+    FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_economic_orders(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT,
+    FOREIGN KEY(intent_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_order_intents_v2(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS idx_qd_exchange_fill_events_history
     ON qd_exchange_fill_events(credential_id, exchange_event_at, id);
@@ -2358,8 +2377,12 @@ CREATE TABLE IF NOT EXISTS qd_ledger_transactions (
     policy_version VARCHAR(64) NOT NULL,
     correlation_id VARCHAR(160) NOT NULL DEFAULT '',
     description_code VARCHAR(64) NOT NULL,
+    CHECK ((transaction_type = 'REVERSAL' AND reverses_transaction_id IS NOT NULL) OR (transaction_type <> 'REVERSAL' AND reverses_transaction_id IS NULL)),
     UNIQUE(source_event_type, source_event_id)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_ledger_transactions_reversal_once
+    ON qd_ledger_transactions(reverses_transaction_id)
+    WHERE transaction_type = 'REVERSAL' AND reverses_transaction_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS qd_ledger_entries (
     id UUID PRIMARY KEY,
@@ -2399,9 +2422,14 @@ CREATE TABLE IF NOT EXISTS qd_position_projections (
     projection_version INTEGER NOT NULL CHECK (projection_version >= 1),
     policy_version VARCHAR(64) NOT NULL,
     rebuilt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CHECK (average_cost IS NULL OR average_cost > 0),
-    UNIQUE(tenant_id, credential_id, account_scope, strategy_id, instrument_id, side, projection_version)
+    CHECK (average_cost IS NULL OR average_cost > 0)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_position_projections_strategy_scope
+    ON qd_position_projections(tenant_id, credential_id, account_scope, strategy_id, instrument_id, side, projection_version)
+    WHERE strategy_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_position_projections_unassigned_scope
+    ON qd_position_projections(tenant_id, credential_id, account_scope, instrument_id, side, projection_version)
+    WHERE strategy_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS qd_pnl_projections (
     id UUID PRIMARY KEY,

@@ -69,6 +69,10 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
                         diff_marker.match(line),
                         f"{sql_file.name}:{line_number} contains a literal patch marker",
                     )
+                    self.assertFalse(
+                        line.startswith(("-" + chr(0x2013), "-" + chr(0x2014))),
+                        f"{sql_file.name}:{line_number} contains a literal patch marker",
+                    )
 
     def test_pr00_and_checkpoint_status_contracts_are_encoded(self):
         migration = MIGRATION.read_text(encoding="utf-8")
@@ -88,8 +92,12 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "UNIQUE(exchange, credential_id, dedupe_key, key_version)",
             "UNIQUE(aggregate_id, aggregate_version, event_type)",
             "uq_qd_risk_reservations_active_command_kind",
-            "FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id)",
-            "FOREIGN KEY(intent_id, tenant_id, credential_id, account_scope, instrument_id)",
+            "FOREIGN KEY(intent_id, id, tenant_id, credential_id, account_scope, instrument_id, market_type)",
+            "FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)",
+            "FOREIGN KEY(attempt_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)",
+            "uq_qd_ledger_transactions_reversal_once",
+            "uq_qd_exchange_order_observations_attempt_evidence",
+            "uq_qd_position_projections_unassigned_scope",
         ):
             self.assertIn(fragment, migration)
 
@@ -137,8 +145,8 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
             "(id, tenant_id, user_id, credential_id, actor_type, actor_id, source, action, account_scope, "
             "request_fingerprint, idempotency_key, status) "
             "VALUES (%s, %s, %s, %s, 'HUMAN', 'schema-test', 'SCHEMA_TEST', 'OPEN', 'account-a', "
-            "'request-fingerprint', 'command-key', 'ACCEPTED')",
-            (command_id, user_id, user_id, credential_id),
+            "'request-fingerprint', %s, 'ACCEPTED')",
+            (command_id, user_id, user_id, credential_id, f"command-key-{suffix}"),
         )
         economic_order_id = str(uuid.uuid4())
         intent_id = str(uuid.uuid4())
@@ -163,6 +171,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
             "credential_id": credential_id,
             "snapshot_id": snapshot_id,
             "command_id": command_id,
+            "command_idempotency_key": f"command-key-{suffix}",
             "economic_order_id": economic_order_id,
             "intent_id": intent_id,
         }
@@ -247,41 +256,247 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "(id, tenant_id, user_id, credential_id, actor_type, actor_id, source, action, account_scope, "
                     "request_fingerprint, idempotency_key, status) "
                     "VALUES (%s, %s, %s, %s, 'HUMAN', 'schema-test', 'SCHEMA_TEST', 'OPEN', 'account-b', "
-                    "'request-fingerprint', 'command-key', 'ACCEPTED')",
-                    (str(uuid.uuid4()), graph["user_id"], graph["user_id"], graph["credential_id"]),
+                    "'request-fingerprint', %s, 'ACCEPTED')",
+                    (str(uuid.uuid4()), graph["user_id"], graph["user_id"], graph["credential_id"], graph["command_idempotency_key"]),
                 )
 
                 attempt_id = str(uuid.uuid4())
                 attempt_sql = (
                     "INSERT INTO qd_submission_attempts "
-                    "(id, economic_order_id, exchange, credential_id, market_type, child_seq, attempt_no, role, "
-                    "canonical_client_order_id, venue_client_order_id, request_fingerprint, state) "
-                    "VALUES (%s, %s, 'schema-test', %s, 'SPOT', 1, 1, 'PRIMARY', 'canonical-1', 'venue-1', "
+                    "(id, economic_order_id, exchange, tenant_id, credential_id, account_scope, instrument_id, market_type, "
+                    "child_seq, attempt_no, role, canonical_client_order_id, venue_client_order_id, request_fingerprint, state) "
+                    "VALUES (%s, %s, 'schema-test', %s, %s, 'account-a', 'BTC-USDT', 'SPOT', 1, 1, 'PRIMARY', 'canonical-1', 'venue-1', "
                     "'attempt-fingerprint', %s)"
                 )
-                cursor.execute(attempt_sql, (attempt_id, graph["economic_order_id"], graph["credential_id"], "READY"))
+                cursor.execute(attempt_sql, (attempt_id, graph["economic_order_id"], graph["user_id"], graph["credential_id"], "READY"))
                 self._assert_rejected(
                     cursor,
                     attempt_sql,
-                    (str(uuid.uuid4()), graph["economic_order_id"], graph["credential_id"], "READY"),
+                    (str(uuid.uuid4()), graph["economic_order_id"], graph["user_id"], graph["credential_id"], "READY"),
                 )
                 self._assert_rejected(
                     cursor,
                     attempt_sql,
-                    (str(uuid.uuid4()), graph["economic_order_id"], graph["credential_id"], "INVALID"),
+                    (str(uuid.uuid4()), graph["economic_order_id"], graph["user_id"], graph["credential_id"], "INVALID"),
                 )
                 self._assert_rejected(
                     cursor,
                     attempt_sql,
-                    (str(uuid.uuid4()), graph["economic_order_id"], graph["credential_id"], None),
+                    (str(uuid.uuid4()), graph["economic_order_id"], graph["user_id"], graph["credential_id"], None),
+                )
+
+                other_credential_id = cursor.execute(
+                    "INSERT INTO qd_exchange_credentials(user_id, exchange_id, encrypted_config) "
+                    "VALUES (%s, %s, %s) RETURNING id",
+                    (graph["user_id"], "schema-test-alt", "{}"),
+                ) or cursor.fetchone()[0]
+                scoped_attempt_sql = (
+                    "INSERT INTO qd_submission_attempts "
+                    "(id, economic_order_id, exchange, tenant_id, credential_id, account_scope, instrument_id, market_type, "
+                    "child_seq, attempt_no, role, canonical_client_order_id, venue_client_order_id, request_fingerprint, state) "
+                    "VALUES (%s, %s, 'schema-test', %s, %s, %s, %s, %s, %s, 1, 'PRIMARY', %s, %s, 'attempt-fingerprint', 'READY')"
+                )
+                for child_seq, credential_id, account_scope, instrument_id, market_type in (
+                    (10, other_credential_id, "account-a", "BTC-USDT", "SPOT"),
+                    (11, graph["credential_id"], "other-account", "BTC-USDT", "SPOT"),
+                    (12, graph["credential_id"], "account-a", "ETH-USDT", "SPOT"),
+                    (13, graph["credential_id"], "account-a", "BTC-USDT", "SWAP"),
+                ):
+                    self._assert_rejected(
+                        cursor,
+                        scoped_attempt_sql,
+                        (
+                            str(uuid.uuid4()),
+                            graph["economic_order_id"],
+                            graph["user_id"],
+                            credential_id,
+                            account_scope,
+                            instrument_id,
+                            market_type,
+                            child_seq,
+                            f"canonical-{child_seq}",
+                            f"venue-{child_seq}",
+                        ),
+                    )
+
+                exchange_order_sql = (
+                    "INSERT INTO qd_exchange_orders "
+                    "(id, attempt_id, economic_order_id, child_role, exchange, tenant_id, credential_id, market_type, "
+                    "account_scope, instrument_id, venue_client_order_id, normalized_state, requested_qty) "
+                    "VALUES (%s, %s, %s, 'PRIMARY', 'schema-test', %s, %s, %s, %s, %s, %s, %s, '1')"
+                )
+                cursor.execute(
+                    exchange_order_sql,
+                    (
+                        str(uuid.uuid4()),
+                        attempt_id,
+                        graph["economic_order_id"],
+                        graph["user_id"],
+                        graph["credential_id"],
+                        "SPOT",
+                        "account-a",
+                        "BTC-USDT",
+                        "exchange-venue-1",
+                        "SUBMITTED",
+                    ),
+                )
+                for child_seq, normalized_state in enumerate(
+                    (
+                        "PARTIALLY_FILLED",
+                        "FILLED",
+                        "SUBMISSION_UNKNOWN",
+                        "CANCEL_REQUESTED",
+                        "CANCELLING",
+                        "CANCELLED",
+                        "REJECTED",
+                        "RECONCILIATION_REQUIRED",
+                    ),
+                    start=30,
+                ):
+                    valid_attempt_id = str(uuid.uuid4())
+                    cursor.execute(
+                        scoped_attempt_sql,
+                        (
+                            valid_attempt_id,
+                            graph["economic_order_id"],
+                            graph["user_id"],
+                            graph["credential_id"],
+                            "account-a",
+                            "BTC-USDT",
+                            "SPOT",
+                            child_seq,
+                            f"canonical-{child_seq}",
+                            f"venue-{child_seq}",
+                        ),
+                    )
+                    cursor.execute(
+                        exchange_order_sql,
+                        (
+                            str(uuid.uuid4()),
+                            valid_attempt_id,
+                            graph["economic_order_id"],
+                            graph["user_id"],
+                            graph["credential_id"],
+                            "SPOT",
+                            "account-a",
+                            "BTC-USDT",
+                            f"exchange-venue-{child_seq}",
+                            normalized_state,
+                        ),
+                    )
+                invalid_state_attempt_id = str(uuid.uuid4())
+                cursor.execute(
+                    scoped_attempt_sql,
+                    (
+                        invalid_state_attempt_id,
+                        graph["economic_order_id"],
+                        graph["user_id"],
+                        graph["credential_id"],
+                        "account-a",
+                        "BTC-USDT",
+                        "SPOT",
+                        20,
+                        "canonical-20",
+                        "venue-20",
+                    ),
+                )
+                self._assert_rejected(
+                    cursor,
+                    exchange_order_sql,
+                    (
+                        str(uuid.uuid4()),
+                        invalid_state_attempt_id,
+                        graph["economic_order_id"],
+                        graph["user_id"],
+                        graph["credential_id"],
+                        "SPOT",
+                        "account-a",
+                        "BTC-USDT",
+                        "exchange-venue-invalid",
+                        "INVALID",
+                    ),
+                )
+                for child_seq, credential_id, account_scope, instrument_id, market_type in (
+                    (21, other_credential_id, "account-a", "BTC-USDT", "SPOT"),
+                    (22, graph["credential_id"], "other-account", "BTC-USDT", "SPOT"),
+                    (23, graph["credential_id"], "account-a", "ETH-USDT", "SPOT"),
+                    (24, graph["credential_id"], "account-a", "BTC-USDT", "SWAP"),
+                ):
+                    attempt_scope_id = str(uuid.uuid4())
+                    # The parent attempt is valid. The exchange order alone has
+                    # a mismatched scope, so its composite foreign key must fail.
+                    cursor.execute(
+                        scoped_attempt_sql,
+                        (
+                            attempt_scope_id,
+                            graph["economic_order_id"],
+                            graph["user_id"],
+                            graph["credential_id"],
+                            "account-a",
+                            "BTC-USDT",
+                            "SPOT",
+                            child_seq,
+                            f"canonical-{child_seq}",
+                            f"venue-{child_seq}",
+                        ),
+                    )
+                    self._assert_rejected(
+                        cursor,
+                        exchange_order_sql,
+                        (
+                            str(uuid.uuid4()),
+                            attempt_scope_id,
+                            graph["economic_order_id"],
+                            graph["user_id"],
+                            credential_id,
+                            market_type,
+                            account_scope,
+                            instrument_id,
+                            f"exchange-venue-{child_seq}",
+                            "SUBMITTED",
+                        ),
+                    )
+
+                cross_attempt_id = str(uuid.uuid4())
+                cursor.execute(
+                    scoped_attempt_sql,
+                    (
+                        cross_attempt_id,
+                        graph["economic_order_id"],
+                        graph["user_id"],
+                        graph["credential_id"],
+                        "account-a",
+                        "BTC-USDT",
+                        "SPOT",
+                        25,
+                        "canonical-25",
+                        "venue-25",
+                    ),
+                )
+                other_graph = self._create_order_graph(cursor)
+                self._assert_rejected(
+                    cursor,
+                    exchange_order_sql,
+                    (
+                        str(uuid.uuid4()),
+                        cross_attempt_id,
+                        other_graph["economic_order_id"],
+                        other_graph["user_id"],
+                        other_graph["credential_id"],
+                        "SPOT",
+                        "account-a",
+                        "BTC-USDT",
+                        "exchange-venue-cross-order",
+                        "SUBMITTED",
+                    ),
                 )
 
                 fill_sql = (
                     "INSERT INTO qd_exchange_fill_events "
-                    "(id, key_version, dedupe_key, exchange, tenant_id, credential_id, account_scope, "
+                    "(id, key_version, dedupe_key, exchange, tenant_id, credential_id, account_scope, market_type, "
                     "economic_order_id, intent_id, instrument_id, side, price, quantity, quote_quantity, "
                     "exchange_event_at, received_at, source, raw_payload_hash, normalizer_version, instrument_rule_version) "
-                    "VALUES (%s, 'v1', 'fill-dedupe', 'schema-test', %s, %s, 'account-a', %s, %s, 'BTC-USDT', "
+                    "VALUES (%s, 'v1', 'fill-dedupe', 'schema-test', %s, %s, 'account-a', 'SPOT', %s, %s, 'BTC-USDT', "
                     "'BUY', '100', '1', '100', NOW(), NOW(), 'REST', 'payload-hash', 'v1', 'v1')"
                 )
                 cursor.execute(
@@ -303,6 +518,86 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                 cursor.execute(outbox_sql, (str(uuid.uuid4()), aggregate_id))
                 self._assert_rejected(cursor, outbox_sql, (str(uuid.uuid4()), aggregate_id))
 
+                ledger_sql = (
+                    "INSERT INTO qd_ledger_transactions "
+                    "(id, tenant_id, credential_id, transaction_type, source_event_type, source_event_id, "
+                    "reverses_transaction_id, effective_at, valuation_ccy, policy_version, description_code) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), 'USDT', 'v1', 'schema-test')"
+                )
+                original_transaction_id = str(uuid.uuid4())
+                cursor.execute(
+                    ledger_sql,
+                    (
+                        original_transaction_id,
+                        graph["user_id"],
+                        graph["credential_id"],
+                        "TRADE",
+                        "SCHEMA_TEST",
+                        str(uuid.uuid4()),
+                        None,
+                    ),
+                )
+                cursor.execute(
+                    ledger_sql,
+                    (
+                        str(uuid.uuid4()),
+                        graph["user_id"],
+                        graph["credential_id"],
+                        "REVERSAL",
+                        "SCHEMA_TEST_REVERSAL",
+                        str(uuid.uuid4()),
+                        original_transaction_id,
+                    ),
+                )
+                self._assert_rejected(
+                    cursor,
+                    ledger_sql,
+                    (
+                        str(uuid.uuid4()), graph["user_id"], graph["credential_id"], "REVERSAL",
+                        "SCHEMA_TEST_REVERSAL", str(uuid.uuid4()), original_transaction_id,
+                    ),
+                )
+                self._assert_rejected(
+                    cursor,
+                    ledger_sql,
+                    (
+                        str(uuid.uuid4()), graph["user_id"], graph["credential_id"], "REVERSAL",
+                        "SCHEMA_TEST_REVERSAL", str(uuid.uuid4()), None,
+                    ),
+                )
+                self._assert_rejected(
+                    cursor,
+                    ledger_sql,
+                    (
+                        str(uuid.uuid4()), graph["user_id"], graph["credential_id"], "TRADE",
+                        "SCHEMA_TEST_TRADE", str(uuid.uuid4()), original_transaction_id,
+                    ),
+                )
+
+                observation_sql = (
+                    "INSERT INTO qd_exchange_order_observations "
+                    "(id, attempt_id, observation_source, payload_hash, observed_at) "
+                    "VALUES (%s, %s, 'REST', 'attempt-evidence', NOW())"
+                )
+                cursor.execute(observation_sql, (str(uuid.uuid4()), invalid_state_attempt_id))
+                self._assert_rejected(
+                    cursor,
+                    observation_sql,
+                    (str(uuid.uuid4()), invalid_state_attempt_id),
+                )
+
+                projection_sql = (
+                    "INSERT INTO qd_position_projections "
+                    "(id, tenant_id, credential_id, account_scope, instrument_id, side, projection_version, policy_version, rebuilt_at) "
+                    "VALUES (%s, %s, %s, 'account-a', 'BTC-USDT', 'LONG', 1, 'v1', NOW())"
+                )
+                cursor.execute(projection_sql, (str(uuid.uuid4()), graph["user_id"], graph["credential_id"]))
+                self._assert_rejected(
+                    cursor,
+                    projection_sql,
+                    (str(uuid.uuid4()), graph["user_id"], graph["credential_id"]),
+                )
+
                 risk_sql = (
                     "INSERT INTO qd_risk_reservations "
                     "(id, command_id, economic_order_id, tenant_id, credential_id, account_scope, reservation_kind, "
@@ -320,7 +615,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                 )
 
                 bad_intent_id = str(uuid.uuid4())
-                bad_economic_id = str(uuid.uuid4())
+                declared_economic_id = str(uuid.uuid4())
                 cursor.execute(
                     "INSERT INTO qd_order_intents_v2 "
                     "(id, command_id, tenant_id, credential_id, economic_order_id, intent_version, account_scope, "
@@ -328,14 +623,14 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "instrument_rule_snapshot_id, instrument_rule_version, rounding_mode, payload_hash) "
                     "VALUES (%s, %s, %s, %s, %s, 2, 'account-a', 'BTC-USDT', 'SPOT', 'BUY', 'LIMIT', 'DIRECT', "
                     "'1', %s, 'v1', 'ROUND_DOWN', 'bad-intent')",
-                    (bad_intent_id, graph["command_id"], graph["user_id"], graph["credential_id"], bad_economic_id, graph["snapshot_id"]),
+                    (bad_intent_id, graph["command_id"], graph["user_id"], graph["credential_id"], declared_economic_id, graph["snapshot_id"]),
                 )
                 self._assert_rejected(
                     cursor,
                     "INSERT INTO qd_economic_orders "
                     "(id, intent_id, tenant_id, user_id, credential_id, account_scope, instrument_id, market_type, state, target_quantity) "
-                    "VALUES (%s, %s, %s, %s, %s, 'account-a', 'BTC-USDT', 'SPOT', 'INVALID', '1')",
-                    (bad_economic_id, bad_intent_id, graph["user_id"], graph["user_id"], graph["credential_id"]),
+                    "VALUES (%s, %s, %s, %s, %s, 'account-a', 'BTC-USDT', 'SPOT', 'CREATED', '1')",
+                    (str(uuid.uuid4()), bad_intent_id, graph["user_id"], graph["user_id"], graph["credential_id"]),
                 )
                 self._assert_rejected(
                     cursor,
@@ -343,6 +638,25 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "(id, intent_id, tenant_id, user_id, credential_id, account_scope, instrument_id, market_type, state, target_quantity) "
                     "VALUES (%s, %s, %s, %s, %s, 'different-account', 'BTC-USDT', 'SPOT', 'CREATED', '1')",
                     (str(uuid.uuid4()), bad_intent_id, graph["user_id"], graph["user_id"], graph["credential_id"]),
+                )
+
+                invalid_state_intent_id = str(uuid.uuid4())
+                invalid_state_economic_id = str(uuid.uuid4())
+                cursor.execute(
+                    "INSERT INTO qd_order_intents_v2 "
+                    "(id, command_id, tenant_id, credential_id, economic_order_id, intent_version, account_scope, "
+                    "instrument_id, market_type, side, order_type, execution_algo, target_quantity, "
+                    "instrument_rule_snapshot_id, instrument_rule_version, rounding_mode, payload_hash) "
+                    "VALUES (%s, %s, %s, %s, %s, 3, 'account-a', 'BTC-USDT', 'SPOT', 'BUY', 'LIMIT', 'DIRECT', "
+                    "'1', %s, 'v1', 'ROUND_DOWN', 'invalid-state-intent')",
+                    (invalid_state_intent_id, graph["command_id"], graph["user_id"], graph["credential_id"], invalid_state_economic_id, graph["snapshot_id"]),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "INSERT INTO qd_economic_orders "
+                    "(id, intent_id, tenant_id, user_id, credential_id, account_scope, instrument_id, market_type, state, target_quantity) "
+                    "VALUES (%s, %s, %s, %s, %s, 'account-a', 'BTC-USDT', 'SPOT', 'INVALID', '1')",
+                    (invalid_state_economic_id, invalid_state_intent_id, graph["user_id"], graph["user_id"], graph["credential_id"]),
                 )
 
                 cursor.execute(

@@ -21,6 +21,7 @@ contracts = _load_contracts()
 Actor = contracts.Actor
 AmbiguousRiskEffectError = contracts.AmbiguousRiskEffectError
 EconomicOrderState = contracts.EconomicOrderState
+ExchangeOrderNormalizedState = contracts.ExchangeOrderNormalizedState
 OrderAction = contracts.OrderAction
 ReconciliationHealth = contracts.ReconciliationHealth
 ReconciliationCheckpointStatus = contracts.ReconciliationCheckpointStatus
@@ -249,6 +250,24 @@ class SubmissionAttemptStateContractTests(unittest.TestCase):
         self.assertTrue(contracts.attempt_requires_exchange_query("NOT_A_STATE"))
         self.assertFalse(
             contracts.validate_attempt_transition("NOT_A_STATE", "SUBMITTING")
+        )
+
+
+class ExchangeOrderNormalizedStateContractTests(unittest.TestCase):
+    def test_normalized_exchange_order_state_vocabulary_is_exact(self):
+        self.assertEqual(
+            {item.value for item in ExchangeOrderNormalizedState},
+            {
+                "SUBMITTED",
+                "PARTIALLY_FILLED",
+                "FILLED",
+                "SUBMISSION_UNKNOWN",
+                "CANCEL_REQUESTED",
+                "CANCELLING",
+                "CANCELLED",
+                "REJECTED",
+                "RECONCILIATION_REQUIRED",
+            },
         )
 
 

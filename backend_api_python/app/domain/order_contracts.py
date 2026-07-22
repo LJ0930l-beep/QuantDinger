@@ -58,6 +58,20 @@ class SubmissionAttemptState(str, Enum):
     REJECTED = "REJECTED"
 
 
+class ExchangeOrderNormalizedState(str, Enum):
+    """Normalized exchange-order facts accepted by the expand-only schema."""
+
+    SUBMITTED = "SUBMITTED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    SUBMISSION_UNKNOWN = "SUBMISSION_UNKNOWN"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
+    CANCELLING = "CANCELLING"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+    RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
+
+
 class RiskEffect(str, Enum):
     INCREASE_RISK = "INCREASE_RISK"
     REDUCE_RISK = "REDUCE_RISK"
