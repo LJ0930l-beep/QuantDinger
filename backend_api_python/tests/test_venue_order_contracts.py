@@ -89,6 +89,8 @@ class VenueOrderContractTests(unittest.TestCase):
         # An explicitly supplied historical prefix is unaffected by any later
         # runtime configuration change because this function reads no config.
         self.assertEqual(base, generate_venue_client_order_id(identity(broker_prefix="x-broker"), capability=profile()))
+        with self.assertRaisesRegex(VenueContractError, "normalization version"):
+            identity(prefix_normalization_version="future-v2")
 
     def test_spot_generation_fails_closed_without_inheriting_swap_rules(self):
         spot = profile("spot")

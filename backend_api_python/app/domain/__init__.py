@@ -78,6 +78,7 @@ from .reducers import (
 from .venue_order_contracts import (
     BINANCE_USDM_CLIENT_ID_PATTERN,
     CLIENT_ID_ALGORITHM_VERSION,
+    PREFIX_NORMALIZATION_VERSION,
     FillFee,
     NormalizedOrderQuery,
     OrderQueryReference,
@@ -151,6 +152,7 @@ __all__ = [
     "NormalizedOrderQuery",
     "BINANCE_USDM_CLIENT_ID_PATTERN",
     "CLIENT_ID_ALGORITHM_VERSION",
+    "PREFIX_NORMALIZATION_VERSION",
     "aggregate_fees_by_asset",
     "allowed_attempt_transitions",
     "allowed_transitions",

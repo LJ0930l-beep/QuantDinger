@@ -27,6 +27,7 @@ class UnsupportedVenueCapability(VenueContractError):
 
 BINANCE_USDM_CLIENT_ID_PATTERN = r"^[\.A-Z\:/a-z0-9_-]{1,36}$"
 CLIENT_ID_ALGORITHM_VERSION = "v1"
+PREFIX_NORMALIZATION_VERSION = "ascii-nonsensitive-v1"
 
 
 class ClientOrderIdCapability(Protocol):
@@ -57,6 +58,7 @@ class SubmissionAttemptIdentity:
     market_type: str
     broker_prefix: str
     algorithm_version: str = CLIENT_ID_ALGORITHM_VERSION
+    prefix_normalization_version: str = PREFIX_NORMALIZATION_VERSION
 
     def __post_init__(self) -> None:
         if not str(self.economic_order_id or "").strip():
@@ -67,6 +69,8 @@ class SubmissionAttemptIdentity:
             raise VenueContractError("exchange_id and market_type are required")
         if self.algorithm_version != CLIENT_ID_ALGORITHM_VERSION:
             raise VenueContractError("unsupported client order ID algorithm version")
+        if self.prefix_normalization_version != PREFIX_NORMALIZATION_VERSION:
+            raise VenueContractError("unsupported broker_prefix normalization version")
 
 
 def _canonical_broker_prefix(value: str) -> str:
@@ -94,6 +98,7 @@ def _canonical_identity_material(identity: SubmissionAttemptIdentity, prefix: st
             "economic_order_id": identity.economic_order_id,
             "exchange_id": str(identity.exchange_id).strip().lower(),
             "market_type": str(identity.market_type).strip().lower(),
+            "prefix_normalization_version": identity.prefix_normalization_version,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -109,8 +114,9 @@ def generate_venue_client_order_id(
 
     The caller must resolve ``capability`` from the PR-00 exact
     exchange + market profile. An unsupported or unknown profile cannot reuse
-    another market's rule.  The algorithm version is both hashed and rendered,
-    so a future algorithm cannot silently collide with a historical one.
+    another market's rule. The algorithm and prefix-normalization versions are
+    hashed, and the algorithm version is rendered, so neither can silently
+    collide with a historical identity.
     """
 
     if (

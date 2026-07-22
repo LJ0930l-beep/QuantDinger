@@ -134,6 +134,8 @@ class BinanceOrderQueryFormatterTests(unittest.TestCase):
             format_binance_fill_identity(scope, {"orderId": "123", "symbol": "BTCUSDT", "qty": "0.25", "price": "100000", "commission": "0.01", "commissionAsset": "BNB"})
         with self.assertRaisesRegex(domain.VenueContractError, "fill scope mismatch"):
             format_binance_fill_identity(scope, {"id": "trade-44", "orderId": "other", "symbol": "BTCUSDT", "qty": "0.25", "price": "100000", "commission": "0.01", "commissionAsset": "BNB"})
+        with self.assertRaisesRegex(domain.VenueContractError, "invalid Binance fill response"):
+            format_binance_fill_identity(scope, {"id": "trade-44", "orderId": "123", "symbol": "BTCUSDT", "qty": 0.25, "price": "100000", "commission": "0.01", "commissionAsset": "BNB"})
 
 
 if __name__ == "__main__":

@@ -114,19 +114,24 @@ def format_binance_fill_identity(
     if str(payload.get("orderId") or "") != expected_order_scope.exchange_order_id:
         raise VenueContractError("fill scope mismatch")
     venue_fill_id = str(payload.get("id") or "")
-    fee = FillFee(
-        str(payload.get("commissionAsset") or ""),
-        FeeAmount(payload.get("commission")),
-    )
-    return VenueFillIdentity.from_venue_fact(
-        expected_order_scope,
-        venue="binance",
-        market_type=expected_order_scope.market_type,
-        account_scope=expected_order_scope.account_scope,
-        instrument=expected_order_scope.instrument,
-        exchange_order_id=expected_order_scope.exchange_order_id,
-        venue_fill_id=venue_fill_id,
-        quantity=Quantity(payload.get("qty")),
-        price=Price(payload.get("price")),
-        fees=(fee,),
-    )
+    try:
+        fee = FillFee(
+            str(payload.get("commissionAsset") or ""),
+            FeeAmount(payload.get("commission")),
+        )
+        return VenueFillIdentity.from_venue_fact(
+            expected_order_scope,
+            venue="binance",
+            market_type=expected_order_scope.market_type,
+            account_scope=expected_order_scope.account_scope,
+            instrument=expected_order_scope.instrument,
+            exchange_order_id=expected_order_scope.exchange_order_id,
+            venue_fill_id=venue_fill_id,
+            quantity=Quantity(payload.get("qty")),
+            price=Price(payload.get("price")),
+            fees=(fee,),
+        )
+    except VenueContractError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise VenueContractError("invalid Binance fill response") from exc
