@@ -136,8 +136,8 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
             "INSERT INTO qd_instrument_rule_snapshots "
             "(id, exchange, market_type, instrument_id, rule_version, tick_size, quantity_step, "
             "minimum_quantity, minimum_notional, price_scale, quantity_scale, rounding_policy_version) "
-            "VALUES (%s, 'schema-test', 'SPOT', 'BTC-USDT', 'v1', '0.01', '0.001', '0', '0', 2, 3, 'v1')",
-            (snapshot_id,),
+            "VALUES (%s, %s, 'SPOT', 'BTC-USDT', 'v1', '0.01', '0.001', '0', '0', 2, 3, 'v1')",
+            (snapshot_id, f"schema-test-{suffix}"),
         )
         command_id = str(uuid.uuid4())
         cursor.execute(
