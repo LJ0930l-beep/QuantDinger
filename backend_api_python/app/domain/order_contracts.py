@@ -58,6 +58,20 @@ class SubmissionAttemptState(str, Enum):
     REJECTED = "REJECTED"
 
 
+class ExchangeOrderNormalizedState(str, Enum):
+    """Normalized exchange-order facts accepted by the expand-only schema."""
+
+    SUBMITTED = "SUBMITTED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    SUBMISSION_UNKNOWN = "SUBMISSION_UNKNOWN"
+    CANCEL_REQUESTED = "CANCEL_REQUESTED"
+    CANCELLING = "CANCELLING"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+    RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
+
+
 class RiskEffect(str, Enum):
     INCREASE_RISK = "INCREASE_RISK"
     REDUCE_RISK = "REDUCE_RISK"
@@ -68,6 +82,15 @@ class ReconciliationHealth(str, Enum):
     HEALTHY = "HEALTHY"
     DEGRADED = "DEGRADED"
     UNHEALTHY = "UNHEALTHY"
+
+
+class ReconciliationCheckpointStatus(str, Enum):
+    """Persisted reconciliation fact; health is derived, never persisted here."""
+
+    HEALTHY = "HEALTHY"
+    STALE = "STALE"
+    FAILED = "FAILED"
+    CONFLICT = "CONFLICT"
 
 
 class AmbiguousRiskEffectError(ValueError):
@@ -352,6 +375,31 @@ def attempt_requires_exchange_query(state: SubmissionAttemptState | str) -> bool
     if parsed is None:
         return True
     return parsed is SubmissionAttemptState.UNKNOWN
+
+
+def derive_reconciliation_health(
+    status: ReconciliationCheckpointStatus | str | None,
+    *,
+    sla_expired: bool = False,
+) -> ReconciliationHealth:
+    """Derive the hard-risk health view from a persisted checkpoint fact.
+
+    This mapping is intentionally one-way: callers cannot turn a degraded or
+    unhealthy health result back into a more specific checkpoint status.
+    Missing and unknown facts fail closed as ``UNHEALTHY``.
+    """
+
+    parsed = _coerce_enum(status, ReconciliationCheckpointStatus)
+    if parsed is ReconciliationCheckpointStatus.HEALTHY:
+        return ReconciliationHealth.DEGRADED if sla_expired else ReconciliationHealth.HEALTHY
+    if parsed is ReconciliationCheckpointStatus.STALE:
+        return ReconciliationHealth.DEGRADED
+    if parsed in {
+        ReconciliationCheckpointStatus.FAILED,
+        ReconciliationCheckpointStatus.CONFLICT,
+    }:
+        return ReconciliationHealth.UNHEALTHY
+    return ReconciliationHealth.UNHEALTHY
 
 
 def classify_risk_effect(

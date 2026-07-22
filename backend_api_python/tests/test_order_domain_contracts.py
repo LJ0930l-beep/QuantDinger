@@ -21,8 +21,10 @@ contracts = _load_contracts()
 Actor = contracts.Actor
 AmbiguousRiskEffectError = contracts.AmbiguousRiskEffectError
 EconomicOrderState = contracts.EconomicOrderState
+ExchangeOrderNormalizedState = contracts.ExchangeOrderNormalizedState
 OrderAction = contracts.OrderAction
 ReconciliationHealth = contracts.ReconciliationHealth
+ReconciliationCheckpointStatus = contracts.ReconciliationCheckpointStatus
 RiskEffect = contracts.RiskEffect
 SubmissionAttemptState = contracts.SubmissionAttemptState
 
@@ -248,6 +250,62 @@ class SubmissionAttemptStateContractTests(unittest.TestCase):
         self.assertTrue(contracts.attempt_requires_exchange_query("NOT_A_STATE"))
         self.assertFalse(
             contracts.validate_attempt_transition("NOT_A_STATE", "SUBMITTING")
+        )
+
+
+class ExchangeOrderNormalizedStateContractTests(unittest.TestCase):
+    def test_normalized_exchange_order_state_vocabulary_is_exact(self):
+        self.assertEqual(
+            {item.value for item in ExchangeOrderNormalizedState},
+            {
+                "SUBMITTED",
+                "PARTIALLY_FILLED",
+                "FILLED",
+                "SUBMISSION_UNKNOWN",
+                "CANCEL_REQUESTED",
+                "CANCELLING",
+                "CANCELLED",
+                "REJECTED",
+                "RECONCILIATION_REQUIRED",
+            },
+        )
+
+
+class ReconciliationCheckpointContractTests(unittest.TestCase):
+    def test_checkpoint_status_vocabulary_is_exact(self):
+        self.assertEqual(
+            {item.value for item in ReconciliationCheckpointStatus},
+            {"HEALTHY", "STALE", "FAILED", "CONFLICT"},
+        )
+
+    def test_health_is_derived_one_way_from_checkpoint_status(self):
+        cases = {
+            ReconciliationCheckpointStatus.HEALTHY: ReconciliationHealth.HEALTHY,
+            ReconciliationCheckpointStatus.STALE: ReconciliationHealth.DEGRADED,
+            ReconciliationCheckpointStatus.FAILED: ReconciliationHealth.UNHEALTHY,
+            ReconciliationCheckpointStatus.CONFLICT: ReconciliationHealth.UNHEALTHY,
+        }
+        for status, expected in cases.items():
+            with self.subTest(status=status):
+                self.assertIs(contracts.derive_reconciliation_health(status), expected)
+
+    def test_missing_or_unknown_checkpoint_status_fails_closed(self):
+        self.assertIs(
+            contracts.derive_reconciliation_health(None),
+            ReconciliationHealth.UNHEALTHY,
+        )
+        self.assertIs(
+            contracts.derive_reconciliation_health("UNKNOWN"),
+            ReconciliationHealth.UNHEALTHY,
+        )
+
+    def test_expired_healthy_checkpoint_degrades_without_mutating_status(self):
+        self.assertIs(
+            contracts.derive_reconciliation_health(
+                ReconciliationCheckpointStatus.HEALTHY,
+                sla_expired=True,
+            ),
+            ReconciliationHealth.DEGRADED,
         )
 
 
