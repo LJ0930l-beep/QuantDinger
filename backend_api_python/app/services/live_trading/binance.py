@@ -264,6 +264,33 @@ class BinanceFuturesClient(BaseRestClient):
         except Exception:
             return 0.0
 
+    def get_funding_payments(self, *, symbol: str, start_time_ms: int, end_time_ms: int, limit: int = 100):
+        sym = to_binance_futures_symbol(symbol)
+        raw = self._signed_request(
+            "GET",
+            "/fapi/v1/income",
+            params={
+                "symbol": sym,
+                "incomeType": "FUNDING_FEE",
+                "startTime": int(start_time_ms),
+                "endTime": int(end_time_ms),
+                "limit": min(1000, max(1, int(limit or 100))),
+            },
+        )
+        rows = raw.get("raw") if isinstance(raw, dict) else raw
+        if not isinstance(rows, list):
+            return []
+        return [
+            {
+                "id": str(item.get("tranId") or f"{item.get('time')}:{item.get('income')}"),
+                "symbol": str(item.get("symbol") or sym),
+                "amount": float(item.get("income") or 0.0),
+                "asset": str(item.get("asset") or "USDT").upper(),
+                "time": int(item.get("time") or 0),
+                "raw": item,
+            }
+            for item in rows if isinstance(item, dict)
+        ]
     def get_symbol_filters(self, *, symbol: str) -> Dict[str, Any]:
         """
         Get futures symbol filters from exchangeInfo (best-effort).
@@ -1015,5 +1042,3 @@ class BinanceFuturesClient(BaseRestClient):
             return rows
         sym = to_binance_futures_symbol(want)
         return [p for p in rows if isinstance(p, dict) and str(p.get("symbol") or "") == sym]
-
-

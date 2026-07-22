@@ -472,6 +472,9 @@ class MultiAssetSimulationBroker:
         self.protection_engine = ProtectionEngine()
         self.equity_curve: list[dict[str, Any]] = []
         self._order_sequence = 0
+        self.bankrupt = False
+        self.liquidation_events: list[dict[str, Any]] = []
+        self.liquidation_adjustment = 0.0
 
     def execute(
         self,
@@ -490,12 +493,13 @@ class MultiAssetSimulationBroker:
         target_weights: dict[str, float] = {}
         batch_event_indexes: list[int] = []
         for order in batch_orders:
+            forced_liquidation = order.reason == "margin_liquidation"
             self._order_sequence += 1
             order_id = f"{pd.Timestamp(timestamp).isoformat()}:{self._order_sequence}"
             override = (price_overrides or {}).get(order.symbol)
             bar = portal.bar_at(order.symbol, timestamp)
             open_price = float(override) if override is not None else (float(bar["open"]) if bar else None)
-            blocked_reason = self._execution_block_reason(order, bar, open_price)
+            blocked_reason = "" if forced_liquidation else self._execution_block_reason(order, bar, open_price)
             if blocked_reason:
                 status = "rejected" if order.attempts >= 4 else "deferred"
                 event = self._order_event(order_id, order, timestamp, status, blocked_reason)
@@ -544,17 +548,20 @@ class MultiAssetSimulationBroker:
                 ))
                 batch_event_indexes.append(len(self.order_ledger) - 1)
                 continue
-            liquidity_cap = self._liquidity_cap(bar, lot_size)
+            liquidity_cap = None if forced_liquidation else self._liquidity_cap(bar, lot_size)
             if liquidity_cap is not None and abs(delta) > liquidity_cap:
                 delta = math.copysign(liquidity_cap, delta)
-            feasible_delta, constraint_reason = self._feasible_delta(
-                delta=delta,
-                current=current,
-                fill_price=fill_price,
-                equity=equity,
-                lot_size=lot_size,
-                position_key=position_key,
-            )
+            if forced_liquidation:
+                feasible_delta, constraint_reason = delta, ""
+            else:
+                feasible_delta, constraint_reason = self._feasible_delta(
+                    delta=delta,
+                    current=current,
+                    fill_price=fill_price,
+                    equity=equity,
+                    lot_size=lot_size,
+                    position_key=position_key,
+                )
             if abs(feasible_delta) < lot_size - 1e-12:
                 self.order_ledger.append(self._order_event(
                     order_id,
@@ -627,7 +634,7 @@ class MultiAssetSimulationBroker:
                 "requested_quantity": abs(requested_delta),
             }
             self.executions.append(execution)
-            reason = "filled"
+            reason = "margin_liquidation" if forced_liquidation else "filled"
             if execution_status == "partial":
                 reason = constraint_reason or (
                     "insufficient_liquidity"
@@ -679,6 +686,55 @@ class MultiAssetSimulationBroker:
             event_indexes=batch_event_indexes,
         )
         return deferred
+
+    def liquidate_if_insolvent(
+        self,
+        portal: MultiAssetDataPortal,
+        timestamp: Any,
+    ) -> bool:
+        """Force-close an insolvent leveraged account and stop further strategy orders."""
+        if self.bankrupt:
+            return True
+        equity_before = self.mark_to_market(portal, timestamp)
+        if equity_before > 0:
+            return False
+
+        orders: list[OrderIntent] = []
+        price_overrides: dict[str, float] = {}
+        for position in list(self.portfolio.positions.values()):
+            price = portal.close_at(position.symbol, timestamp)
+            if price is None or not math.isfinite(float(price)) or float(price) <= 0:
+                price = position.last_price or position.avg_cost
+            if price is None or not math.isfinite(float(price)) or float(price) <= 0:
+                continue
+            orders.append(OrderIntent(
+                position.symbol,
+                "target_quantity",
+                0.0,
+                "margin_liquidation",
+                signal_time=pd.Timestamp(timestamp),
+                position_side=position.position_side,
+            ))
+            price_overrides[position.symbol] = float(price)
+
+        if orders:
+            self.execute(orders, portal, timestamp, price_overrides=price_overrides)
+
+        # A backtest has no exchange insurance-fund model. Absorb any residual
+        # deficit after forced liquidation so equity cannot continue below zero.
+        deficit = max(0.0, -float(self.portfolio.available_cash))
+        if deficit:
+            self.liquidation_adjustment += deficit
+            self.portfolio.available_cash += deficit
+        self.portfolio.total_value = max(0.0, self.mark_to_market(portal, timestamp))
+        self.bankrupt = True
+        self.liquidation_events.append({
+            "time": str(pd.Timestamp(timestamp)),
+            "equityBefore": equity_before,
+            "deficitAbsorbed": deficit,
+            "positionsClosed": len(orders),
+        })
+        return True
 
     def _execution_block_reason(
         self,
@@ -968,6 +1024,9 @@ class MultiAssetSimulationBroker:
                 "quantity": closing_quantity,
                 "amount": closing_quantity,
                 "profit": profit,
+                "gross_profit": gross_profit,
+                "entry_commission": entry_fee,
+                "exit_commission": close_fee,
                 "commission": entry_fee + close_fee,
                 "balance": float(execution.get("balance") or 0.0),
                 "close_reason": str(execution.get("reason") or "strategy"),
@@ -1049,6 +1108,11 @@ class StrategyV2BacktestRunner:
         for timestamp in timestamps:
             self.context.current_dt = pd.Timestamp(timestamp)
             self.context.previous_trading_date = previous
+            if self.broker.bankrupt:
+                self.portal.set_clock(timestamp, include_current=True)
+                self.broker.record_equity(self.portal, timestamp)
+                previous = pd.Timestamp(timestamp)
+                continue
             self.portal.set_clock(timestamp, include_current=False)
             if pending_orders:
                 pending_orders = self.broker.execute(pending_orders, self.portal, timestamp)
@@ -1075,6 +1139,13 @@ class StrategyV2BacktestRunner:
                 )
 
             self.portal.set_clock(timestamp, include_current=True)
+            if self.broker.liquidate_if_insolvent(self.portal, timestamp):
+                pending_orders = []
+                self.context.flush_orders()
+                self.logs.extend(self.context.flush_logs())
+                self.broker.record_equity(self.portal, timestamp)
+                previous = pd.Timestamp(timestamp)
+                continue
             self._invoke("handle_data", self.context, self.context.data)
             pending_orders = _merge_pending(pending_orders, self.context.flush_orders())
             self._invoke("after_trading_end", self.context, self.context.data)
@@ -1212,8 +1283,12 @@ class StrategyV2BacktestRunner:
             last_time = pd.Timestamp(self.broker.equity_curve[-1]["time"])
             elapsed_days = max(0.0, (last_time - first_time).total_seconds() / 86400.0)
         annualized_return = 0.0
-        if elapsed_days > 0 and initial > 0 and final > 0:
-            annualized_return = ((final / initial) ** (365.25 / elapsed_days) - 1.0) * 100.0
+        if elapsed_days > 0 and initial > 0:
+            annualized_return = (
+                -100.0
+                if final <= 0
+                else ((final / initial) ** (365.25 / elapsed_days) - 1.0) * 100.0
+            )
         win_rate = len(wins) / len(profits) * 100.0 if profits else 0.0
         average_win = sum(wins) / len(wins) if wins else 0.0
         average_loss = abs(sum(losses) / len(losses)) if losses else 0.0
@@ -1273,6 +1348,9 @@ class StrategyV2BacktestRunner:
                 for key, value in self.broker.portfolio.positions.items()
             },
             "protectionEvents": list(self.broker.protection_events),
+            "liquidated": self.broker.bankrupt,
+            "liquidationEvents": list(self.broker.liquidation_events),
+            "liquidationAdjustment": self.broker.liquidation_adjustment,
             "attribution": attribution,
             "logs": list(self.logs),
             "manifest": self.program.manifest.metadata(),
@@ -1355,6 +1433,8 @@ class StrategyV2BacktestRunner:
             actual = float((self.broker.portfolio.positions.get(symbol) or Position(symbol)).amount)
             if abs(quantities.get(symbol, 0.0) - actual) > 1e-8:
                 position_mismatches.append(symbol)
+        cash_before_liquidation_adjustment = cash
+        cash += self.broker.liquidation_adjustment
         ledger_equity = cash + sum(position.market_value for position in self.broker.portfolio.positions.values())
         final_equity = float(self.broker.portfolio.total_value)
         equity_difference = ledger_equity - final_equity
@@ -1370,6 +1450,8 @@ class StrategyV2BacktestRunner:
             "executionCount": len(self.broker.executions),
             "closedTradeCount": len(self.broker.closed_trades),
             "cashLedger": cash,
+            "cashLedgerBeforeLiquidationAdjustment": cash_before_liquidation_adjustment,
+            "liquidationAdjustment": self.broker.liquidation_adjustment,
             "ledgerEquity": ledger_equity,
             "reportedEquity": final_equity,
             "equityDifference": equity_difference,
@@ -1524,6 +1606,12 @@ class StrategyV2LiveSession:
         ts = pd.Timestamp(timestamp or pd.Timestamp.utcnow())
         exits: list[OrderIntent] = []
         for symbol, state in list(self.protection_states.items()):
+            # A protection exit is dispatched asynchronously.  Do not enqueue
+            # another close on every risk tick while the first one is still
+            # pending; queued spot closes could otherwise consume unrelated
+            # wallet inventory after the strategy-owned position is flat.
+            if symbol in self._protection_exit_pending:
+                continue
             position = self.portfolio.positions.get(symbol)
             if position is None or abs(position.amount) <= 1e-12:
                 continue
@@ -1540,6 +1628,14 @@ class StrategyV2LiveSession:
             exits.append(OrderIntent(symbol, "target_quantity", 0.0, decision.reason))
             self._protection_exit_pending.add(symbol)
         return exits
+
+    def pending_protection_exit_symbols(self) -> set[str]:
+        """Return symbols whose protection close has already been dispatched."""
+        return set(self._protection_exit_pending)
+
+    def release_protection_exit(self, symbol: object) -> None:
+        """Allow a protection close to be retried after submission was rejected."""
+        self._protection_exit_pending.discard(str(symbol))
 
     def protection_snapshot(self) -> dict[str, Any]:
         return {
@@ -1570,7 +1666,6 @@ class StrategyV2LiveSession:
         for order in orders:
             if order.protection is not None:
                 self.protection_specs[order.symbol] = order.protection
-                self._protection_exit_pending.discard(order.symbol)
             if order.kind in {"target_quantity", "target_value", "target_percent"} and abs(order.value) <= 1e-12:
                 self._protection_exit_pending.add(order.symbol)
 

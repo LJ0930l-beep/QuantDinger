@@ -266,10 +266,13 @@ class StrategyV2BacktestService:
             "intrabarMode": "conservative",
             "barClosePolicy": "closed_bars_only",
             "initialCapital": initial_capital,
+            "startDate": start_date.date().isoformat(),
+            "endDate": end_date.date().isoformat(),
             "leverageEnabled": bool(leverage_enabled),
             "leverage": float(leverage if leverage_enabled else 1.0),
             "commission": float(commission),
             "slippage": float(slippage),
+            "fundingMode": "not_modeled",
         }
 
         run_id = None
