@@ -71,6 +71,10 @@ def record_runtime_heartbeat(
         "status": str(status or "healthy"),
         "last_error": str(last_error or "")[:1000],
     })
+    # Keep a low-frequency equity mark so tomorrow's P&L can use a real
+    # midnight baseline even when nobody has the monitoring page open.
+    from app.services.strategy_daily_pnl import maybe_capture_strategy_equity_snapshot
+    maybe_capture_strategy_equity_snapshot(int(strategy_id))
 
 
 def _empty_snapshot() -> Dict[str, Any]:

@@ -27,6 +27,30 @@ def test_strategy_rows_include_runtime_health(monkeypatch):
     assert rows[0]["runtime_health"]["loop_latency_ms"] == 37
 
 
+def test_strategy_rows_include_daily_pnl_metrics(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(strategy_routes, "load_runtime_health", lambda *_args, **_kwargs: {})
+
+    def load_metrics(rows, *, user_id, client_timezone=""):
+        captured["rows"] = list(rows)
+        captured["user_id"] = user_id
+        captured["timezone"] = client_timezone
+        return {20: {"today_pnl": 23.0, "today_pnl_estimated": False}}
+
+    monkeypatch.setattr(strategy_routes, "load_strategy_daily_metrics", load_metrics)
+    rows = strategy_routes._attach_runtime_health(
+        [{"id": 20, "status": "running", "strategy_name": "Momentum"}],
+        user_id=7,
+        client_timezone="Asia/Shanghai",
+    )
+
+    assert captured["user_id"] == 7
+    assert captured["timezone"] == "Asia/Shanghai"
+    assert rows[0]["today_pnl"] == 23.0
+    assert rows[0]["today_pnl_estimated"] is False
+
+
 def test_runtime_heartbeat_persists_loop_latency(monkeypatch):
     saved = {}
 

@@ -224,8 +224,83 @@ def test_robot_preview_keeps_each_algorithm_shape():
 
     assert len(grid["levels"]) == 5
     assert len(dca["levels"]) == 4
+    assert [level["amount_quote"] for level in dca["levels"]] == [0.25] * 4
+    assert [level["scheduled_bar"] for level in dca["levels"]] == [1, 61, 121, 181]
     assert {level["side"] for level in martingale["levels"]} == {"short"}
+    assert len({level["amount_quote"] for level in martingale["levels"]}) > 1
+    assert all("scheduled_bar" not in level for level in martingale["levels"])
     assert len(layered["levels"]) == 6
+
+
+def test_dca_catalog_and_source_use_a_time_based_fixed_allocation_plan():
+    defaults = next(
+        item["defaults"] for item in executor_templates()["items"]
+        if item["executor_type"] == "dca"
+    )
+    preview = preview_executor({
+        "executor_type": "dca",
+        "symbol": "BTC/USDT",
+        **defaults,
+    })
+    payload = build_executor_strategy_payload({
+        "executor_type": "dca",
+        "execution_mode": "signal",
+        "symbol": "BTC/USDT",
+        **defaults,
+    }, user_id=7)
+
+    assert defaults["dca_interval_bars"] == 60
+    assert defaults["dca_max_orders"] == 5
+    assert defaults["dca_total_budget_pct"] == pytest.approx(1.0)
+    assert "volume_multiplier" not in defaults
+    assert [level["amount_quote"] for level in preview["levels"]] == [0.2] * 5
+    assert [level["scheduled_bar"] for level in preview["levels"]] == [1, 61, 121, 181, 241]
+    assert "DCA_INTERVAL_BARS = 60" in payload["code"]
+    assert "DCA_ORDER_PCT = 0.2" in payload["code"]
+    assert 'reason="dca_scheduled_order"' in payload["code"]
+    assert "PRICE_LEVELS" not in payload["code"]
+    assert 'reason="robot_level"' not in payload["code"]
+
+
+def test_dca_backtest_places_equal_orders_on_the_configured_bar_schedule():
+    payload = build_executor_strategy_payload(
+        _robot_payload(
+            "dca",
+            dca_interval_bars=2,
+            dca_max_orders=3,
+            dca_total_budget_pct=0.6,
+            trailing_take_profit_enabled=False,
+            take_profit_pct=0,
+            hard_stop_pct=0,
+        ),
+        user_id=7,
+    )
+    instrument = "Crypto:BTC/USDT@swap"
+    index = pd.date_range("2026-01-01", periods=10, freq="15min")
+    frame = pd.DataFrame({
+        "open": [100.0] * len(index),
+        "high": [100.0] * len(index),
+        "low": [100.0] * len(index),
+        "close": [100.0] * len(index),
+        "volume": [100000.0] * len(index),
+    }, index=index)
+
+    result = StrategyV2BacktestRunner(
+        code=payload["code"],
+        frames={instrument: frame},
+        initial_capital=1000,
+        commission=0,
+        slippage=0,
+        leverage_enabled=True,
+        leverage=1,
+    ).run()
+
+    dca_orders = [
+        item for item in result["executions"]
+        if item.get("reason") == "dca_scheduled_order"
+    ]
+    assert len(dca_orders) == 3
+    assert [item["notional"] for item in dca_orders] == pytest.approx([200, 200, 200])
 
 
 def test_default_catalog_robot_can_anchor_levels_to_first_market_price():

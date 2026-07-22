@@ -394,6 +394,36 @@ class OkxClient(BaseRestClient):
             raise LiveTradingError(f"OKX error: {data}")
         return data if isinstance(data, dict) else {"raw": data}
 
+    def get_funding_payments(self, *, symbol: str, start_time_ms: int, end_time_ms: int, limit: int = 100):
+        inst_id = to_okx_swap_inst_id(symbol)
+        rows = []
+        for subtype in ("173", "174"):
+            raw = self._signed_request(
+                "GET",
+                "/api/v5/account/bills",
+                params={"instType": "SWAP", "instId": inst_id, "subType": subtype,
+                        "begin": int(start_time_ms), "end": int(end_time_ms),
+                        "limit": min(100, max(1, int(limit or 100)))},
+            )
+            rows.extend(raw.get("data") or [])
+        out = []
+        seen = set()
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            change = float(item.get("balChg") or item.get("pnl") or 0.0)
+            record_id = str(item.get("billId") or f"{item.get('ts')}:{item.get('subType')}:{change}")
+            if record_id in seen:
+                continue
+            seen.add(record_id)
+            out.append({
+                "id": record_id,
+                "symbol": str(item.get("instId") or inst_id), "amount": change,
+                "asset": str(item.get("ccy") or "USDT").upper(), "time": int(item.get("ts") or 0),
+                "raw": item,
+            })
+        return out
+
     def ping(self) -> bool:
         code, data, _ = self._request("GET", "/api/v5/public/time")
         return code == 200 and isinstance(data, dict)
@@ -804,6 +834,7 @@ class OkxClient(BaseRestClient):
                 total_quote = Decimal("0")
                 total_fee = 0.0
                 fee_ccy = ""
+                fees_by_ccy: Dict[str, float] = {}
                 got_any_fill = False
                 if isinstance(fills, list):
                     for f in fills:
@@ -827,9 +858,12 @@ class OkxClient(BaseRestClient):
                                 got_any_fill = True
                             if fee != 0.0:
                                 # OKX fees are often negative for costs; store absolute cost.
-                                total_fee += abs(float(fee))
+                                abs_fee = abs(float(fee))
+                                total_fee += abs_fee
                                 if (not fee_ccy) and ccy:
                                     fee_ccy = ccy
+                                fee_key = ccy.upper() if ccy else "UNKNOWN"
+                                fees_by_ccy[fee_key] = fees_by_ccy.get(fee_key, 0.0) + abs_fee
                         except Exception:
                             continue
                 # If fills are present, they are the best source of fee/avg aggregation.
@@ -841,6 +875,7 @@ class OkxClient(BaseRestClient):
                         "avg_price": float(total_quote / total_base),
                         "fee": float(total_fee),
                         "fee_ccy": str(fee_ccy or ""),
+                        "fees_by_ccy": fees_by_ccy,
                         "state": state,
                         "order": last_order,
                         "fills": last_fills,
@@ -872,5 +907,3 @@ class OkxClient(BaseRestClient):
             if time.time() >= end_ts:
                 return {"filled": filled, "avg_price": avg_price, "fee": 0.0, "fee_ccy": "", "state": state, "order": last_order, "fills": last_fills}
             time.sleep(float(poll_interval_sec or 0.5))
-
-

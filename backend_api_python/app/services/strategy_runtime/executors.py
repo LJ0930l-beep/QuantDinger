@@ -180,9 +180,11 @@ class ExecutorLevel:
     state: str = "not_active"
     layer_index: int = 0
     order_index: int = 0
+    scheduled_bar: int = 0
+    cumulative_amount_quote: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "level": self.level,
             "layer_index": self.layer_index or self.level,
             "order_index": self.order_index or 1,
@@ -194,6 +196,13 @@ class ExecutorLevel:
             "trigger_pct": round(float(self.trigger_pct or 0.0), 8),
             "state": self.state,
         }
+        if self.scheduled_bar:
+            payload["scheduled_bar"] = int(self.scheduled_bar)
+        if self.cumulative_amount_quote:
+            payload["cumulative_amount_quote"] = round(
+                float(self.cumulative_amount_quote), 8
+            )
+        return payload
 
 
 @dataclass
@@ -288,16 +297,16 @@ def executor_templates() -> Dict[str, Any]:
                     "timeframe": "1m",
                     "dynamic_anchor": True,
                     "entry_price": 1,
-                    "base_order_size": 1,
-                    "safety_order_size": 1.2,
-                    "price_deviation_pct": 0.015,
-                    "step_multiplier": 1.2,
-                    "volume_multiplier": 1.15,
-                    "max_layers": 5,
+                    "dca_interval_bars": 60,
+                    "dca_max_orders": 5,
+                    "dca_total_budget_pct": 1.0,
+                    "dca_price_filter_enabled": False,
+                    "dca_max_adverse_price_pct": 0.05,
                     "take_profit_pct": 0.006,
                     "trailing_take_profit_enabled": True,
                     "trailing_activation_pct": 0.006,
                     "trailing_callback_pct": 0.002,
+                    "hard_stop_pct": 0.12,
                     "max_entry_drift_pct": 0.03,
                 },
             },
@@ -517,7 +526,112 @@ def _preview_grid(cfg: Dict[str, Any]) -> ExecutorPreview:
 
 
 def _preview_dca(cfg: Dict[str, Any]) -> ExecutorPreview:
-    return _preview_layered_dca(cfg, "dca")
+    entry = _float(cfg.get("entry_price") or cfg.get("entryPrice"), 1.0)
+    interval_bars = max(
+        1,
+        _int(
+            cfg.get("dca_interval_bars")
+            or cfg.get("dcaIntervalBars")
+            or cfg.get("interval_bars")
+            or cfg.get("intervalBars"),
+            60,
+        ),
+    )
+    max_orders = max(
+        1,
+        _int(
+            cfg.get("dca_max_orders")
+            or cfg.get("dcaMaxOrders")
+            or cfg.get("max_orders")
+            or cfg.get("maxOrders")
+            or cfg.get("max_layers")
+            or cfg.get("maxLayers"),
+            5,
+        ),
+    )
+    total_budget_pct = min(
+        1.0,
+        max(
+            0.0,
+            _ratio(
+                cfg.get("dca_total_budget_pct")
+                if "dca_total_budget_pct" in cfg
+                else cfg.get("dcaTotalBudgetPct"),
+                1.0,
+            ),
+        ),
+    )
+    price_filter_enabled = _bool(
+        cfg.get("dca_price_filter_enabled")
+        if "dca_price_filter_enabled" in cfg
+        else cfg.get("dcaPriceFilterEnabled"),
+        False,
+    )
+    max_adverse_price_pct = max(
+        0.0,
+        _ratio(
+            cfg.get("dca_max_adverse_price_pct")
+            if "dca_max_adverse_price_pct" in cfg
+            else cfg.get("dcaMaxAdversePricePct"),
+            0.05,
+        ),
+    )
+    take_profit = max(
+        0.0,
+        _ratio(cfg.get("take_profit_pct") or cfg.get("takeProfitPct"), 0.006),
+    )
+    trailing = _trailing_take_profit_config(cfg, default_activation=take_profit)
+    hard_stop = max(
+        0.0,
+        _ratio(cfg.get("hard_stop_pct") or cfg.get("hardStopPct"), 0.0),
+    )
+    order_pct = total_budget_pct / max_orders
+    warnings: List[str] = []
+    if total_budget_pct <= 0:
+        warnings.append("missing_dca_budget")
+    if price_filter_enabled and entry <= 0 and not bool(cfg.get("dynamic_anchor")):
+        warnings.append("missing_entry_price")
+    if trailing["trailing_take_profit_enabled"] and (
+        trailing["trailing_activation_pct"] <= 0
+        or trailing["trailing_callback_pct"] <= 0
+        or trailing["trailing_callback_pct"] >= trailing["trailing_activation_pct"]
+    ):
+        warnings.append("invalid_trailing_take_profit")
+
+    levels = []
+    cumulative = 0.0
+    for order_index in range(1, max_orders + 1):
+        cumulative += order_pct
+        levels.append(
+            ExecutorLevel(
+                order_index,
+                "open" if order_index == 1 else "add",
+                cfg["side"],
+                entry,
+                order_pct,
+                0.0,
+                0.0,
+                layer_index=order_index,
+                order_index=order_index,
+                scheduled_bar=1 + ((order_index - 1) * interval_bars),
+                cumulative_amount_quote=cumulative,
+            )
+        )
+    config = {
+        "side": cfg["side"],
+        "market_type": cfg["market_type"],
+        "entry_price": entry,
+        "dca_interval_bars": interval_bars,
+        "dca_max_orders": max_orders,
+        "dca_total_budget_pct": total_budget_pct,
+        "dca_order_pct": order_pct,
+        "dca_price_filter_enabled": price_filter_enabled,
+        "dca_max_adverse_price_pct": max_adverse_price_pct,
+        "take_profit_pct": take_profit,
+        **trailing,
+        "hard_stop_pct": hard_stop,
+    }
+    return ExecutorPreview("dca", config, levels, warnings)
 
 
 def _preview_martingale(cfg: Dict[str, Any]) -> ExecutorPreview:

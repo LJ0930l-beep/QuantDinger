@@ -475,9 +475,8 @@ class TradingExecutor:
                         last_prices,
                         timestamp=pd.Timestamp.now(tz="UTC"),
                     )
-                    protected = {str(intent.symbol) for intent in protection_intents}
                     for intent in protection_intents:
-                        self._execute_strategy_v2_intent(
+                        submitted = self._execute_strategy_v2_intent(
                             strategy_id=strategy_id,
                             strategy_name=strategy_name,
                             intent=intent,
@@ -493,6 +492,13 @@ class TradingExecutor:
                             strategy_run_id=run_id,
                             current_price_override=last_prices.get(str(intent.symbol)),
                         )
+                        if not submitted:
+                            session.release_protection_exit(intent.symbol)
+
+                    # Suppress normal strategy orders for a symbol until its
+                    # asynchronous protection close has completed and the
+                    # strategy position snapshot becomes flat.
+                    protected = session.pending_protection_exit_symbols()
 
                     pending_count = len(protection_intents)
                     if cycle_started >= next_signal_poll:
