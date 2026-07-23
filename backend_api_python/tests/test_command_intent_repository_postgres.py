@@ -233,23 +233,48 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
             self.assertEqual(cursor.fetchone()[0], 1)
 
     def test_same_command_id_different_idempotency_key_is_typed_conflict(self):
-        command_id = uuid4()
-        first = self._graph(replay_token=f"command-id-first-{self.suffix}", command_id=command_id)
-        second = self._graph(replay_token=f"command-id-second-{self.suffix}", command_id=command_id)
-        results = self._parallel(
-            lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, first),
-            lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, second),
-        )
-        self.assertTrue(all(isinstance(result, (c.CommandGraphResult, c.IdempotencyConflict)) for result in results))
-        self.assertEqual(sum(getattr(result, "disposition", None) is c.CommandGraphDisposition.CREATED for result in results), 1)
-        self.assertEqual(sum(isinstance(result, c.IdempotencyConflict) for result in results), 1)
-        with self.connection.cursor() as cursor:
-            cursor.execute("SELECT count(*) FROM qd_order_commands WHERE id = %s", (command_id,))
-            self.assertEqual(cursor.fetchone()[0], 1)
-            cursor.execute("SELECT count(*) FROM qd_order_intents_v2 WHERE command_id = %s", (command_id,))
-            self.assertEqual(cursor.fetchone()[0], 1)
-            cursor.execute("SELECT count(*) FROM qd_economic_orders WHERE intent_id = %s", (first.intent.intent_id,))
-            self.assertEqual(cursor.fetchone()[0], 1)
+        for attempt in range(20):
+            with self.subTest(attempt=attempt):
+                command_id = uuid4()
+                first = self._graph(replay_token=f"command-id-first-{attempt}-{self.suffix}", command_id=command_id)
+                second = self._graph(replay_token=f"command-id-second-{attempt}-{self.suffix}", command_id=command_id)
+                results = self._parallel(
+                    lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, first),
+                    lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, second),
+                )
+                self.assertTrue(all(isinstance(result, (c.CommandGraphResult, c.IdempotencyConflict)) for result in results))
+                created = [
+                    result for result in results
+                    if isinstance(result, c.CommandGraphResult)
+                    and result.disposition is c.CommandGraphDisposition.CREATED
+                ]
+                conflicts = [result for result in results if isinstance(result, c.IdempotencyConflict)]
+                self.assertEqual(len(created), 1)
+                self.assertEqual(len(conflicts), 1)
+
+                winner = created[0]
+                graphs_by_intent_id = {
+                    str(first.intent.intent_id): first,
+                    str(second.intent.intent_id): second,
+                }
+                self.assertIn(winner.intent_id, graphs_by_intent_id)
+                winner_graph = graphs_by_intent_id[winner.intent_id]
+                self.assertEqual(winner.economic_order_id, str(winner_graph.intent.economic_order_id))
+                loser = second if winner_graph is first else first
+
+                with self.connection.cursor() as cursor:
+                    cursor.execute("SELECT count(*) FROM qd_order_commands WHERE id = %s", (command_id,))
+                    self.assertEqual(cursor.fetchone()[0], 1)
+                    cursor.execute("SELECT count(*) FROM qd_order_intents_v2 WHERE command_id = %s", (command_id,))
+                    self.assertEqual(cursor.fetchone()[0], 1)
+                    cursor.execute("SELECT count(*) FROM qd_order_intents_v2 WHERE id = %s", (winner.intent_id,))
+                    self.assertEqual(cursor.fetchone()[0], 1)
+                    cursor.execute("SELECT count(*) FROM qd_economic_orders WHERE id = %s", (winner.economic_order_id,))
+                    self.assertEqual(cursor.fetchone()[0], 1)
+                    cursor.execute("SELECT count(*) FROM qd_order_intents_v2 WHERE id = %s", (loser.intent.intent_id,))
+                    self.assertEqual(cursor.fetchone()[0], 0)
+                    cursor.execute("SELECT count(*) FROM qd_economic_orders WHERE id = %s", (loser.intent.economic_order_id,))
+                    self.assertEqual(cursor.fetchone()[0], 0)
 
     def test_same_key_different_command_id_is_typed_conflict_without_driver_exception(self):
         token = f"same-key-different-command-{self.suffix}"
