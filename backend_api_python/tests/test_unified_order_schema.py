@@ -11,6 +11,8 @@ from pathlib import Path
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 MIGRATION = MIGRATIONS / "20260722_unified_order_expand_only.sql"
+PRECONDITION_MIGRATION = MIGRATIONS / "20260723_state_recovery_ledger_preconditions.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -33,6 +35,11 @@ EXPECTED_TABLES = {
     "qd_transactional_outbox",
     "qd_consumer_inbox",
     "qd_projection_snapshots",
+    "qd_venue_capability_snapshots",
+    "qd_submission_recovery_policy_snapshots",
+    "qd_submission_attempt_state_events",
+    "qd_ledger_valuation_evidence",
+    "qd_exchange_fill_fee_components",
 }
 
 # These are representative pre-existing upstream tables whose availability is
@@ -51,18 +58,25 @@ REQUIRED_UPSTREAM_TABLES = {
 
 class UnifiedOrderSchemaTextTests(unittest.TestCase):
     def test_init_sql_contains_the_incremental_schema(self):
-        migration = MIGRATION.read_text(encoding="utf-8")
         init_sql = INIT_SQL.read_text(encoding="utf-8")
-        self.assertIn(migration, init_sql)
+        for fragment in (
+            "qd_submission_attempt_state_events",
+            "qd_venue_capability_snapshots",
+            "qd_submission_recovery_policy_snapshots",
+            "qd_ledger_valuation_evidence",
+            "qd_exchange_fill_fee_components",
+            "uq_qd_order_state_events_idempotency",
+        ):
+            self.assertIn(fragment, init_sql)
 
     def test_new_money_columns_use_numeric_38_18_without_float_types(self):
-        migration = MIGRATION.read_text(encoding="utf-8")
-        self.assertGreaterEqual(migration.count("NUMERIC(38,18)"), 25)
-        self.assertIsNone(re.search(r"\b(?:FLOAT|REAL|DOUBLE(?:\s+PRECISION)?)\b", migration, re.I))
+        schema = "\n".join(item.read_text(encoding="utf-8") for item in INCREMENTAL_MIGRATIONS)
+        self.assertGreaterEqual(schema.count("NUMERIC(38,18)"), 29)
+        self.assertIsNone(re.search(r"\b(?:FLOAT|REAL|DOUBLE(?:\s+PRECISION)?)\b", schema, re.I))
 
     def test_sql_files_reject_line_start_diff_markers(self):
         diff_marker = re.compile(r"^(?:\+|@@|---|\*\*\*|-[—–])")
-        for sql_file in (MIGRATION, INIT_SQL):
+        for sql_file in (*INCREMENTAL_MIGRATIONS, INIT_SQL):
             with self.subTest(sql_file=sql_file.name):
                 for line_number, line in enumerate(sql_file.read_text(encoding="utf-8").splitlines(), 1):
                     self.assertIsNone(
@@ -84,7 +98,7 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
         self.assertNotIn("reconcile_health", migration)
 
     def test_immutable_fact_foreign_keys_restrict_deletes_and_idempotency_is_database_backed(self):
-        migration = MIGRATION.read_text(encoding="utf-8")
+        migration = "\n".join(item.read_text(encoding="utf-8") for item in INCREMENTAL_MIGRATIONS)
         self.assertNotIn("ON DELETE CASCADE", migration)
         for fragment in (
             "uq_qd_order_commands_idempotency",
@@ -98,6 +112,9 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "uq_qd_ledger_transactions_reversal_once",
             "uq_qd_exchange_order_observations_attempt_evidence",
             "uq_qd_position_projections_unassigned_scope",
+            "uq_qd_order_state_events_idempotency",
+            "qd_submission_attempt_state_events",
+            "qd_exchange_fill_fee_components",
         ):
             self.assertIn(fragment, migration)
 
@@ -201,8 +218,9 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                 # CI initializes an empty PostgreSQL instance with init.sql before
                 # running tests; execute it again here to enforce reentrancy.
                 cursor.execute(INIT_SQL.read_text(encoding="utf-8"))
-                cursor.execute(MIGRATION.read_text(encoding="utf-8"))
-                cursor.execute(MIGRATION.read_text(encoding="utf-8"))
+                for migration in INCREMENTAL_MIGRATIONS:
+                    cursor.execute(migration.read_text(encoding="utf-8"))
+                    cursor.execute(migration.read_text(encoding="utf-8"))
                 cursor.execute(
                     "SELECT table_name FROM information_schema.tables "
                     "WHERE table_schema = 'public' AND table_name = ANY(%s)",
@@ -675,6 +693,152 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     (graph["economic_order_id"],),
                 )
                 self.assertEqual(cursor.fetchone()[0], 1)
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_state_recovery_and_multifee_preconditions_enforce_contracts(self):
+        import psycopg2
+
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            connection.autocommit = False
+            with connection.cursor() as cursor:
+                cursor.execute(INIT_SQL.read_text(encoding="utf-8"))
+                for migration in INCREMENTAL_MIGRATIONS:
+                    cursor.execute(migration.read_text(encoding="utf-8"))
+                graph = self._create_order_graph(cursor)
+
+                capability_snapshot_id = str(uuid.uuid4())
+                cursor.execute(
+                    "INSERT INTO qd_venue_capability_snapshots "
+                    "(id, exchange, market_type, capability_version, profile_hash, "
+                    "accepts_external_client_order_id, can_generate_safe_client_order_id, "
+                    "query_by_exchange_order_id, query_by_client_order_id, list_order_fills, stable_fill_id) "
+                    "VALUES (%s, 'schema-test', 'SPOT', 'v1', 'capability-hash', TRUE, FALSE, TRUE, TRUE, TRUE, TRUE)",
+                    (capability_snapshot_id,),
+                )
+                policy_snapshot_id = str(uuid.uuid4())
+                cursor.execute(
+                    "INSERT INTO qd_submission_recovery_policy_snapshots "
+                    "(id, exchange, market_type, policy_version, policy_hash, client_id_query_authoritative, "
+                    "order_history_authoritative, fill_history_authoritative, not_found_min_query_count, "
+                    "not_found_grace_seconds, not_found_action) "
+                    "VALUES (%s, 'schema-test', 'SPOT', 'v1', 'policy-hash', TRUE, TRUE, TRUE, 2, 30, 'KEEP_UNKNOWN')",
+                    (policy_snapshot_id,),
+                )
+                attempt_id = str(uuid.uuid4())
+                cursor.execute(
+                    "INSERT INTO qd_submission_attempts "
+                    "(id, economic_order_id, exchange, tenant_id, credential_id, account_scope, instrument_id, market_type, "
+                    "child_seq, attempt_no, role, canonical_client_order_id, venue_client_order_id, request_fingerprint, state, "
+                    "venue_capability_snapshot_id, recovery_policy_snapshot_id, client_id_algorithm_version, "
+                    "broker_prefix_normalization_version, broker_prefix) "
+                    "VALUES (%s, %s, 'schema-test', %s, %s, 'account-a', 'BTC-USDT', 'SPOT', 1, 1, 'PRIMARY', "
+                    "'canonical-1', 'venue-1', 'request-hash', 'READY', %s, %s, 'v1', 'v1', 'broker')",
+                    (
+                        attempt_id,
+                        graph["economic_order_id"],
+                        graph["user_id"],
+                        graph["credential_id"],
+                        capability_snapshot_id,
+                        policy_snapshot_id,
+                    ),
+                )
+                state_event_sql = (
+                    "INSERT INTO qd_submission_attempt_state_events "
+                    "(id, attempt_id, economic_order_id, event_seq, expected_version, resulting_version, "
+                    "from_state, to_state, reason_code, actor_type, idempotency_key, event_fingerprint, occurred_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, 'READY', 'SUBMITTING', 'SCHEMA_TEST', 'HUMAN', %s, %s, NOW())"
+                )
+                cursor.execute(
+                    state_event_sql,
+                    (
+                        str(uuid.uuid4()),
+                        attempt_id,
+                        graph["economic_order_id"],
+                        1,
+                        0,
+                        1,
+                        "attempt-event-1",
+                        "attempt-fingerprint-1",
+                    ),
+                )
+                self._assert_rejected(
+                    cursor,
+                    state_event_sql,
+                    (
+                        str(uuid.uuid4()),
+                        attempt_id,
+                        graph["economic_order_id"],
+                        2,
+                        1,
+                        2,
+                        "attempt-event-1",
+                        "attempt-fingerprint-2",
+                    ),
+                )
+                self._assert_rejected(
+                    cursor,
+                    state_event_sql,
+                    (
+                        str(uuid.uuid4()),
+                        attempt_id,
+                        graph["economic_order_id"],
+                        2,
+                        1,
+                        3,
+                        "attempt-event-2",
+                        "attempt-fingerprint-2",
+                    ),
+                )
+                other_graph = self._create_order_graph(cursor)
+                self._assert_rejected(
+                    cursor,
+                    state_event_sql,
+                    (
+                        str(uuid.uuid4()),
+                        attempt_id,
+                        other_graph["economic_order_id"],
+                        2,
+                        1,
+                        2,
+                        "attempt-event-cross-order",
+                        "attempt-fingerprint-cross-order",
+                    ),
+                )
+
+                fill_event_id = str(uuid.uuid4())
+                cursor.execute(
+                    "INSERT INTO qd_exchange_fill_events "
+                    "(id, key_version, dedupe_key, exchange, tenant_id, credential_id, account_scope, market_type, "
+                    "economic_order_id, intent_id, instrument_id, side, price, quantity, quote_quantity, quote_quantity_origin, "
+                    "fee_summary_state, exchange_event_at, received_at, source, raw_payload_hash, normalizer_version, instrument_rule_version) "
+                    "VALUES (%s, 'venue-fill-id-v1', %s, 'schema-test', %s, %s, 'account-a', 'SPOT', %s, %s, "
+                    "'BTC-USDT', 'SELL', '61000', '0.01', '610', 'VENUE', 'MULTI_COMPONENT', NOW(), NOW(), 'REST', "
+                    "'fill-payload-hash', 'v1', 'v1')",
+                    (
+                        fill_event_id,
+                        f"fill-dedupe-{uuid.uuid4().hex}",
+                        graph["user_id"],
+                        graph["credential_id"],
+                        graph["economic_order_id"],
+                        graph["intent_id"],
+                    ),
+                )
+                fee_sql = (
+                    "INSERT INTO qd_exchange_fill_fee_components "
+                    "(fill_event_id, fee_seq, asset, amount, fee_quote_amount, raw_component_hash) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)"
+                )
+                cursor.execute(fee_sql, (fill_event_id, 1, "USDT", "0.610", "0.610", "fee-usdt"))
+                cursor.execute(fee_sql, (fill_event_id, 2, "BNB", "0.0015", None, "fee-bnb"))
+                self._assert_rejected(cursor, fee_sql, (fill_event_id, 3, "BNB", "0.0015", None, "fee-bnb"))
+                self._assert_rejected(
+                    cursor,
+                    "DELETE FROM qd_exchange_fill_events WHERE id = %s",
+                    (fill_event_id,),
+                )
         finally:
             connection.rollback()
             connection.close()
