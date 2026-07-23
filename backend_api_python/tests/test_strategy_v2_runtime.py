@@ -374,6 +374,11 @@ def handle_data(context, data):
     assert result["totalTrades"] == 1
     assert result["rawTrades"][0]["type"] == "open_long"
     assert result["rawTrades"][1]["type"] == "close_long"
+    assert result["rawTrades"][0]["time"].endswith("Z")
+    assert result["rawTrades"][0]["signal_time"].endswith("Z")
+    assert result["closedTrades"][0]["entry_time"].endswith("Z")
+    assert result["closedTrades"][0]["exit_time"].endswith("Z")
+    assert all(point["time"].endswith("Z") for point in result["equityCurve"])
     assert result["closedTrades"][0]["entry_price"] == 110
     assert result["closedTrades"][0]["exit_price"] == 120
     assert result["closedTrades"][0]["profit"] > 0
