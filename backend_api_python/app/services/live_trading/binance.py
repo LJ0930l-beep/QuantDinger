@@ -16,6 +16,10 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode
 
 from app.services.live_trading.base import BaseRestClient, LiveOrderResult, LiveTradingError
+from app.domain.venue_order_contracts import (
+    VenueContractError,
+    validate_binance_usdm_client_order_id,
+)
 
 logger = logging.getLogger(__name__)
 from app.services.live_trading.symbols import to_binance_futures_symbol
@@ -194,19 +198,19 @@ class BinanceFuturesClient(BaseRestClient):
             pass
 
     def _format_client_order_id(self, client_order_id: Optional[str]) -> str:
-        raw = str(client_order_id or "").strip()
+        raw = str(client_order_id or "")
         broker_id = str(self.broker_id or "").strip()
         if not raw:
             return ""
-        if not broker_id:
-            return raw[:36]
-        prefix = f"x-{broker_id}"
-        if raw.startswith(prefix):
-            return raw[:36]
-        suffix_budget = max(0, 36 - len(prefix))
-        if suffix_budget <= 0:
-            return prefix[:36]
-        return f"{prefix}{raw[:suffix_budget]}"
+        candidate = raw
+        if broker_id:
+            prefix = f"x-{broker_id}"
+            candidate = raw if raw.startswith(prefix) else f"{prefix}{raw}"
+        try:
+            return validate_binance_usdm_client_order_id(candidate)
+        except VenueContractError as exc:
+            # Never truncate a caller-supplied ID: that would change identity.
+            raise LiveTradingError("Binance futures client order ID violates the venue rule") from exc
 
     def _signed_request(self, method: str, path: str, *, params: Dict[str, Any]) -> Dict[str, Any]:
         self._ensure_server_time()

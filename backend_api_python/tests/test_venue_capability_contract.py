@@ -119,6 +119,22 @@ class VenueCapabilityContractTests(unittest.TestCase):
                 with self.assertRaises(VenueCapabilityValidationError):
                     profile.validate_for_auto_live()
 
+    def test_binance_spot_does_not_inherit_futures_client_id_rule(self):
+        futures = capabilities.get_venue_capability_profile("binance", "swap")
+        spot = capabilities.get_venue_capability_profile("binance", "spot")
+        self.assertTrue(futures.accepts_external_client_order_id)
+        self.assertTrue(futures.can_generate_safe_client_order_id)
+        self.assertEqual(futures.client_id_max_length, 36)
+        self.assertIsNotNone(futures.client_id_pattern)
+        self.assertTrue(spot.accepts_external_client_order_id)
+        self.assertFalse(spot.can_generate_safe_client_order_id)
+        self.assertIsNone(spot.client_id_max_length)
+        self.assertIsNone(spot.client_id_pattern)
+        # Independent read-only evidence does not enable automatic live trading.
+        self.assertTrue(spot.query_by_exchange_order_id)
+        self.assertTrue(spot.query_by_client_order_id)
+        self.assertFalse(spot.auto_live_eligible)
+
     def test_legacy_catalog_requires_exact_unverified_profile(self):
         capability = VenueCapability("binance", frozenset({"spot", "swap"}))
         with self.assertRaises(VenueCapabilityValidationError):
