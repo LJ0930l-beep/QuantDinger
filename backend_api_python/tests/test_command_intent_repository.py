@@ -79,7 +79,8 @@ class CommandIntentRepositoryTests(unittest.TestCase):
         self.assertIn("qd_order_commands", sql)
         self.assertIn("qd_order_intents_v2", sql)
         self.assertIn("qd_economic_orders", sql)
-        self.assertIn("ON CONFLICT (tenant_id, source, idempotency_key) DO NOTHING", sql)
+        self.assertIn("ON CONFLICT DO NOTHING", sql)
+        self.assertNotIn("ON CONFLICT (tenant_id, source, idempotency_key)", sql)
 
     def test_idempotent_replay_returns_existing_graph_only_when_facts_match(self):
         value = graph()

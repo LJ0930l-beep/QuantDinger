@@ -177,8 +177,7 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
         with self.assertRaises(c.ReservationStateConflict):
             self.repo.consume_reservation(self.connection, reservation.reservation_id, 1)
 
-    def test_two_connections_create_one_graph_or_report_typed_conflict(self):
-        graph = self._graph(replay_token="-".join(("parallel", "same", "graph")))
+    def _assert_parallel_same_graph_has_one_complete_graph(self, graph):
         results = self._parallel(
             lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, graph),
             lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, graph),
@@ -210,6 +209,12 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
             cursor.execute("SELECT count(*) FROM qd_economic_orders WHERE intent_id = %s", (graph.intent.intent_id,))
             self.assertEqual(cursor.fetchone()[0], 1)
 
+    def test_two_connections_create_one_graph_or_report_typed_conflict_twenty_times(self):
+        for attempt in range(20):
+            with self.subTest(attempt=attempt):
+                graph = self._graph(replay_token=f"parallel-same-{attempt}-{self.suffix}")
+                self._assert_parallel_same_graph_has_one_complete_graph(graph)
+
     def test_two_connections_same_key_different_graph_leave_one_graph(self):
         first = self._graph(replay_token="-".join(("parallel", "different", "graph")))
         second = self._graph(replay_token="-".join(("parallel", "different", "graph")))
@@ -217,6 +222,7 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
             lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, first),
             lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, second),
         )
+        self.assertTrue(all(isinstance(result, (c.CommandGraphResult, c.IdempotencyConflict)) for result in results))
         self.assertEqual(sum(isinstance(result, c.CommandGraphResult) for result in results), 1)
         self.assertEqual(sum(isinstance(result, c.IdempotencyConflict) for result in results), 1)
         with self.connection.cursor() as cursor:
@@ -224,6 +230,46 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
                 "SELECT count(*) FROM qd_order_commands WHERE tenant_id = %s AND source = %s AND idempotency_key = %s",
                 (self.user_id, first.command.source, first.command.idempotency_key),
             )
+            self.assertEqual(cursor.fetchone()[0], 1)
+
+    def test_same_command_id_different_idempotency_key_is_typed_conflict(self):
+        command_id = uuid4()
+        first = self._graph(replay_token=f"command-id-first-{self.suffix}", command_id=command_id)
+        second = self._graph(replay_token=f"command-id-second-{self.suffix}", command_id=command_id)
+        results = self._parallel(
+            lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, first),
+            lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, second),
+        )
+        self.assertTrue(all(isinstance(result, (c.CommandGraphResult, c.IdempotencyConflict)) for result in results))
+        self.assertEqual(sum(getattr(result, "disposition", None) is c.CommandGraphDisposition.CREATED for result in results), 1)
+        self.assertEqual(sum(isinstance(result, c.IdempotencyConflict) for result in results), 1)
+        with self.connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM qd_order_commands WHERE id = %s", (command_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+            cursor.execute("SELECT count(*) FROM qd_order_intents_v2 WHERE command_id = %s", (command_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+            cursor.execute("SELECT count(*) FROM qd_economic_orders WHERE intent_id = %s", (first.intent.intent_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+
+    def test_same_key_different_command_id_is_typed_conflict_without_driver_exception(self):
+        token = f"same-key-different-command-{self.suffix}"
+        first = self._graph(replay_token=token)
+        second = self._graph(replay_token=token)
+        self.assertEqual(
+            self.repo.accept_command_graph(self.connection, first).disposition,
+            c.CommandGraphDisposition.CREATED,
+        )
+        with self.assertRaises(c.IdempotencyConflict):
+            self.repo.accept_command_graph(self.connection, second)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT count(*) FROM qd_order_commands WHERE tenant_id = %s AND source = %s AND idempotency_key = %s",
+                (self.user_id, first.command.source, token),
+            )
+            self.assertEqual(cursor.fetchone()[0], 1)
+            cursor.execute("SELECT count(*) FROM qd_order_intents_v2 WHERE command_id = %s", (first.command.command_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+            cursor.execute("SELECT count(*) FROM qd_economic_orders WHERE intent_id = %s", (first.intent.intent_id,))
             self.assertEqual(cursor.fetchone()[0], 1)
 
     def test_two_connections_reservation_replay_conflict_and_terminal_races(self):
