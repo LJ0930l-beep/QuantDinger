@@ -19,10 +19,19 @@ from app.services.factors import (
     get_factor,
     is_talib_available,
 )
-
 from .contract import CompiledStrategyV2, StrategyV2ContractError, compile_strategy_v2
 from .data import MultiAssetDataPortal
 from .protection import ProtectionDecision, ProtectionEngine, ProtectionSpec, ProtectionState
+
+
+def _backtest_time_iso(value: Any) -> str:
+    """Serialize the UTC-naive market index as an unambiguous UTC instant."""
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.tz_localize("UTC")
+    else:
+        timestamp = timestamp.tz_convert("UTC")
+    return timestamp.floor("s").isoformat().replace("+00:00", "Z")
 
 
 @dataclass
@@ -616,7 +625,7 @@ class MultiAssetSimulationBroker:
             execution = {
                 "order_id": order_id,
                 "symbol": order.symbol,
-                "time": str(pd.Timestamp(timestamp)),
+                "time": _backtest_time_iso(timestamp),
                 "side": "buy" if delta > 0 else "sell",
                 "type": execution_type,
                 "position_side": position_side,
@@ -627,7 +636,7 @@ class MultiAssetSimulationBroker:
                 "commission": fee,
                 "balance": self.portfolio.total_value,
                 "reason": order.reason,
-                "signal_time": str(order.signal_time) if order.signal_time is not None else str(pd.Timestamp(timestamp)),
+                "signal_time": _backtest_time_iso(order.signal_time if order.signal_time is not None else timestamp),
                 "fill_reference": "bar_open",
                 "reference_price": open_price,
                 "status": execution_status,
@@ -729,7 +738,7 @@ class MultiAssetSimulationBroker:
         self.portfolio.total_value = max(0.0, self.mark_to_market(portal, timestamp))
         self.bankrupt = True
         self.liquidation_events.append({
-            "time": str(pd.Timestamp(timestamp)),
+            "time": _backtest_time_iso(timestamp),
             "equityBefore": equity_before,
             "deficitAbsorbed": deficit,
             "positionsClosed": len(orders),
@@ -832,8 +841,8 @@ class MultiAssetSimulationBroker:
             "reason": order.reason,
             "status": status,
             "statusReason": reason,
-            "signalTime": str(order.signal_time) if order.signal_time is not None else str(pd.Timestamp(timestamp)),
-            "eventTime": str(pd.Timestamp(timestamp)),
+            "signalTime": _backtest_time_iso(order.signal_time if order.signal_time is not None else timestamp),
+            "eventTime": _backtest_time_iso(timestamp),
             "attempt": order.attempts + 1,
             "requestedQuantity": requested_quantity,
             "filledQuantity": filled_quantity,
@@ -860,7 +869,7 @@ class MultiAssetSimulationBroker:
         turnover = sum(float(item.get("filledQuantity") or 0.0) * float(item.get("price") or 0.0) for item in events)
         counts = {name: sum(1 for item in events if item.get("status") == name) for name in ("filled", "partial", "deferred", "rejected")}
         self.rebalance_records.append({
-            "time": str(pd.Timestamp(timestamp)),
+            "time": _backtest_time_iso(timestamp),
             "targetWeights": dict(target_weights),
             "actualWeights": actual_weights,
             "cashBefore": cash_before,
@@ -922,7 +931,7 @@ class MultiAssetSimulationBroker:
                 "reason": decision.reason,
                 "triggerPrice": decision.trigger_price,
                 "fillReferencePrice": decision.price,
-                "time": str(decision.timestamp),
+                "time": _backtest_time_iso(decision.timestamp),
             })
         return decisions
 
@@ -943,7 +952,7 @@ class MultiAssetSimulationBroker:
         gross = sum(abs(item.market_value) for item in self.portfolio.positions.values())
         net = sum(item.market_value for item in self.portfolio.positions.values())
         snapshot = {
-            "time": str(pd.Timestamp(timestamp)),
+            "time": _backtest_time_iso(timestamp),
             "value": round(value, 8),
             "cash": round(float(self.portfolio.available_cash), 8),
             "grossExposure": gross / value if value else 0.0,
