@@ -21,6 +21,7 @@ BEGIN
                 (expected_version IS NULL AND resulting_version IS NULL AND idempotency_key IS NULL
                  AND event_fingerprint IS NULL AND correlation_id IS NULL AND canonical_payload_json IS NULL)
                 OR (expected_version >= 0 AND resulting_version = expected_version + 1
+                    AND event_seq = resulting_version
                     AND idempotency_key <> '' AND event_fingerprint <> '' AND correlation_id <> ''
                     AND canonical_payload_json IS NOT NULL)
             ) NOT VALID;
@@ -125,13 +126,16 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_qd_submission_attempts_canonical_snapshot') THEN
         ALTER TABLE qd_submission_attempts ADD CONSTRAINT chk_qd_submission_attempts_canonical_snapshot CHECK (
-            canonical_contract_version IS NULL OR (
-                canonical_contract_version = 'attempt-contract-v1'
+            (canonical_contract_version IS NULL
+                AND venue_capability_snapshot_id IS NULL AND recovery_policy_snapshot_id IS NULL
+                AND client_id_algorithm_version IS NULL
+                AND broker_prefix_normalization_version IS NULL
+                AND broker_prefix IS NULL)
+            OR (canonical_contract_version = 'attempt-contract-v1'
                 AND venue_capability_snapshot_id IS NOT NULL AND recovery_policy_snapshot_id IS NOT NULL
                 AND client_id_algorithm_version IS NOT NULL AND client_id_algorithm_version <> ''
                 AND broker_prefix_normalization_version IS NOT NULL AND broker_prefix_normalization_version <> ''
-                AND broker_prefix IS NOT NULL AND broker_prefix <> ''
-            )
+                AND broker_prefix IS NOT NULL AND broker_prefix <> '')
         ) NOT VALID;
     END IF;
     IF NOT EXISTS (
@@ -203,6 +207,10 @@ CREATE TABLE IF NOT EXISTS qd_ledger_valuation_evidence (
     observed_at TIMESTAMPTZ NOT NULL,
     payload_hash VARCHAR(128) NOT NULL CHECK (payload_hash <> ''),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (
+        (evidence_source = 'IDENTITY' AND asset = valuation_ccy AND price = 1)
+        OR (evidence_source <> 'IDENTITY' AND asset <> valuation_ccy)
+    ),
     UNIQUE(id, fill_event_id, asset, valuation_ccy),
     UNIQUE(fill_event_id, asset, valuation_ccy, evidence_source, policy_version, observed_at, payload_hash)
 );
@@ -223,7 +231,8 @@ BEGIN
             ADD CONSTRAINT chk_qd_exchange_fill_events_quote_quantity_origin
             CHECK (
                 (quote_quantity_origin IS NULL AND quote_quantity_policy_version IS NULL AND quote_quantity_evidence_hash = '')
-                OR (quote_quantity_origin = 'VENUE' AND quote_quantity_evidence_hash <> '')
+                OR (quote_quantity_origin = 'VENUE' AND quote_quantity_policy_version IS NULL
+                    AND quote_quantity_evidence_hash <> '')
                 OR (quote_quantity_origin = 'DERIVED' AND quote_quantity_policy_version IS NOT NULL
                     AND quote_quantity_policy_version <> '' AND quote_quantity_evidence_hash <> '')
             ) NOT VALID;

@@ -67,8 +67,11 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
         self.assertGreaterEqual(schema.count("NUMERIC(38,18)"), 29)
         self.assertIsNone(re.search(r"\b(?:FLOAT|REAL|DOUBLE(?:\s+PRECISION)?)\b", schema, re.I))
 
-    def test_sql_files_reject_line_start_diff_markers(self):
+    def test_sql_files_reject_patch_markers_and_construction_output(self):
         diff_marker = re.compile(r"^(?:\+|@@|---|\*\*\*|-[—–])")
+        construction_output = re.compile(
+            r"^(?:Exit code:|Wall time:|Output:|Traceback\b|Script (?:error|failed|completed)\b|Command (?:failed|completed)\b)"
+        )
         for sql_file in (*INCREMENTAL_MIGRATIONS, INIT_SQL):
             with self.subTest(sql_file=sql_file.name):
                 for line_number, line in enumerate(sql_file.read_text(encoding="utf-8").splitlines(), 1):
@@ -79,6 +82,10 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
                     self.assertFalse(
                         line.startswith(("-" + chr(0x2013), "-" + chr(0x2014))),
                         f"{sql_file.name}:{line_number} contains a literal patch marker",
+                    )
+                    self.assertIsNone(
+                        construction_output.match(line),
+                        f"{sql_file.name}:{line_number} contains non-SQL construction output",
                     )
 
     def test_pr00_and_checkpoint_status_contracts_are_encoded(self):
@@ -146,7 +153,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
             "INSERT INTO qd_instrument_rule_snapshots "
             "(id, exchange, market_type, instrument_id, rule_version, tick_size, quantity_step, "
             "minimum_quantity, minimum_notional, price_scale, quantity_scale, rounding_policy_version) "
-            "VALUES (%s, %s, 'SPOT', 'BTC-USDT', 'v1', '0.01', '0.001', '0', '0', 2, 3, 'v1')",
+            "VALUES (%s, %s, 'spot', 'BTC-USDT', 'v1', '0.01', '0.001', '0', '0', 2, 3, 'v1')",
             (snapshot_id, f"schema-test-{suffix}"),
         )
         command_id = str(uuid.uuid4())
@@ -165,7 +172,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
             "(id, command_id, tenant_id, credential_id, economic_order_id, intent_version, account_scope, "
             "instrument_id, market_type, side, order_type, execution_algo, target_quantity, "
             "instrument_rule_snapshot_id, instrument_rule_version, rounding_mode, payload_hash) "
-            "VALUES (%s, %s, %s, %s, %s, 1, 'account-a', 'BTC-USDT', 'SPOT', 'BUY', 'LIMIT', 'DIRECT', "
+            "VALUES (%s, %s, %s, %s, %s, 1, 'account-a', 'BTC-USDT', 'spot', 'BUY', 'LIMIT', 'DIRECT', "
             "'1', %s, 'v1', 'ROUND_DOWN', 'intent-payload')",
             (intent_id, command_id, user_id, credential_id, economic_order_id, snapshot_id),
         )
@@ -173,7 +180,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
             "INSERT INTO qd_economic_orders "
             "(id, intent_id, tenant_id, user_id, credential_id, account_scope, instrument_id, market_type, "
             "state, target_quantity) "
-            "VALUES (%s, %s, %s, %s, %s, 'account-a', 'BTC-USDT', 'SPOT', 'CREATED', '1')",
+            "VALUES (%s, %s, %s, %s, %s, 'account-a', 'BTC-USDT', 'spot', 'CREATED', '1')",
             (economic_order_id, intent_id, user_id, user_id, credential_id),
         )
         return {
@@ -190,7 +197,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
         cursor.execute(
             "INSERT INTO qd_reconciliation_checkpoints "
             "(id, tenant_id, credential_id, exchange, market_type, account_scope, instrument_id, status) "
-            "VALUES (%s, %s, %s, 'schema-test', 'SPOT', %s, %s, %s)",
+            "VALUES (%s, %s, %s, 'schema-test', 'spot', %s, %s, %s)",
             (
                 str(uuid.uuid4()),
                 graph["user_id"],
@@ -251,7 +258,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         cursor,
                         "INSERT INTO qd_reconciliation_checkpoints "
                         "(id, tenant_id, credential_id, exchange, market_type, account_scope, instrument_id, status) "
-                        "VALUES (%s, %s, %s, 'schema-test', 'SPOT', %s, 'BTC-USDT', %s)",
+                        "VALUES (%s, %s, %s, 'schema-test', 'spot', %s, 'BTC-USDT', %s)",
                         (
                             str(uuid.uuid4()),
                             graph["user_id"],
@@ -276,7 +283,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "INSERT INTO qd_submission_attempts "
                     "(id, economic_order_id, exchange, tenant_id, credential_id, account_scope, instrument_id, market_type, "
                     "child_seq, attempt_no, role, canonical_client_order_id, venue_client_order_id, request_fingerprint, state) "
-                    "VALUES (%s, %s, 'schema-test', %s, %s, 'account-a', 'BTC-USDT', 'SPOT', 1, 1, 'PRIMARY', 'canonical-1', 'venue-1', "
+                    "VALUES (%s, %s, 'schema-test', %s, %s, 'account-a', 'BTC-USDT', 'spot', 1, 1, 'PRIMARY', 'canonical-1', 'venue-1', "
                     "'attempt-fingerprint', %s)"
                 )
                 cursor.execute(attempt_sql, (attempt_id, graph["economic_order_id"], graph["user_id"], graph["credential_id"], "READY"))
@@ -308,9 +315,9 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "VALUES (%s, %s, 'schema-test', %s, %s, %s, %s, %s, %s, 1, 'PRIMARY', %s, %s, 'attempt-fingerprint', 'READY')"
                 )
                 for child_seq, credential_id, account_scope, instrument_id, market_type in (
-                    (10, other_credential_id, "account-a", "BTC-USDT", "SPOT"),
-                    (11, graph["credential_id"], "other-account", "BTC-USDT", "SPOT"),
-                    (12, graph["credential_id"], "account-a", "ETH-USDT", "SPOT"),
+                    (10, other_credential_id, "account-a", "BTC-USDT", "spot"),
+                    (11, graph["credential_id"], "other-account", "BTC-USDT", "spot"),
+                    (12, graph["credential_id"], "account-a", "ETH-USDT", "spot"),
                     (13, graph["credential_id"], "account-a", "BTC-USDT", "SWAP"),
                 ):
                     self._assert_rejected(
@@ -344,7 +351,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         graph["economic_order_id"],
                         graph["user_id"],
                         graph["credential_id"],
-                        "SPOT",
+                        "spot",
                         "account-a",
                         "BTC-USDT",
                         "exchange-venue-1",
@@ -374,7 +381,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                             graph["credential_id"],
                             "account-a",
                             "BTC-USDT",
-                            "SPOT",
+                            "spot",
                             child_seq,
                             f"canonical-{child_seq}",
                             f"venue-{child_seq}",
@@ -388,7 +395,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                             graph["economic_order_id"],
                             graph["user_id"],
                             graph["credential_id"],
-                            "SPOT",
+                            "spot",
                             "account-a",
                             "BTC-USDT",
                             f"exchange-venue-{child_seq}",
@@ -405,7 +412,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         graph["credential_id"],
                         "account-a",
                         "BTC-USDT",
-                        "SPOT",
+                        "spot",
                         20,
                         "canonical-20",
                         "venue-20",
@@ -420,7 +427,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         graph["economic_order_id"],
                         graph["user_id"],
                         graph["credential_id"],
-                        "SPOT",
+                        "spot",
                         "account-a",
                         "BTC-USDT",
                         "exchange-venue-invalid",
@@ -428,9 +435,9 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     ),
                 )
                 for child_seq, credential_id, account_scope, instrument_id, market_type in (
-                    (21, other_credential_id, "account-a", "BTC-USDT", "SPOT"),
-                    (22, graph["credential_id"], "other-account", "BTC-USDT", "SPOT"),
-                    (23, graph["credential_id"], "account-a", "ETH-USDT", "SPOT"),
+                    (21, other_credential_id, "account-a", "BTC-USDT", "spot"),
+                    (22, graph["credential_id"], "other-account", "BTC-USDT", "spot"),
+                    (23, graph["credential_id"], "account-a", "ETH-USDT", "spot"),
                     (24, graph["credential_id"], "account-a", "BTC-USDT", "SWAP"),
                 ):
                     attempt_scope_id = str(uuid.uuid4())
@@ -445,7 +452,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                             graph["credential_id"],
                             "account-a",
                             "BTC-USDT",
-                            "SPOT",
+                            "spot",
                             child_seq,
                             f"canonical-{child_seq}",
                             f"venue-{child_seq}",
@@ -478,7 +485,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         graph["credential_id"],
                         "account-a",
                         "BTC-USDT",
-                        "SPOT",
+                        "spot",
                         25,
                         "canonical-25",
                         "venue-25",
@@ -494,7 +501,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         other_graph["economic_order_id"],
                         other_graph["user_id"],
                         other_graph["credential_id"],
-                        "SPOT",
+                        "spot",
                         "account-a",
                         "BTC-USDT",
                         "exchange-venue-cross-order",
@@ -507,7 +514,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "(id, key_version, dedupe_key, exchange, tenant_id, credential_id, account_scope, market_type, "
                     "economic_order_id, intent_id, instrument_id, side, price, quantity, quote_quantity, "
                     "exchange_event_at, received_at, source, raw_payload_hash, normalizer_version, instrument_rule_version) "
-                    "VALUES (%s, 'v1', 'fill-dedupe', 'schema-test', %s, %s, 'account-a', 'SPOT', %s, %s, 'BTC-USDT', "
+                    "VALUES (%s, 'v1', 'fill-dedupe', 'schema-test', %s, %s, 'account-a', 'spot', %s, %s, 'BTC-USDT', "
                     "'BUY', '100', '1', '100', NOW(), NOW(), 'REST', 'payload-hash', 'v1', 'v1')"
                 )
                 cursor.execute(
@@ -632,7 +639,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "(id, command_id, tenant_id, credential_id, economic_order_id, intent_version, account_scope, "
                     "instrument_id, market_type, side, order_type, execution_algo, target_quantity, "
                     "instrument_rule_snapshot_id, instrument_rule_version, rounding_mode, payload_hash) "
-                    "VALUES (%s, %s, %s, %s, %s, 2, 'account-a', 'BTC-USDT', 'SPOT', 'BUY', 'LIMIT', 'DIRECT', "
+                    "VALUES (%s, %s, %s, %s, %s, 2, 'account-a', 'BTC-USDT', 'spot', 'BUY', 'LIMIT', 'DIRECT', "
                     "'1', %s, 'v1', 'ROUND_DOWN', 'bad-intent')",
                     (bad_intent_id, graph["command_id"], graph["user_id"], graph["credential_id"], declared_economic_id, graph["snapshot_id"]),
                 )
@@ -640,14 +647,14 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     cursor,
                     "INSERT INTO qd_economic_orders "
                     "(id, intent_id, tenant_id, user_id, credential_id, account_scope, instrument_id, market_type, state, target_quantity) "
-                    "VALUES (%s, %s, %s, %s, %s, 'account-a', 'BTC-USDT', 'SPOT', 'CREATED', '1')",
+                    "VALUES (%s, %s, %s, %s, %s, 'account-a', 'BTC-USDT', 'spot', 'CREATED', '1')",
                     (str(uuid.uuid4()), bad_intent_id, graph["user_id"], graph["user_id"], graph["credential_id"]),
                 )
                 self._assert_rejected(
                     cursor,
                     "INSERT INTO qd_economic_orders "
                     "(id, intent_id, tenant_id, user_id, credential_id, account_scope, instrument_id, market_type, state, target_quantity) "
-                    "VALUES (%s, %s, %s, %s, %s, 'different-account', 'BTC-USDT', 'SPOT', 'CREATED', '1')",
+                    "VALUES (%s, %s, %s, %s, %s, 'different-account', 'BTC-USDT', 'spot', 'CREATED', '1')",
                     (str(uuid.uuid4()), bad_intent_id, graph["user_id"], graph["user_id"], graph["credential_id"]),
                 )
 
@@ -658,7 +665,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "(id, command_id, tenant_id, credential_id, economic_order_id, intent_version, account_scope, "
                     "instrument_id, market_type, side, order_type, execution_algo, target_quantity, "
                     "instrument_rule_snapshot_id, instrument_rule_version, rounding_mode, payload_hash) "
-                    "VALUES (%s, %s, %s, %s, %s, 3, 'account-a', 'BTC-USDT', 'SPOT', 'BUY', 'LIMIT', 'DIRECT', "
+                    "VALUES (%s, %s, %s, %s, %s, 3, 'account-a', 'BTC-USDT', 'spot', 'BUY', 'LIMIT', 'DIRECT', "
                     "'1', %s, 'v1', 'ROUND_DOWN', 'invalid-state-intent')",
                     (invalid_state_intent_id, graph["command_id"], graph["user_id"], graph["credential_id"], invalid_state_economic_id, graph["snapshot_id"]),
                 )
@@ -666,7 +673,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     cursor,
                     "INSERT INTO qd_economic_orders "
                     "(id, intent_id, tenant_id, user_id, credential_id, account_scope, instrument_id, market_type, state, target_quantity) "
-                    "VALUES (%s, %s, %s, %s, %s, 'account-a', 'BTC-USDT', 'SPOT', 'INVALID', '1')",
+                    "VALUES (%s, %s, %s, %s, %s, 'account-a', 'BTC-USDT', 'spot', 'INVALID', '1')",
                     (invalid_state_economic_id, invalid_state_intent_id, graph["user_id"], graph["user_id"], graph["credential_id"]),
                 )
 
@@ -746,6 +753,42 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         graph["credential_id"],
                         capability_snapshot_id,
                         policy_snapshot_id,
+                    ),
+                )
+                cursor.execute(
+                    "INSERT INTO qd_submission_attempts "
+                    "(id, economic_order_id, exchange, tenant_id, credential_id, account_scope, instrument_id, market_type, "
+                    "child_seq, attempt_no, role, canonical_client_order_id, venue_client_order_id, request_fingerprint, state) "
+                    "VALUES (%s, %s, 'schema-test', %s, %s, 'account-a', 'BTC-USDT', 'spot', 2, 1, 'PRIMARY', "
+                    "'legacy-2', 'venue-legacy-2', 'legacy-request-hash', 'READY')",
+                    (str(uuid.uuid4()), graph["economic_order_id"], graph["user_id"], graph["credential_id"]),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "INSERT INTO qd_submission_attempts "
+                    "(id, economic_order_id, exchange, tenant_id, credential_id, account_scope, instrument_id, market_type, "
+                    "child_seq, attempt_no, role, canonical_client_order_id, venue_client_order_id, request_fingerprint, state, "
+                    "venue_capability_snapshot_id, canonical_contract_version) "
+                    "VALUES (%s, %s, 'schema-test', %s, %s, 'account-a', 'BTC-USDT', 'spot', 3, 1, 'PRIMARY', "
+                    "'partial-3', 'venue-partial-3', 'partial-request-hash', 'READY', %s, NULL)",
+                    (
+                        str(uuid.uuid4()), graph["economic_order_id"], graph["user_id"], graph["credential_id"],
+                        capability_snapshot_id,
+                    ),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "INSERT INTO qd_submission_attempts "
+                    "(id, economic_order_id, exchange, tenant_id, credential_id, account_scope, instrument_id, market_type, "
+                    "child_seq, attempt_no, role, canonical_client_order_id, venue_client_order_id, request_fingerprint, state, "
+                    "venue_capability_snapshot_id, recovery_policy_snapshot_id, client_id_algorithm_version, "
+                    "broker_prefix_normalization_version, broker_prefix, canonical_contract_version) "
+                    "VALUES (%s, %s, 'schema-test', %s, %s, 'account-a', 'BTC-USDT', 'spot', 4, 1, 'PRIMARY', "
+                    "'partial-4', 'venue-partial-4', 'partial-request-hash', 'READY', %s, %s, 'v1', 'v1', NULL, "
+                    "'attempt-contract-v1')",
+                    (
+                        str(uuid.uuid4()), graph["economic_order_id"], graph["user_id"], graph["credential_id"],
+                        capability_snapshot_id, policy_snapshot_id,
                     ),
                 )
                 self._assert_rejected(
@@ -829,6 +872,31 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     ),
                 )
 
+                canonical_order_event_graph = self._create_order_graph(cursor)
+                order_event_sql = (
+                    "INSERT INTO qd_order_state_events "
+                    "(id, economic_order_id, event_seq, to_state, reason_code, actor_type, occurred_at, "
+                    "expected_version, resulting_version, idempotency_key, event_fingerprint, correlation_id, "
+                    "canonical_payload_json) "
+                    "VALUES (%s, %s, %s, 'RISK_PENDING', 'SCHEMA_TEST', 'HUMAN', NOW(), %s, %s, %s, %s, %s, "
+                    "'{}'::jsonb)"
+                )
+                cursor.execute(
+                    order_event_sql,
+                    (
+                        str(uuid.uuid4()), canonical_order_event_graph["economic_order_id"], 1, 0, 1,
+                        "order-event-1", "order-fingerprint-1", "order-correlation-1",
+                    ),
+                )
+                self._assert_rejected(
+                    cursor,
+                    order_event_sql,
+                    (
+                        str(uuid.uuid4()), canonical_order_event_graph["economic_order_id"], 3, 1, 2,
+                        "order-event-2", "order-fingerprint-2", "order-correlation-2",
+                    ),
+                )
+
                 fill_event_id = str(uuid.uuid4())
                 cursor.execute(
                     "INSERT INTO qd_exchange_fill_events "
@@ -854,6 +922,26 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "VALUES (%s, %s, 'USDT', 'USDT', '1', 'IDENTITY', 'identity-v1', NOW(), 'identity-usdt')",
                     (valuation_evidence_id, fill_event_id),
                 )
+                cursor.execute(
+                    "INSERT INTO qd_ledger_valuation_evidence "
+                    "(id, fill_event_id, asset, valuation_ccy, price, evidence_source, policy_version, observed_at, payload_hash) "
+                    "VALUES (%s, %s, 'BNB', 'BNB', '1', 'IDENTITY', 'identity-v1', NOW(), 'identity-bnb')",
+                    (str(uuid.uuid4()), fill_event_id),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "INSERT INTO qd_ledger_valuation_evidence "
+                    "(id, fill_event_id, asset, valuation_ccy, price, evidence_source, policy_version, observed_at, payload_hash) "
+                    "VALUES (%s, %s, 'BNB', 'USDT', '1', 'IDENTITY', 'identity-v1', NOW(), 'identity-cross-asset')",
+                    (str(uuid.uuid4()), fill_event_id),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "INSERT INTO qd_ledger_valuation_evidence "
+                    "(id, fill_event_id, asset, valuation_ccy, price, evidence_source, policy_version, observed_at, payload_hash) "
+                    "VALUES (%s, %s, 'BNB', 'BNB', '2', 'IDENTITY', 'identity-v1', NOW(), 'identity-wrong-price')",
+                    (str(uuid.uuid4()), fill_event_id),
+                )
                 fee_sql = (
                     "INSERT INTO qd_exchange_fill_fee_components "
                     "(fill_event_id, fee_seq, asset, amount, fee_quote_amount, valuation_ccy, valuation_evidence_id, raw_component_hash) "
@@ -867,6 +955,11 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                 self._assert_rejected(
                     cursor,
                     "UPDATE qd_exchange_fill_events SET fee_amount = '1', fee_asset = 'USDT' WHERE id = %s",
+                    (fill_event_id,),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "UPDATE qd_exchange_fill_events SET quote_quantity_policy_version = 'derived-v1' WHERE id = %s",
                     (fill_event_id,),
                 )
                 self._assert_rejected(
