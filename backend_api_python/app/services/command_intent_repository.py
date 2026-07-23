@@ -148,7 +148,7 @@ class CommandIntentRepository:
                 accepted_at
             ) VALUES (
                 %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,'ACCEPTED',%s,NOW()
-            ) ON CONFLICT (tenant_id, source, idempotency_key) DO NOTHING
+            ) ON CONFLICT DO NOTHING
             RETURNING id
             """,
             (command.command_id, command.tenant_id, command.user_id, command.credential_id,
