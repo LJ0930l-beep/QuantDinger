@@ -59,15 +59,8 @@ REQUIRED_UPSTREAM_TABLES = {
 class UnifiedOrderSchemaTextTests(unittest.TestCase):
     def test_init_sql_contains_the_incremental_schema(self):
         init_sql = INIT_SQL.read_text(encoding="utf-8")
-        for fragment in (
-            "qd_submission_attempt_state_events",
-            "qd_venue_capability_snapshots",
-            "qd_submission_recovery_policy_snapshots",
-            "qd_ledger_valuation_evidence",
-            "qd_exchange_fill_fee_components",
-            "uq_qd_order_state_events_idempotency",
-        ):
-            self.assertIn(fragment, init_sql)
+        for migration in INCREMENTAL_MIGRATIONS:
+            self.assertIn(migration.read_text(encoding="utf-8"), init_sql)
 
     def test_new_money_columns_use_numeric_38_18_without_float_types(self):
         schema = "\n".join(item.read_text(encoding="utf-8") for item in INCREMENTAL_MIGRATIONS)
@@ -715,17 +708,27 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "(id, exchange, market_type, capability_version, profile_hash, "
                     "accepts_external_client_order_id, can_generate_safe_client_order_id, "
                     "query_by_exchange_order_id, query_by_client_order_id, list_order_fills, stable_fill_id) "
-                    "VALUES (%s, 'schema-test', 'SPOT', 'v1', 'capability-hash', TRUE, FALSE, TRUE, TRUE, TRUE, TRUE)",
+                    "VALUES (%s, 'schema-test', 'spot', 'v1', 'capability-hash', TRUE, FALSE, TRUE, TRUE, TRUE, TRUE)",
                     (capability_snapshot_id,),
                 )
                 policy_snapshot_id = str(uuid.uuid4())
                 cursor.execute(
                     "INSERT INTO qd_submission_recovery_policy_snapshots "
-                    "(id, exchange, market_type, policy_version, policy_hash, client_id_query_authoritative, "
+                    "(id, exchange, market_type, policy_version, policy_hash, capability_snapshot_id, "
+                    "capability_query_by_client_order_id, client_id_query_authoritative, "
                     "order_history_authoritative, fill_history_authoritative, not_found_min_query_count, "
                     "not_found_grace_seconds, not_found_action) "
-                    "VALUES (%s, 'schema-test', 'SPOT', 'v1', 'policy-hash', TRUE, TRUE, TRUE, 2, 30, 'KEEP_UNKNOWN')",
-                    (policy_snapshot_id,),
+                    "VALUES (%s, 'schema-test', 'spot', 'v1', 'policy-hash', %s, TRUE, TRUE, TRUE, TRUE, 2, 30, 'KEEP_UNKNOWN')",
+                    (policy_snapshot_id, capability_snapshot_id),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "INSERT INTO qd_submission_recovery_policy_snapshots "
+                    "(id, exchange, market_type, policy_version, policy_hash, capability_snapshot_id, "
+                    "capability_query_by_client_order_id, client_id_query_authoritative, order_history_authoritative, "
+                    "fill_history_authoritative, not_found_min_query_count, not_found_grace_seconds, not_found_action) "
+                    "VALUES (%s, 'schema-test', 'spot', 'confirm-v1', 'confirm-hash', %s, TRUE, TRUE, TRUE, TRUE, 2, 30, 'CONFIRM_ABSENT')",
+                    (str(uuid.uuid4()), capability_snapshot_id),
                 )
                 attempt_id = str(uuid.uuid4())
                 cursor.execute(
@@ -733,9 +736,9 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "(id, economic_order_id, exchange, tenant_id, credential_id, account_scope, instrument_id, market_type, "
                     "child_seq, attempt_no, role, canonical_client_order_id, venue_client_order_id, request_fingerprint, state, "
                     "venue_capability_snapshot_id, recovery_policy_snapshot_id, client_id_algorithm_version, "
-                    "broker_prefix_normalization_version, broker_prefix) "
-                    "VALUES (%s, %s, 'schema-test', %s, %s, 'account-a', 'BTC-USDT', 'SPOT', 1, 1, 'PRIMARY', "
-                    "'canonical-1', 'venue-1', 'request-hash', 'READY', %s, %s, 'v1', 'v1', 'broker')",
+                    "broker_prefix_normalization_version, broker_prefix, canonical_contract_version) "
+                    "VALUES (%s, %s, 'schema-test', %s, %s, 'account-a', 'BTC-USDT', 'spot', 1, 1, 'PRIMARY', "
+                    "'canonical-1', 'venue-1', 'request-hash', 'READY', %s, %s, 'v1', 'v1', 'broker', 'attempt-contract-v1')",
                     (
                         attempt_id,
                         graph["economic_order_id"],
@@ -744,6 +747,17 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         capability_snapshot_id,
                         policy_snapshot_id,
                     ),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "UPDATE qd_submission_attempts SET market_type = 'swap' WHERE id = %s",
+                    (attempt_id,),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "UPDATE qd_submission_recovery_policy_snapshots "
+                    "SET capability_query_by_client_order_id = FALSE WHERE id = %s",
+                    (policy_snapshot_id,),
                 )
                 state_event_sql = (
                     "INSERT INTO qd_submission_attempt_state_events "
@@ -780,6 +794,13 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                 )
                 self._assert_rejected(
                     cursor,
+                    "INSERT INTO qd_order_state_events "
+                    "(id, economic_order_id, event_seq, to_state, reason_code, actor_type, occurred_at, expected_version) "
+                    "VALUES (%s, %s, 99, 'RISK_PENDING', 'SCHEMA_TEST', 'HUMAN', NOW(), 0)",
+                    (str(uuid.uuid4()), graph["economic_order_id"]),
+                )
+                self._assert_rejected(
+                    cursor,
                     state_event_sql,
                     (
                         str(uuid.uuid4()),
@@ -813,9 +834,9 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     "INSERT INTO qd_exchange_fill_events "
                     "(id, key_version, dedupe_key, exchange, tenant_id, credential_id, account_scope, market_type, "
                     "economic_order_id, intent_id, instrument_id, side, price, quantity, quote_quantity, quote_quantity_origin, "
-                    "fee_summary_state, exchange_event_at, received_at, source, raw_payload_hash, normalizer_version, instrument_rule_version) "
-                    "VALUES (%s, 'venue-fill-id-v1', %s, 'schema-test', %s, %s, 'account-a', 'SPOT', %s, %s, "
-                    "'BTC-USDT', 'SELL', '61000', '0.01', '610', 'VENUE', 'MULTI_COMPONENT', NOW(), NOW(), 'REST', "
+                    "quote_quantity_evidence_hash, fee_summary_state, exchange_event_at, received_at, source, raw_payload_hash, normalizer_version, instrument_rule_version) "
+                    "VALUES (%s, 'venue-fill-id-v1', %s, 'schema-test', %s, %s, 'account-a', 'spot', %s, %s, "
+                    "'BTC-USDT', 'SELL', '61000', '0.01', '610', 'VENUE', 'venue-quote-evidence', 'MULTI_COMPONENT', NOW(), NOW(), 'REST', "
                     "'fill-payload-hash', 'v1', 'v1')",
                     (
                         fill_event_id,
@@ -826,14 +847,33 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         graph["intent_id"],
                     ),
                 )
+                valuation_evidence_id = str(uuid.uuid4())
+                cursor.execute(
+                    "INSERT INTO qd_ledger_valuation_evidence "
+                    "(id, fill_event_id, asset, valuation_ccy, price, evidence_source, policy_version, observed_at, payload_hash) "
+                    "VALUES (%s, %s, 'USDT', 'USDT', '1', 'IDENTITY', 'identity-v1', NOW(), 'identity-usdt')",
+                    (valuation_evidence_id, fill_event_id),
+                )
                 fee_sql = (
                     "INSERT INTO qd_exchange_fill_fee_components "
-                    "(fill_event_id, fee_seq, asset, amount, fee_quote_amount, raw_component_hash) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)"
+                    "(fill_event_id, fee_seq, asset, amount, fee_quote_amount, valuation_ccy, valuation_evidence_id, raw_component_hash) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
                 )
-                cursor.execute(fee_sql, (fill_event_id, 1, "USDT", "0.610", "0.610", "fee-usdt"))
-                cursor.execute(fee_sql, (fill_event_id, 2, "BNB", "0.0015", None, "fee-bnb"))
-                self._assert_rejected(cursor, fee_sql, (fill_event_id, 3, "BNB", "0.0015", None, "fee-bnb"))
+                cursor.execute(fee_sql, (fill_event_id, 1, "USDT", "0.610", "0.610", "USDT", valuation_evidence_id, "fee-usdt"))
+                cursor.execute(fee_sql, (fill_event_id, 2, "BNB", "0.0015", None, None, None, "fee-bnb"))
+                self._assert_rejected(cursor, fee_sql, (fill_event_id, 3, "BNB", "0.0015", None, None, None, "fee-bnb"))
+                self._assert_rejected(cursor, fee_sql, (fill_event_id, 3, "USDT", "0.1", "0.1", None, None, "fee-without-evidence"))
+                self._assert_rejected(cursor, fee_sql, (fill_event_id, 3, "BNB", "0.1", "0.1", "USDT", valuation_evidence_id, "fee-cross-asset"))
+                self._assert_rejected(
+                    cursor,
+                    "UPDATE qd_exchange_fill_events SET fee_amount = '1', fee_asset = 'USDT' WHERE id = %s",
+                    (fill_event_id,),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "UPDATE qd_exchange_fill_events SET quote_quantity_origin = 'DERIVED', quote_quantity_policy_version = NULL WHERE id = %s",
+                    (fill_event_id,),
+                )
                 self._assert_rejected(
                     cursor,
                     "DELETE FROM qd_exchange_fill_events WHERE id = %s",
