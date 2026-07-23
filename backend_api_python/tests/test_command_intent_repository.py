@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import unittest
 from uuid import uuid4
 
@@ -135,6 +136,46 @@ class CommandIntentRepositoryTests(unittest.TestCase):
         with self.assertRaises(c.IdempotencyConflict):
             repository_module.CommandIntentRepository().accept_command_graph(connection, value)
         self.assertEqual(connection.rollbacks, 1)
+
+    def test_replay_normalizes_database_numeric_uuid_and_jsonb_facts(self):
+        value = graph()
+        existing = (
+            value.command.command_id, value.command.user_id, value.command.credential_id,
+            value.command.actor_type.value, value.command.actor_id, value.command.action.value,
+            value.command.account_scope, value.command.request_fingerprint,
+        )
+        linked = (
+            value.intent.intent_id, value.intent.economic_order_id, value.intent.tenant_id,
+            value.intent.credential_id, value.intent.account_scope, value.intent.instrument_id,
+            value.intent.market_type, value.intent.side, Decimal("1.000000000000000000"),
+            Decimal("100.000000000000000000"), None, value.intent.instrument_rule_snapshot_id,
+            value.intent.instrument_rule_version, value.intent.rounding_mode, value.intent.payload_hash,
+            "CREATED",
+        )
+        connection = FakeConnection([(value.intent.instrument_rule_snapshot_id,), None, existing, linked])
+        result = repository_module.CommandIntentRepository().accept_command_graph(connection, value)
+        self.assertEqual(result.disposition, c.CommandGraphDisposition.REPLAYED)
+
+    def test_reservation_replay_normalizes_database_numeric_jsonb_and_timestamp(self):
+        value = graph()
+        expires_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=1)
+        reservation = c.RiskReservation(
+            reservation_id=uuid4(), command_id=value.command.command_id,
+            economic_order_id=value.intent.economic_order_id, tenant_id=1, credential_id=2,
+            account_scope="account-a", reservation_kind="MARGIN", currency="USDT",
+            reserved_notional=d.QuoteAmount("100"), reserved_margin=d.QuoteAmount("10"),
+            reserved_position_qty=d.Quantity("1"), limits_snapshot={"b": "2", "a": "1"},
+            risk_input_hash="d" * 64, expires_at=expires_at,
+        )
+        row = (
+            reservation.reservation_id, reservation.economic_order_id, 1, 2, "account-a", "USDT",
+            Decimal("100.000000000000000000"), Decimal("10.000000000000000000"),
+            Decimal("1.000000000000000000"), {"a": "1", "b": "2"}, reservation.risk_input_hash,
+            "ACTIVE", expires_at, 0,
+        )
+        connection = FakeConnection([(value.command.command_id,), row])
+        result = repository_module.CommandIntentRepository().create_reservation(connection, reservation)
+        self.assertEqual(result.disposition, c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY)
 
     def test_snapshot_mismatch_fails_before_command_insert(self):
         value = graph()

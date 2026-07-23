@@ -8,6 +8,8 @@ unique constraints remain the final concurrency arbiter.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import json
 from typing import Any, Protocol
 
@@ -25,8 +27,10 @@ from app.domain.command_intent_contracts import (
     ReservationTransitionResult,
     RiskReservation,
     _aware_utc,
+    canonical_json,
     canonical_uuid,
 )
+from app.domain.decimal_values import DecimalValueError, canonical_decimal_string
 from app.domain.order_contracts import EconomicOrderState
 
 
@@ -50,6 +54,36 @@ def _json_parameter(canonical_json: str) -> str:
     # Passing canonical text and casting at the SQL boundary avoids a driver-
     # specific JSON adapter and preserves the exact hash material separately.
     return canonical_json
+
+
+def _canonical_db_decimal(value: Any) -> str:
+    """Normalize PostgreSQL NUMERIC facts before immutable replay comparison."""
+
+    try:
+        parsed = value if isinstance(value, Decimal) else Decimal(str(value))
+        return canonical_decimal_string(parsed)
+    except (InvalidOperation, ValueError, TypeError, DecimalValueError) as exc:
+        raise CommandIntentContractError("persisted decimal fact is not canonical") from exc
+
+
+def _canonical_db_json(value: Any) -> str:
+    """Normalize driver-dependent JSONB values without accepting new facts."""
+
+    try:
+        decoded = json.loads(value) if isinstance(value, str) else value
+        if not isinstance(decoded, dict):
+            raise CommandIntentContractError("persisted JSON fact must be an object")
+        return canonical_json(decoded)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise CommandIntentContractError("persisted JSON fact is not canonical") from exc
+
+
+def _canonical_db_timestamp(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise CommandIntentContractError("persisted timestamp fact is not timezone-aware")
+    return value.astimezone(timezone.utc).isoformat()
 
 
 class CommandIntentRepository:
@@ -185,7 +219,7 @@ class CommandIntentRepository:
             observed_intent[index] = str(observed_intent[index])
         for index in (8, 9, 10):
             if observed_intent[index] is not None:
-                observed_intent[index] = str(observed_intent[index])
+                observed_intent[index] = _canonical_db_decimal(observed_intent[index])
         if tuple(observed_intent) != expected_intent:
             raise IdempotencyConflict("idempotency key names a different immutable intent")
         return CommandGraphResult(
@@ -316,7 +350,7 @@ class CommandIntentRepository:
             reservation.reservation_id, reservation.economic_order_id, reservation.tenant_id,
             reservation.credential_id, reservation.account_scope, reservation.currency,
             reservation.reserved_notional.to_string(), reservation.reserved_margin.to_string(),
-            reservation.reserved_position_qty.to_string(), json.loads(reservation.canonical_limits_json),
+            reservation.reserved_position_qty.to_string(), reservation.canonical_limits_json,
             reservation.risk_input_hash,
             None if reservation.expires_at is None else reservation.expires_at.isoformat(),
         )
@@ -329,9 +363,9 @@ class CommandIntentRepository:
         normalized_observed[0] = str(normalized_observed[0])
         normalized_observed[1] = str(normalized_observed[1])
         for index in (6, 7, 8):
-            normalized_observed[index] = str(normalized_observed[index])
-        if normalized_observed[11] is not None:
-            normalized_observed[11] = normalized_observed[11].isoformat()
+            normalized_observed[index] = _canonical_db_decimal(normalized_observed[index])
+        normalized_observed[9] = _canonical_db_json(normalized_observed[9])
+        normalized_observed[11] = _canonical_db_timestamp(normalized_observed[11])
         if tuple(normalized_observed) != expected:
             raise ReservationConflict("reservation identity is reused with different immutable facts")
         return ReservationTransitionResult(
