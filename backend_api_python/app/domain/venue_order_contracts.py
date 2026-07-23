@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Protocol
@@ -28,6 +29,35 @@ class UnsupportedVenueCapability(VenueContractError):
 BINANCE_USDM_CLIENT_ID_PATTERN = r"^[\.A-Z\:/a-z0-9_-]{1,36}$"
 CLIENT_ID_ALGORITHM_VERSION = "v1"
 PREFIX_NORMALIZATION_VERSION = "ascii-nonsensitive-v1"
+
+
+def _canonical_string(value: object, field: str, *, case: str | None = None) -> str:
+    if not isinstance(value, str):
+        raise VenueContractError(f"{field} must be a string")
+    canonical = value.strip()
+    if not canonical:
+        raise VenueContractError(f"{field} is required")
+    if case == "lower":
+        canonical = canonical.lower()
+    elif case == "upper":
+        canonical = canonical.upper()
+    return canonical
+
+
+def _canonical_uuid(value: object, field: str) -> str:
+    raw = _canonical_string(value, field)
+    try:
+        return str(uuid.UUID(raw))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise VenueContractError(f"{field} must be a UUID") from exc
+
+
+def _canonical_nonnegative_int(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise VenueContractError(f"{field} must be an int")
+    if value < 0:
+        raise VenueContractError(f"{field} cannot be negative")
+    return value
 
 
 class ClientOrderIdCapability(Protocol):
@@ -61,12 +91,12 @@ class SubmissionAttemptIdentity:
     prefix_normalization_version: str = PREFIX_NORMALIZATION_VERSION
 
     def __post_init__(self) -> None:
-        if not str(self.economic_order_id or "").strip():
-            raise VenueContractError("economic_order_id is required")
-        if self.child_seq < 0 or self.attempt_no < 0:
-            raise VenueContractError("attempt sequence values cannot be negative")
-        if not str(self.exchange_id or "").strip() or not str(self.market_type or "").strip():
-            raise VenueContractError("exchange_id and market_type are required")
+        object.__setattr__(self, "economic_order_id", _canonical_uuid(self.economic_order_id, "economic_order_id"))
+        object.__setattr__(self, "child_seq", _canonical_nonnegative_int(self.child_seq, "child_seq"))
+        object.__setattr__(self, "attempt_no", _canonical_nonnegative_int(self.attempt_no, "attempt_no"))
+        object.__setattr__(self, "exchange_id", _canonical_string(self.exchange_id, "exchange_id", case="lower"))
+        object.__setattr__(self, "market_type", _canonical_string(self.market_type, "market_type", case="lower"))
+        object.__setattr__(self, "broker_prefix", _canonical_broker_prefix(self.broker_prefix))
         if self.algorithm_version != CLIENT_ID_ALGORITHM_VERSION:
             raise VenueContractError("unsupported client order ID algorithm version")
         if self.prefix_normalization_version != PREFIX_NORMALIZATION_VERSION:
@@ -96,8 +126,8 @@ def _canonical_identity_material(identity: SubmissionAttemptIdentity, prefix: st
             "broker_prefix": prefix,
             "child_seq": identity.child_seq,
             "economic_order_id": identity.economic_order_id,
-            "exchange_id": str(identity.exchange_id).strip().lower(),
-            "market_type": str(identity.market_type).strip().lower(),
+            "exchange_id": identity.exchange_id,
+            "market_type": identity.market_type,
             "prefix_normalization_version": identity.prefix_normalization_version,
         },
         sort_keys=True,
@@ -126,13 +156,12 @@ def generate_venue_client_order_id(
     ):
         raise UnsupportedVenueCapability("deterministic client order ID unsupported for this venue profile")
     if (
-        str(capability.exchange_id).strip().lower() != str(identity.exchange_id).strip().lower()
-        or str(capability.market_type).strip().lower() != str(identity.market_type).strip().lower()
+        _canonical_string(capability.exchange_id, "capability.exchange_id", case="lower") != identity.exchange_id
+        or _canonical_string(capability.market_type, "capability.market_type", case="lower") != identity.market_type
     ):
         raise VenueContractError("venue capability scope mismatch")
-    prefix = _canonical_broker_prefix(identity.broker_prefix)
-    digest = hashlib.sha256(_canonical_identity_material(identity, prefix).encode("utf-8")).hexdigest()[:20]
-    value = f"{prefix}-{identity.algorithm_version}-{digest}"
+    digest = hashlib.sha256(_canonical_identity_material(identity, identity.broker_prefix).encode("utf-8")).hexdigest()[:20]
+    value = f"{identity.broker_prefix}-{identity.algorithm_version}-{digest}"
     if len(value) > capability.client_id_max_length or not re.fullmatch(capability.client_id_pattern, value):
         raise VenueContractError("venue client order ID violates the explicit venue rule")
     return value
@@ -215,8 +244,16 @@ class OrderQueryRequest:
     client_order_id: str = ""
 
     def __post_init__(self) -> None:
-        if not all((self.venue, self.market_type, self.account_scope, self.instrument)):
-            raise VenueContractError("query scope is required")
+        if not isinstance(self.reference, OrderQueryReference):
+            raise VenueContractError("reference must be an OrderQueryReference")
+        object.__setattr__(self, "venue", _canonical_string(self.venue, "venue", case="lower"))
+        object.__setattr__(self, "market_type", _canonical_string(self.market_type, "market_type", case="lower"))
+        object.__setattr__(self, "account_scope", _canonical_string(self.account_scope, "account_scope"))
+        object.__setattr__(self, "instrument", _canonical_string(self.instrument, "instrument", case="upper"))
+        if self.exchange_order_id:
+            object.__setattr__(self, "exchange_order_id", _canonical_string(self.exchange_order_id, "exchange_order_id"))
+        if self.client_order_id:
+            object.__setattr__(self, "client_order_id", _canonical_string(self.client_order_id, "client_order_id"))
         if self.reference is OrderQueryReference.EXCHANGE_ORDER_ID:
             if not self.exchange_order_id or self.client_order_id:
                 raise VenueContractError("exchange-order lookup requires only exchange_order_id")
@@ -291,13 +328,14 @@ def found_order_query_result(
 ) -> NormalizedOrderQuery:
     """Validate a formatted adapter response against the requested scope."""
 
-    if (
-        response_venue != request.venue
-        or response_market_type != request.market_type
-        or response_account_scope != request.account_scope
-        or response_instrument != request.instrument
-    ):
+    if (_canonical_string(response_venue, "response_venue", case="lower") != request.venue
+        or _canonical_string(response_market_type, "response_market_type", case="lower") != request.market_type
+        or _canonical_string(response_account_scope, "response_account_scope") != request.account_scope
+        or _canonical_string(response_instrument, "response_instrument", case="upper") != request.instrument):
         raise VenueContractError("query response scope mismatch")
+    exchange_order_id = _canonical_string(exchange_order_id, "exchange_order_id")
+    if client_order_id:
+        client_order_id = _canonical_string(client_order_id, "client_order_id")
     if request.reference is OrderQueryReference.EXCHANGE_ORDER_ID and exchange_order_id != request.exchange_order_id:
         raise VenueContractError("query response exchange_order_id mismatch")
     if request.reference is OrderQueryReference.CLIENT_ORDER_ID and client_order_id != request.client_order_id:
@@ -327,8 +365,11 @@ class VenueOrderScope:
     exchange_order_id: str
 
     def __post_init__(self) -> None:
-        if not all((self.venue, self.market_type, self.account_scope, self.instrument, self.exchange_order_id)):
-            raise VenueContractError("venue order scope is required")
+        object.__setattr__(self, "venue", _canonical_string(self.venue, "venue", case="lower"))
+        object.__setattr__(self, "market_type", _canonical_string(self.market_type, "market_type", case="lower"))
+        object.__setattr__(self, "account_scope", _canonical_string(self.account_scope, "account_scope"))
+        object.__setattr__(self, "instrument", _canonical_string(self.instrument, "instrument", case="upper"))
+        object.__setattr__(self, "exchange_order_id", _canonical_string(self.exchange_order_id, "exchange_order_id"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,7 +380,8 @@ class FillFee:
     amount: FeeAmount
 
     def __post_init__(self) -> None:
-        if not str(self.asset or "").strip() or not isinstance(self.amount, FeeAmount):
+        object.__setattr__(self, "asset", _canonical_string(self.asset, "fee asset", case="upper"))
+        if not isinstance(self.amount, FeeAmount):
             raise VenueContractError("fee requires a non-empty asset and FeeAmount")
 
 
@@ -359,8 +401,7 @@ class VenueFillIdentity:
     fees: tuple[FillFee, ...] = ()
 
     def __post_init__(self) -> None:
-        if not str(self.venue_fill_id or "").strip():
-            raise VenueContractError("stable venue_fill_id is required")
+        object.__setattr__(self, "venue_fill_id", _canonical_string(self.venue_fill_id, "stable venue_fill_id"))
         if not isinstance(self.quantity, Quantity) or not isinstance(self.price, Price):
             raise VenueContractError("fill price and quantity require PR-01 Decimal contracts")
         if any(not isinstance(fee, FillFee) for fee in self.fees):

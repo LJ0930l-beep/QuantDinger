@@ -48,8 +48,12 @@ def classify_binance_query_http_failure(
     ``NOT_FOUND`` only after preserving that code as an auditable fact.
     """
 
-    if timed_out or status_code == 429 or (status_code is not None and status_code >= 500):
+    if timed_out:
         return VenueQueryFailureKind.TIMEOUT
+    if status_code == 429:
+        return VenueQueryFailureKind.RATE_LIMITED
+    if status_code is not None and status_code >= 500:
+        return VenueQueryFailureKind.SERVER_ERROR
     if status_code in {401, 403}:
         return VenueQueryFailureKind.AUTH_OR_PERMISSION
     return VenueQueryFailureKind.INVALID_RESPONSE

@@ -119,8 +119,8 @@ class BinanceOrderQueryFormatterTests(unittest.TestCase):
 
     def test_timeout_rate_limit_server_and_auth_are_not_not_found(self):
         self.assertEqual(classify_binance_query_http_failure(timed_out=True), VenueQueryFailureKind.TIMEOUT)
-        self.assertEqual(classify_binance_query_http_failure(status_code=429), VenueQueryFailureKind.TIMEOUT)
-        self.assertEqual(classify_binance_query_http_failure(status_code=503), VenueQueryFailureKind.TIMEOUT)
+        self.assertEqual(classify_binance_query_http_failure(status_code=429), VenueQueryFailureKind.RATE_LIMITED)
+        self.assertEqual(classify_binance_query_http_failure(status_code=503), VenueQueryFailureKind.SERVER_ERROR)
         self.assertEqual(classify_binance_query_http_failure(status_code=401), VenueQueryFailureKind.AUTH_OR_PERMISSION)
         self.assertEqual(classify_binance_query_http_failure(status_code=403), VenueQueryFailureKind.AUTH_OR_PERMISSION)
         self.assertEqual(classify_binance_query_http_failure(status_code=400), VenueQueryFailureKind.INVALID_RESPONSE)
