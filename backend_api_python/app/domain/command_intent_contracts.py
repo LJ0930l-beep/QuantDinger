@@ -163,6 +163,8 @@ def _hash_material(version: str, material: Mapping[str, Any]) -> str:
 def _aware_utc(value: datetime, field_name: str) -> datetime:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise CommandIntentContractError(f"{field_name} must be timezone-aware")
+    if value.utcoffset() != timezone.utc.utcoffset(value):
+        raise CommandIntentContractError(f"{field_name} must use a zero UTC offset")
     return value.astimezone(timezone.utc)
 
 

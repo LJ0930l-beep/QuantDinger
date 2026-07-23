@@ -13,14 +13,15 @@ c = modules.contracts
 d = modules.decimal_values
 o = modules.order_contracts
 repository_module = modules.repository
+TEST_REPLAY_TOKEN = "-".join(("idem", "fixture", "one"))
 
 
-def graph():
+def graph(replay_token=TEST_REPLAY_TOKEN):
     command = c.OrderCommand(
         command_id=uuid4(), tenant_id=1, user_id=1, credential_id=2,
         actor_type=o.Actor.STRATEGY, actor_id="strategy:1", source="strategy_v2",
         action=o.OrderAction.OPEN, account_scope="account-a", request_payload={"kind": "test"},
-        idempotency_key="-".join(("idem", "fixture", "one")),
+        idempotency_key=replay_token,
     )
     intent = c.OrderIntent(
         intent_id=uuid4(), economic_order_id=uuid4(), command_id=command.command_id,
@@ -212,12 +213,38 @@ class CommandIntentRepositoryTests(unittest.TestCase):
         reservation_id = str(uuid4())
         repo = repository_module.CommandIntentRepository()
         replay_connection = FakeConnection([None, ("RELEASED", 2)])
-        replay = repo.release_reservation(replay_connection, reservation_id, 0)
+        replay = repo.release_reservation(replay_connection, reservation_id, 1)
         self.assertEqual(replay.disposition, c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY)
         conflict_connection = FakeConnection([None, ("CONSUMED", 2)])
         with self.assertRaises(c.ReservationStateConflict):
             repo.release_reservation(conflict_connection, reservation_id, 0)
         self.assertEqual(conflict_connection.rollbacks, 1)
+
+    def test_terminal_replay_requires_the_original_expected_version(self):
+        reservation_id = str(uuid4())
+        repo = repository_module.CommandIntentRepository()
+        replay = repo.consume_reservation(FakeConnection([None, ("CONSUMED", 1)]), reservation_id, 0)
+        self.assertEqual(replay.disposition, c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY)
+        for version in (1, 9):
+            with self.subTest(version=version):
+                with self.assertRaises(c.ReservationStateConflict):
+                    repo.consume_reservation(FakeConnection([None, ("CONSUMED", 1)]), reservation_id, version)
+
+    def test_expiry_is_single_transactional_cas_with_boundary_and_terminal_rules(self):
+        reservation_id = str(uuid4())
+        expires_at = datetime.now(timezone.utc).replace(microsecond=0)
+        repo = repository_module.CommandIntentRepository()
+        applied = repo.expire_reservation(FakeConnection([(1,)]), reservation_id, 0, expires_at)
+        self.assertEqual(applied.disposition, c.ReservationTransitionDisposition.APPLIED)
+        before = FakeConnection([None, ("ACTIVE", 0, expires_at)])
+        with self.assertRaises(c.ReservationStateConflict):
+            repo.expire_reservation(before, reservation_id, 0, expires_at - timedelta(seconds=1))
+        replay = repo.expire_reservation(FakeConnection([None, ("EXPIRED", 1, expires_at)]), reservation_id, 0, expires_at)
+        self.assertEqual(replay.disposition, c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY)
+        with self.assertRaises(c.ReservationStateConflict):
+            repo.expire_reservation(FakeConnection([None, ("EXPIRED", 1, expires_at)]), reservation_id, 1, expires_at)
+        with self.assertRaises(c.ReservationStateConflict):
+            repo.expire_reservation(FakeConnection([None, ("CONSUMED", 1, expires_at)]), reservation_id, 0, expires_at)
 
 
 if __name__ == "__main__":

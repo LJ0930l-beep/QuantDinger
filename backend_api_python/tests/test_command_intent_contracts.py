@@ -14,13 +14,17 @@ d = modules.decimal_values
 o = modules.order_contracts
 
 
-def command(**changes):
+DEFAULT_REPLAY_TOKEN = "case-1"
+DEFAULT_CORRELATION_ID = "case-2"
+
+
+def command(replay_token=DEFAULT_REPLAY_TOKEN, **changes):
     values = dict(
         command_id=uuid4(), tenant_id=10, user_id=10, credential_id=20,
         actor_type=o.Actor.STRATEGY, actor_id="strategy:10", source="strategy_v2",
         action=o.OrderAction.OPEN, account_scope="primary-account",
         request_payload={"instrument": "BTC-USDT", "mode": "paper"},
-        idempotency_key="create-001", correlation_id="corr-001", strategy_id=30,
+        idempotency_key=replay_token, correlation_id=DEFAULT_CORRELATION_ID, strategy_id=30,
     )
     values.update(changes)
     return c.OrderCommand(**values)
@@ -109,6 +113,11 @@ class CommandIntentContractTests(unittest.TestCase):
         self.assertEqual(len(item.immutable_fingerprint()), 64)
         with self.assertRaises(c.CommandIntentContractError):
             reservation(value, order_intent, expires_at=datetime.now())
+        with self.assertRaises(c.CommandIntentContractError):
+            reservation(value, order_intent, expires_at=datetime.now(timezone(timedelta(hours=8))))
+        zero_offset = timezone(timedelta(0), name="zero-offset")
+        normalized = reservation(value, order_intent, expires_at=datetime.now(zero_offset))
+        self.assertIs(normalized.expires_at.tzinfo, timezone.utc)
         with self.assertRaises(c.CommandIntentContractError):
             reservation(value, order_intent, reserved_margin=d.FeeAmount("1"))
         with self.assertRaises(c.CommandIntentContractError):

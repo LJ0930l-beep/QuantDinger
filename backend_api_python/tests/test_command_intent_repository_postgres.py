@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -15,6 +17,7 @@ c = modules.contracts
 d = modules.decimal_values
 o = modules.order_contracts
 repository_module = modules.repository
+DEFAULT_REPLAY_TOKEN = "-".join(("idem", "postgres", "one"))
 
 
 @unittest.skipUnless(os.getenv("DATABASE_URL"), "requires CI PostgreSQL DATABASE_URL")
@@ -62,12 +65,12 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
         finally:
             self.connection.close()
 
-    def _graph(self, *, idempotency_key: str = "idem-1", command_id=None):
+    def _graph(self, *, replay_token: str = DEFAULT_REPLAY_TOKEN, command_id=None):
         command = c.OrderCommand(
             command_id=command_id or uuid4(), tenant_id=self.user_id, user_id=self.user_id,
             credential_id=self.credential_id, actor_type=o.Actor.STRATEGY, actor_id="strategy:1",
             source="strategy_v2", action=o.OrderAction.OPEN, account_scope="account-a",
-            request_payload={"test": "postgres"}, idempotency_key=idempotency_key,
+            request_payload={"test": "postgres"}, idempotency_key=replay_token,
         )
         intent = c.OrderIntent(
             intent_id=uuid4(), economic_order_id=uuid4(), command_id=command.command_id,
@@ -79,6 +82,41 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
         )
         return c.CommandGraph(command, intent)
 
+    def _reservation(self, graph, *, tag: str, expires_at=None):
+        return c.RiskReservation(
+            reservation_id=uuid4(), command_id=graph.command.command_id,
+            economic_order_id=graph.intent.economic_order_id, tenant_id=self.user_id,
+            credential_id=self.credential_id, account_scope="account-a", reservation_kind="MARGIN",
+            currency="USDT", reserved_notional=d.QuoteAmount("100"), reserved_margin=d.QuoteAmount("10"),
+            reserved_position_qty=d.Quantity("1"), limits_snapshot={"fixture": tag},
+            risk_input_hash=hashlib.sha256(tag.encode("ascii")).hexdigest(), expires_at=expires_at,
+        )
+
+    def _parallel(self, first, second):
+        import psycopg2
+
+        barrier = threading.Barrier(2, timeout=10)
+        results = [None, None]
+
+        def run(index, operation):
+            connection = psycopg2.connect(os.environ["DATABASE_URL"])
+            connection.autocommit = False
+            try:
+                barrier.wait()
+                results[index] = operation(connection)
+            except BaseException as exc:  # assertions inspect typed result below
+                results[index] = exc
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=run, args=(0, first)), threading.Thread(target=run, args=(1, second))]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+            self.assertFalse(thread.is_alive(), "concurrent repository test timed out")
+        return results
+
     def test_atomic_graph_accept_replay_and_conflict_use_real_unique_constraints(self):
         graph = self._graph()
         created = self.repo.accept_command_graph(self.connection, graph)
@@ -86,7 +124,7 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
         self.assertEqual(created.disposition, c.CommandGraphDisposition.CREATED)
         self.assertEqual(replay.disposition, c.CommandGraphDisposition.REPLAYED)
         self.assertEqual(replay.economic_order_id, graph.intent.economic_order_id)
-        conflict = self._graph(idempotency_key=graph.command.idempotency_key)
+        conflict = self._graph(replay_token=graph.command.idempotency_key)
         with self.assertRaises(c.IdempotencyConflict):
             self.repo.accept_command_graph(self.connection, conflict)
         with self.connection.cursor() as cursor:
@@ -114,7 +152,12 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
             cursor.execute("SELECT count(*) FROM qd_order_commands WHERE id = %s", (bad.command.command_id,))
             self.assertEqual(cursor.fetchone()[0], 0)
 
-        graph = self._graph(idempotency_key="idem-2")
+        self.assertEqual(
+            self.repo.accept_command_graph(self.connection, self._graph(replay_token="-".join(("idem", "after", "rollback")))).disposition,
+            c.CommandGraphDisposition.CREATED,
+        )
+
+        graph = self._graph(replay_token="-".join(("idem", "two")))
         self.repo.accept_command_graph(self.connection, graph)
         reservation = c.RiskReservation(
             reservation_id=uuid4(), command_id=graph.command.command_id,
@@ -133,6 +176,107 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
                          c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY)
         with self.assertRaises(c.ReservationStateConflict):
             self.repo.consume_reservation(self.connection, reservation.reservation_id, 1)
+
+    def test_two_connections_create_one_graph_or_report_typed_conflict(self):
+        graph = self._graph(replay_token="-".join(("parallel", "same", "graph")))
+        results = self._parallel(
+            lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, graph),
+            lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, graph),
+        )
+        self.assertTrue(all(isinstance(result, (c.CommandGraphResult, c.IdempotencyConflict)) for result in results))
+        successful = [result for result in results if isinstance(result, c.CommandGraphResult)]
+        conflicts = [result for result in results if isinstance(result, c.IdempotencyConflict)]
+        created = [result for result in successful if result.disposition is c.CommandGraphDisposition.CREATED]
+        replayed = [result for result in successful if result.disposition is c.CommandGraphDisposition.REPLAYED]
+        self.assertEqual(len(created), 1)
+        self.assertEqual(len(successful) + len(conflicts), 2)
+        if replayed:
+            self.assertEqual(len(replayed), 1)
+            self.assertEqual(conflicts, [])
+            replay = replayed[0]
+        else:
+            self.assertEqual(len(successful), 1)
+            self.assertEqual(len(conflicts), 1)
+            replay = self.repo.accept_command_graph(self.connection, graph)
+            self.assertEqual(replay.disposition, c.CommandGraphDisposition.REPLAYED)
+        self.assertEqual(replay.command_id, created[0].command_id)
+        self.assertEqual(replay.intent_id, created[0].intent_id)
+        self.assertEqual(replay.economic_order_id, created[0].economic_order_id)
+        with self.connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM qd_order_commands WHERE id = %s", (graph.command.command_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+            cursor.execute("SELECT count(*) FROM qd_order_intents_v2 WHERE command_id = %s", (graph.command.command_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+            cursor.execute("SELECT count(*) FROM qd_economic_orders WHERE intent_id = %s", (graph.intent.intent_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+
+    def test_two_connections_same_key_different_graph_leave_one_graph(self):
+        first = self._graph(replay_token="-".join(("parallel", "different", "graph")))
+        second = self._graph(replay_token="-".join(("parallel", "different", "graph")))
+        results = self._parallel(
+            lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, first),
+            lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, second),
+        )
+        self.assertEqual(sum(isinstance(result, c.CommandGraphResult) for result in results), 1)
+        self.assertEqual(sum(isinstance(result, c.IdempotencyConflict) for result in results), 1)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT count(*) FROM qd_order_commands WHERE tenant_id = %s AND source = %s AND idempotency_key = %s",
+                (self.user_id, first.command.source, first.command.idempotency_key),
+            )
+            self.assertEqual(cursor.fetchone()[0], 1)
+
+    def test_two_connections_reservation_replay_conflict_and_terminal_races(self):
+        graph = self._graph(replay_token="-".join(("parallel", "reservation")))
+        self.repo.accept_command_graph(self.connection, graph)
+        reservation = self._reservation(graph, tag="same", expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+        replay_results = self._parallel(
+            lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, reservation),
+            lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, reservation),
+        )
+        self.assertEqual(
+            {result.disposition for result in replay_results if not isinstance(result, BaseException)},
+            {c.ReservationTransitionDisposition.APPLIED, c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY},
+        )
+        with self.connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM qd_risk_reservations WHERE command_id = %s AND state = 'ACTIVE'", (graph.command.command_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+
+        conflict_graph = self._graph(replay_token="-".join(("parallel", "reservation", "conflict")))
+        self.repo.accept_command_graph(self.connection, conflict_graph)
+        conflict_first = self._reservation(conflict_graph, tag="first", expires_at=reservation.expires_at)
+        conflicting = self._reservation(conflict_graph, tag="different", expires_at=reservation.expires_at)
+        results = self._parallel(
+            lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, conflict_first),
+            lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, conflicting),
+        )
+        self.assertEqual(sum(getattr(result, "disposition", None) is c.ReservationTransitionDisposition.APPLIED for result in results), 1)
+        self.assertEqual(sum(isinstance(result, c.ReservationConflict) for result in results), 1)
+
+        terminal_results = self._parallel(
+            lambda connection: repository_module.CommandIntentRepository().consume_reservation(connection, reservation.reservation_id, 0),
+            lambda connection: repository_module.CommandIntentRepository().release_reservation(connection, reservation.reservation_id, 0),
+        )
+        self.assertEqual(sum(getattr(result, "disposition", None) is c.ReservationTransitionDisposition.APPLIED for result in terminal_results), 1)
+        self.assertEqual(sum(isinstance(result, c.ReservationStateConflict) for result in terminal_results), 1)
+
+    def test_expire_and_consume_race_leaves_one_irreversible_terminal_state(self):
+        graph = self._graph(replay_token="-".join(("parallel", "expire")))
+        self.repo.accept_command_graph(self.connection, graph)
+        expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        reservation = self._reservation(graph, tag="expire", expires_at=expires_at)
+        self.repo.create_reservation(self.connection, reservation)
+        results = self._parallel(
+            lambda connection: repository_module.CommandIntentRepository().expire_reservation(connection, reservation.reservation_id, 0, expires_at),
+            lambda connection: repository_module.CommandIntentRepository().consume_reservation(connection, reservation.reservation_id, 0),
+        )
+        self.assertEqual(sum(getattr(result, "disposition", None) is c.ReservationTransitionDisposition.APPLIED for result in results), 1)
+        self.assertEqual(sum(isinstance(result, c.ReservationStateConflict) for result in results), 1)
+        with self.connection.cursor() as cursor:
+            cursor.execute("SELECT state, version FROM qd_risk_reservations WHERE id = %s", (reservation.reservation_id,))
+            state, version = cursor.fetchone()
+            self.assertIn(state, {"CONSUMED", "EXPIRED"})
+            self.assertEqual(version, 1)
 
 
 if __name__ == "__main__":

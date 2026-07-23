@@ -382,23 +382,60 @@ class CommandIntentRepository:
         return self._transition_reservation(connection, reservation_id, expected_version, ReservationState.RELEASED)
 
     def expire_reservation(self, connection: Connection, reservation_id: str, expected_version: int, now_utc: Any) -> ReservationTransitionResult:
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
+            raise ReservationStateConflict("expected_version must be a non-negative integer")
         normalized_now = _aware_utc(now_utc, "now_utc")
+        reservation_id = canonical_uuid(reservation_id, "reservation_id")
         cursor = connection.cursor()
         try:
-            cursor.execute("SELECT expires_at FROM qd_risk_reservations WHERE id = %s FOR UPDATE", (canonical_uuid(reservation_id, "reservation_id"),))
-            row = cursor.fetchone()
-            if row is None:
+            cursor.execute(
+                """
+                UPDATE qd_risk_reservations
+                   SET state = 'EXPIRED', version = version + 1, updated_at = NOW()
+                 WHERE id = %s AND state = 'ACTIVE' AND version = %s
+                   AND expires_at IS NOT NULL AND expires_at <= %s
+                RETURNING version
+                """,
+                (reservation_id, expected_version, normalized_now),
+            )
+            changed = cursor.fetchone()
+            if changed is not None:
+                version = int(_row_value(changed, 0, "version"))
+                connection.commit()
+                return ReservationTransitionResult(
+                    reservation_id, ReservationState.EXPIRED, version,
+                    ReservationTransitionDisposition.APPLIED,
+                )
+            cursor.execute(
+                "SELECT state, version, expires_at FROM qd_risk_reservations WHERE id = %s FOR UPDATE",
+                (reservation_id,),
+            )
+            existing = cursor.fetchone()
+            if existing is None:
                 raise ReservationStateConflict("reservation does not exist")
-            expires_at = _row_value(row, 0, "expires_at")
-            if expires_at is None or normalized_now <= expires_at:
-                raise ReservationStateConflict("reservation is not expired at caller supplied UTC time")
-            connection.rollback()
+            state = ReservationState(str(_row_value(existing, 0, "state")))
+            version = int(_row_value(existing, 1, "version"))
+            expires_at = _row_value(existing, 2, "expires_at")
+            if state is ReservationState.EXPIRED and version == expected_version + 1:
+                connection.commit()
+                return ReservationTransitionResult(
+                    reservation_id, ReservationState.EXPIRED, version,
+                    ReservationTransitionDisposition.IDEMPOTENT_REPLAY,
+                )
+            if state is ReservationState.ACTIVE:
+                if expires_at is None:
+                    raise ReservationStateConflict("reservation has no expiry")
+                if normalized_now < expires_at:
+                    raise ReservationStateConflict("reservation is not expired at caller supplied UTC time")
+                raise ReservationStateConflict("reservation expiry CAS version is stale")
+            if state in {ReservationState.CONSUMED, ReservationState.RELEASED}:
+                raise ReservationStateConflict("reservation has a different terminal state")
+            raise ReservationStateConflict("reservation state is not recognized for expiry")
         except Exception:
             connection.rollback()
             raise
         finally:
             cursor.close()
-        return self._transition_reservation(connection, reservation_id, expected_version, ReservationState.EXPIRED)
 
     def _transition_reservation(self, connection: Connection, reservation_id: str, expected_version: int, target: ReservationState) -> ReservationTransitionResult:
         if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 0:
@@ -427,7 +464,7 @@ class CommandIntentRepository:
                 raise ReservationStateConflict("reservation does not exist")
             current_state = ReservationState(str(_row_value(existing, 0, "state")))
             current_version = int(_row_value(existing, 1, "version"))
-            if current_state is target:
+            if current_state is target and current_version == expected_version + 1:
                 connection.commit()
                 return ReservationTransitionResult(reservation_id, target, current_version,
                                                    ReservationTransitionDisposition.IDEMPOTENT_REPLAY)
