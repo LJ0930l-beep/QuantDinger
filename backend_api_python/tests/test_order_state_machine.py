@@ -12,13 +12,15 @@ machine = modules.machine
 ORDER_ID = "00000000-0000-0000-0000-000000000101"
 ATTEMPT_ID = "00000000-0000-0000-0000-000000000102"
 NOW = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+ORDER_SCOPE = machine.EconomicOrderScope(1, 2, "account-a", "BTCUSDT", "swap")
+ATTEMPT_SCOPE = machine.SubmissionAttemptScope(1, 2, "account-a", "BTCUSDT", "swap", ORDER_ID, "binance")
 
 
 def order_event(current, target, cause=machine.TransitionCause.VENUE_OBSERVATION):
     return machine.authorize_order_transition(
         aggregate_id=ORDER_ID, current_state=current, target_state=target, expected_version=3,
         cause=cause, actor=contracts.Actor.ADMIN, reason_code="TEST", correlation_id="correlation-1",
-        occurred_at=NOW, evidence_hash="a" * 64, canonical_payload={"source": "test"}, idempotency_key="case-1",
+        occurred_at=NOW, evidence_hash="a" * 64, canonical_payload={"source": "test"}, idempotency_key="case-1", aggregate_scope=ORDER_SCOPE,
     )
 
 
@@ -26,7 +28,7 @@ def attempt_event(current, target, cause=machine.TransitionCause.VENUE_OBSERVATI
     return machine.authorize_attempt_transition(
         aggregate_id=ATTEMPT_ID, current_state=current, target_state=target, expected_version=3,
         cause=cause, actor=contracts.Actor.ADMIN, reason_code="TEST", correlation_id="correlation-1",
-        occurred_at=NOW, evidence_hash="b" * 64, canonical_payload={"source": "test"}, idempotency_key="case-2",
+        occurred_at=NOW, evidence_hash="b" * 64, canonical_payload={"source": "test"}, idempotency_key="case-2", aggregate_scope=ATTEMPT_SCOPE,
     )
 
 
@@ -77,7 +79,7 @@ class OrderStateMachineTests(unittest.TestCase):
                 aggregate_id=ORDER_ID, current_state=contracts.EconomicOrderState.SUBMISSION_UNKNOWN,
                 target_state=contracts.EconomicOrderState.SUBMITTED, expected_version=0,
                 cause=machine.TransitionCause.VENUE_OBSERVATION, actor="INVENTED", reason_code="TEST",
-                correlation_id="c", occurred_at=NOW, evidence_hash="a", canonical_payload={}, idempotency_key="i",
+                correlation_id="c", occurred_at=NOW, evidence_hash="a", canonical_payload={}, idempotency_key="i", aggregate_scope=ORDER_SCOPE,
             )
 
     def test_binary_float_payload_fails_closed(self):
@@ -86,7 +88,23 @@ class OrderStateMachineTests(unittest.TestCase):
                 aggregate_id=ORDER_ID, current_state=contracts.EconomicOrderState.SUBMISSION_UNKNOWN,
                 target_state=contracts.EconomicOrderState.SUBMITTED, expected_version=0,
                 cause=machine.TransitionCause.VENUE_OBSERVATION, actor=contracts.Actor.ADMIN, reason_code="TEST",
-                correlation_id="c", occurred_at=NOW, evidence_hash="a", canonical_payload={"price": 1.1}, idempotency_key="i",
+                correlation_id="c", occurred_at=NOW, evidence_hash="a", canonical_payload={"price": 1.1}, idempotency_key="i", aggregate_scope=ORDER_SCOPE,
+            )
+
+    def test_actor_cause_matrix_fails_closed_when_no_runtime_principal_is_approved(self):
+        with self.assertRaises(machine.OperationalAuthorizationError):
+            machine.authorize_order_transition(
+                aggregate_id=ORDER_ID, aggregate_scope=ORDER_SCOPE, current_state=contracts.EconomicOrderState.SUBMISSION_UNKNOWN,
+                target_state=contracts.EconomicOrderState.SUBMITTED, expected_version=0,
+                cause=machine.TransitionCause.VENUE_OBSERVATION, actor=contracts.Actor.HUMAN, reason_code="TEST",
+                correlation_id="c", occurred_at=NOW, evidence_hash="a", canonical_payload={}, idempotency_key="i",
+            )
+        with self.assertRaises(machine.OperationalAuthorizationError):
+            machine.authorize_order_transition(
+                aggregate_id=ORDER_ID, aggregate_scope=ORDER_SCOPE, current_state=contracts.EconomicOrderState.CREATED,
+                target_state=contracts.EconomicOrderState.RISK_PENDING, expected_version=0,
+                cause=machine.TransitionCause.RISK_DECISION, actor=contracts.Actor.PROTECTION, reason_code="TEST",
+                correlation_id="c", occurred_at=NOW, evidence_hash="a", canonical_payload={}, idempotency_key="i2",
             )
 
     def test_authorized_transition_cannot_be_constructed_as_a_bare_repository_input(self):
@@ -96,7 +114,7 @@ class OrderStateMachineTests(unittest.TestCase):
                 current_state="SUBMISSION_UNKNOWN", target_state="SUBMITTED", expected_version=0,
                 resulting_version=1, event_seq=1, transition_cause=machine.TransitionCause.VENUE_OBSERVATION,
                 actor=contracts.Actor.ADMIN, reason_code="TEST", correlation_id="c", occurred_at=NOW,
-                evidence_hash="a", canonical_payload={}, idempotency_key="i",
+                evidence_hash="a", canonical_payload={}, idempotency_key="i", aggregate_scope=ORDER_SCOPE,
             )
 
 

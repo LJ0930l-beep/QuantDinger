@@ -1,25 +1,15 @@
-"""One-transaction persistence of a pure submission-recovery decision.
-
-This boundary writes only already-redacted observations and reducer-authorized
-events.  It contains no venue client, retry, submit, or cancel behaviour.
-"""
+"""Atomic storage for reducer-produced submission-recovery decisions only."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+import json
 from uuid import uuid4
 
 from app.domain.order_state_machine import StateEventConflict
 from app.domain.submission_recovery_contracts import RecoveryDecision, SubmissionRecoveryContractError
-from app.services.order_state_repository import (
-    Connection,
-    Cursor,
-    OrderStateRepository,
-    StateEventResult,
-    _row_value,
-)
+from app.services.order_state_repository import Connection, Cursor, OrderStateRepository, StateEventResult, _row_value
 
 
 class RecoveryDisposition(str, Enum):
@@ -37,34 +27,28 @@ class RecoveryPersistenceResult:
 
 
 class SubmissionRecoveryRepository:
-    """Persist a decision in fixed ``order -> attempt`` lock order."""
-
     def __init__(self, state_repository: OrderStateRepository | None = None) -> None:
         self._states = state_repository or OrderStateRepository()
 
     def apply(self, connection: Connection, decision: RecoveryDecision) -> RecoveryPersistenceResult:
         cursor = connection.cursor()
         try:
-            self._lock_and_verify_order(cursor, decision)
-            self._lock_and_verify_attempt(cursor, decision)
-            self._lock_and_verify_snapshots(cursor, decision)
-            observation_id, replayed_observation = self._append_observation(cursor, decision)
-            if decision.order_transition is None and decision.attempt_transition is None:
+            # The immutable scope locks are always acquired in this order.
+            self._lock_and_verify_order_scope(cursor, decision)
+            self._lock_and_verify_attempt_scope(cursor, decision)
+            self._lock_and_verify_exchange_order_scope(cursor, decision)
+            self._lock_and_verify_snapshot_facts(cursor, decision)
+            observation_id, observation_replayed = self._append_or_replay_observation(cursor, decision)
+            if observation_replayed:
+                result = self._replay_existing_events(cursor, decision)
                 connection.commit()
-                return RecoveryPersistenceResult(
-                    observation_id, None, None,
-                    RecoveryDisposition.REPLAYED if replayed_observation else RecoveryDisposition.OBSERVATION_ONLY,
-                )
-            # State helpers take no commit.  They retain the established lock
-            # order and participate in this exact observation transaction.
-            order_result = None
-            attempt_result = None
-            if decision.order_transition is not None:
-                order_result = self._states._apply_order_locked(cursor, decision.order_transition)
-            if decision.attempt_transition is not None:
-                attempt_result = self._states._apply_attempt_locked(cursor, decision.attempt_transition)
+                return RecoveryPersistenceResult(observation_id, result[0], result[1], RecoveryDisposition.REPLAYED)
+            self._verify_fresh_ingress_versions(cursor, decision)
+            order_result = self._states._apply_order_locked(cursor, decision.order_transition) if decision.order_transition else None
+            attempt_result = self._states._apply_attempt_locked(cursor, decision.attempt_transition) if decision.attempt_transition else None
             connection.commit()
-            return RecoveryPersistenceResult(observation_id, order_result, attempt_result, RecoveryDisposition.APPLIED)
+            return RecoveryPersistenceResult(observation_id, order_result, attempt_result,
+                                             RecoveryDisposition.APPLIED if (order_result or attempt_result) else RecoveryDisposition.OBSERVATION_ONLY)
         except Exception:
             connection.rollback()
             raise
@@ -72,147 +56,106 @@ class SubmissionRecoveryRepository:
             cursor.close()
 
     @staticmethod
-    def _lock_and_verify_order(cursor: Cursor, decision: RecoveryDecision) -> None:
-        cursor.execute(
-            """
-            SELECT id, tenant_id, credential_id, account_scope, instrument_id,
-                   market_type, state, version, last_event_seq
-              FROM qd_economic_orders
-             WHERE id = %s FOR UPDATE
-            """,
-            (decision.order.id,),
-        )
-        row = cursor.fetchone()
-        if row is None:
-            raise SubmissionRecoveryContractError("persisted economic order is missing")
-        expected = decision.order
-        observed = (
-            str(_row_value(row, 0, "id")), int(_row_value(row, 1, "tenant_id")),
-            int(_row_value(row, 2, "credential_id")), str(_row_value(row, 3, "account_scope")),
-            str(_row_value(row, 4, "instrument_id")).upper(), str(_row_value(row, 5, "market_type")).lower(),
-            str(_row_value(row, 6, "state")), int(_row_value(row, 7, "version")), int(_row_value(row, 8, "last_event_seq")),
-        )
-        wanted = (expected.id, expected.tenant_id, expected.credential_id, expected.account_scope,
-                  expected.instrument_id, expected.market_type, expected.state.value, expected.version,
-                  expected.last_event_seq)
-        if observed != wanted:
-            raise SubmissionRecoveryContractError("persisted economic order scope, state, or version mismatch")
+    def _lock_and_verify_order_scope(cursor: Cursor, decision: RecoveryDecision) -> None:
+        scope = decision.order.scope
+        cursor.execute("""SELECT id FROM qd_economic_orders WHERE id=%s AND tenant_id=%s AND credential_id=%s
+                          AND account_scope=%s AND instrument_id=%s AND market_type=%s FOR UPDATE""",
+                       (decision.order.id, scope.tenant_id, scope.credential_id, scope.account_scope, scope.instrument_id, scope.market_type))
+        if cursor.fetchone() is None:
+            raise SubmissionRecoveryContractError("persisted economic-order scope mismatch")
 
     @staticmethod
-    def _lock_and_verify_attempt(cursor: Cursor, decision: RecoveryDecision) -> None:
-        cursor.execute(
-            """
-            SELECT id, economic_order_id, tenant_id, credential_id, account_scope,
-                   instrument_id, exchange, market_type, state, version, last_event_seq,
-                   venue_capability_snapshot_id, recovery_policy_snapshot_id,
-                   canonical_client_order_id, client_id_algorithm_version,
-                   broker_prefix_normalization_version, broker_prefix
-              FROM qd_submission_attempts
-             WHERE id = %s FOR UPDATE
-            """,
-            (decision.attempt.id,),
-        )
-        row = cursor.fetchone()
-        if row is None:
-            raise SubmissionRecoveryContractError("persisted submission attempt is missing")
-        expected = decision.attempt
-        observed = (
-            str(_row_value(row, 0, "id")), str(_row_value(row, 1, "economic_order_id")),
-            int(_row_value(row, 2, "tenant_id")), int(_row_value(row, 3, "credential_id")),
-            str(_row_value(row, 4, "account_scope")), str(_row_value(row, 5, "instrument_id")).upper(),
-            str(_row_value(row, 6, "exchange")).lower(), str(_row_value(row, 7, "market_type")).lower(),
-            str(_row_value(row, 8, "state")), int(_row_value(row, 9, "version")), int(_row_value(row, 10, "last_event_seq")),
-            str(_row_value(row, 11, "venue_capability_snapshot_id")), str(_row_value(row, 12, "recovery_policy_snapshot_id")),
-            str(_row_value(row, 13, "canonical_client_order_id")), str(_row_value(row, 14, "client_id_algorithm_version")),
-            str(_row_value(row, 15, "broker_prefix_normalization_version")), str(_row_value(row, 16, "broker_prefix")),
-        )
-        wanted = (
-            expected.id, expected.economic_order_id, expected.tenant_id, expected.credential_id,
-            expected.account_scope, expected.instrument_id, expected.exchange, expected.market_type,
-            expected.state.value, expected.version, expected.last_event_seq,
-            expected.venue_capability_snapshot_id, expected.recovery_policy_snapshot_id,
-            expected.canonical_client_order_id, expected.client_id_algorithm_version,
-            expected.broker_prefix_normalization_version, expected.broker_prefix,
-        )
-        if observed != wanted:
-            raise SubmissionRecoveryContractError("persisted attempt scope, snapshot, identity, state, or version mismatch")
+    def _lock_and_verify_attempt_scope(cursor: Cursor, decision: RecoveryDecision) -> None:
+        fact, scope = decision.attempt, decision.attempt.scope
+        cursor.execute("""SELECT id FROM qd_submission_attempts WHERE id=%s AND economic_order_id=%s AND tenant_id=%s
+                          AND credential_id=%s AND account_scope=%s AND instrument_id=%s AND exchange=%s AND market_type=%s
+                          AND canonical_client_order_id=%s AND venue_client_order_id=%s
+                          AND venue_capability_snapshot_id=%s AND recovery_policy_snapshot_id=%s
+                          AND client_id_algorithm_version=%s AND broker_prefix_normalization_version=%s AND broker_prefix=%s FOR UPDATE""",
+                       (fact.id, scope.economic_order_id, scope.tenant_id, scope.credential_id, scope.account_scope,
+                        scope.instrument_id, scope.exchange, scope.market_type, fact.canonical_client_order_id,
+                        fact.venue_client_order_id, fact.venue_capability_snapshot_id, fact.recovery_policy_snapshot_id,
+                        fact.client_id_algorithm_version, fact.broker_prefix_normalization_version, fact.broker_prefix))
+        if cursor.fetchone() is None:
+            raise SubmissionRecoveryContractError("persisted attempt scope, identity, or snapshot mismatch")
 
     @staticmethod
-    def _lock_and_verify_snapshots(cursor: Cursor, decision: RecoveryDecision) -> None:
-        """Verify the exact persisted policy/capability pair, including scope.
-
-        The schema's composite foreign keys are the final database guard; this
-        read is still required because NOT VALID legacy constraints may exist
-        during the expand-only migration window.
-        """
-        cursor.execute(
-            """
-            SELECT p.id AS policy_id, p.capability_snapshot_id, p.exchange AS policy_exchange,
-                   p.market_type AS policy_market_type, c.id AS capability_id,
-                   c.exchange AS capability_exchange, c.market_type AS capability_market_type
-              FROM qd_submission_recovery_policy_snapshots AS p
-              JOIN qd_venue_capability_snapshots AS c ON c.id = p.capability_snapshot_id
-             WHERE p.id = %s AND c.id = %s
-             FOR KEY SHARE OF p, c
-            """,
-            (decision.policy.id, decision.policy.capability_snapshot_id),
-        )
-        row = cursor.fetchone()
-        if row is None:
-            raise SubmissionRecoveryContractError("persisted recovery policy/capability pair is missing")
-        observed = (
-            str(_row_value(row, 0, "policy_id")), str(_row_value(row, 1, "capability_snapshot_id")),
-            str(_row_value(row, 2, "policy_exchange")).lower(), str(_row_value(row, 3, "policy_market_type")).lower(),
-            str(_row_value(row, 4, "capability_id")), str(_row_value(row, 5, "capability_exchange")).lower(),
-            str(_row_value(row, 6, "capability_market_type")).lower(),
-        )
-        expected = (
-            decision.policy.id, decision.policy.capability_snapshot_id, decision.policy.exchange,
-            decision.policy.market_type, decision.policy.capability_snapshot_id, decision.attempt.exchange,
-            decision.attempt.market_type,
-        )
-        if observed != expected:
-            raise SubmissionRecoveryContractError("persisted recovery policy/capability scope mismatch")
+    def _lock_and_verify_exchange_order_scope(cursor: Cursor, decision: RecoveryDecision) -> None:
+        fact = decision.exchange_order
+        if fact is None:
+            return
+        cursor.execute("""SELECT id FROM qd_exchange_orders WHERE id=%s AND attempt_id=%s AND economic_order_id=%s
+                          AND exchange=%s AND market_type=%s AND account_scope=%s AND instrument_id=%s
+                          AND exchange_order_id=%s AND venue_client_order_id=%s FOR KEY SHARE""",
+                       (fact.exchange_order_pk, fact.attempt_id, fact.economic_order_id, fact.exchange, fact.market_type,
+                        fact.account_scope, fact.instrument_id, fact.exchange_order_id, fact.venue_client_order_id))
+        if cursor.fetchone() is None:
+            raise SubmissionRecoveryContractError("persisted exchange-order identity mismatch")
 
     @staticmethod
-    def _append_observation(cursor: Cursor, decision: RecoveryDecision) -> tuple[str, bool]:
-        observation = decision.observation
-        payload_json = observation.canonical_payload_json
-        cursor.execute(
-            """
-            INSERT INTO qd_exchange_order_observations (
-                id, attempt_id, observation_source, payload_hash, payload_json, observed_at
-            ) VALUES (%s,%s,%s,%s,%s::jsonb,%s)
-            ON CONFLICT DO NOTHING
-            RETURNING id
-            """,
-            (str(uuid4()), observation.attempt_id, observation.observation_source,
-             observation.payload_hash, payload_json, observation.observed_at),
-        )
+    def _lock_and_verify_snapshot_facts(cursor: Cursor, decision: RecoveryDecision) -> None:
+        c, p = decision.capability, decision.policy
+        cursor.execute("""SELECT c.id, c.exchange, c.market_type, c.capability_version, c.profile_hash,
+                          c.query_by_exchange_order_id, c.query_by_client_order_id, p.id, p.capability_snapshot_id,
+                          p.exchange, p.market_type, p.policy_version, p.policy_hash, p.capability_query_by_client_order_id,
+                          p.client_id_query_authoritative, p.order_history_authoritative, p.fill_history_authoritative,
+                          p.not_found_min_query_count, p.not_found_grace_seconds, p.not_found_action
+                          FROM qd_venue_capability_snapshots c JOIN qd_submission_recovery_policy_snapshots p ON p.capability_snapshot_id=c.id
+                          WHERE c.id=%s AND p.id=%s FOR KEY SHARE OF c,p""", (c.id, p.id))
+        row = cursor.fetchone()
+        expected = (c.id, c.exchange, c.market_type, c.capability_version, c.profile_hash, c.query_by_exchange_order_id,
+                    c.query_by_client_order_id, p.id, p.capability_snapshot_id, p.exchange, p.market_type, p.policy_version,
+                    p.policy_hash, p.capability_query_by_client_order_id, p.client_id_query_authoritative,
+                    p.order_history_authoritative, p.fill_history_authoritative, p.not_found_min_query_count,
+                    p.not_found_grace_seconds, p.not_found_action)
+        if row is None or tuple(row) != expected:
+            raise SubmissionRecoveryContractError("persisted capability/policy facts mismatch")
+
+    @staticmethod
+    def _verify_fresh_ingress_versions(cursor: Cursor, decision: RecoveryDecision) -> None:
+        cursor.execute("SELECT state,version,last_event_seq FROM qd_economic_orders WHERE id=%s FOR UPDATE", (decision.order.id,))
+        row = cursor.fetchone()
+        if row is None or (str(_row_value(row, 0, "state")), int(_row_value(row, 1, "version")), int(_row_value(row, 2, "last_event_seq"))) != (decision.order.state.value, decision.order.version, decision.order.last_event_seq):
+            raise StateEventConflict("fresh recovery economic order has advanced or drifted")
+        cursor.execute("SELECT state,version,last_event_seq FROM qd_submission_attempts WHERE id=%s FOR UPDATE", (decision.attempt.id,))
+        row = cursor.fetchone()
+        if row is None or (str(_row_value(row, 0, "state")), int(_row_value(row, 1, "version")), int(_row_value(row, 2, "last_event_seq"))) != (decision.attempt.state.value, decision.attempt.version, decision.attempt.last_event_seq):
+            raise StateEventConflict("fresh recovery attempt has advanced or drifted")
+
+    @staticmethod
+    def _append_or_replay_observation(cursor: Cursor, decision: RecoveryDecision) -> tuple[str, bool]:
+        obs = decision.observation
+        cursor.execute("""SELECT id,payload_json FROM qd_exchange_order_observations WHERE attempt_id=%s AND observation_source=%s
+                          AND payload_json ->> 'query_invocation_id'=%s FOR UPDATE""",
+                       (obs.attempt_id, obs.observation_source, obs.query_invocation_id))
+        existing = cursor.fetchone()
+        if existing is not None:
+            existing_json = json.dumps(json.loads(_row_value(existing, 1, "payload_json")) if isinstance(_row_value(existing, 1, "payload_json"), str) else _row_value(existing, 1, "payload_json"), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            if existing_json != obs.canonical_payload_json:
+                raise StateEventConflict("query invocation is reused with different observation facts")
+            return str(_row_value(existing, 0, "id")), True
+        cursor.execute("""INSERT INTO qd_exchange_order_observations (id,attempt_id,observation_source,payload_hash,payload_json,observed_at)
+                          VALUES (%s,%s,%s,%s,%s::jsonb,%s) ON CONFLICT DO NOTHING RETURNING id""",
+                       (str(uuid4()), obs.attempt_id, obs.observation_source, obs.payload_hash, obs.canonical_payload_json, obs.observed_at))
         inserted = cursor.fetchone()
         if inserted is not None:
             return str(_row_value(inserted, 0, "id")), False
-        cursor.execute(
-            """
-            SELECT id, payload_json
-              FROM qd_exchange_order_observations
-             WHERE attempt_id = %s AND observation_source = %s AND payload_hash = %s
-             FOR UPDATE
-            """,
-            (observation.attempt_id, observation.observation_source, observation.payload_hash),
-        )
+        cursor.execute("SELECT id,payload_json FROM qd_exchange_order_observations WHERE attempt_id=%s AND observation_source=%s AND payload_hash=%s FOR UPDATE",
+                       (obs.attempt_id, obs.observation_source, obs.payload_hash))
         existing = cursor.fetchone()
         if existing is None:
             raise StateEventConflict("observation uniqueness conflict is not visible")
-        existing_payload = _row_value(existing, 1, "payload_json")
-        if isinstance(existing_payload, str):
-            # JSONB adapters vary; compare canonical strings through the already
-            # canonical request material rather than assuming one driver shape.
-            import json
-            existing_payload = json.dumps(json.loads(existing_payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        else:
-            import json
-            existing_payload = json.dumps(existing_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        if existing_payload != payload_json:
-            raise StateEventConflict("observation hash is reused with different canonical evidence")
+        existing_json = json.dumps(json.loads(_row_value(existing, 1, "payload_json")) if isinstance(_row_value(existing, 1, "payload_json"), str) else _row_value(existing, 1, "payload_json"), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        if existing_json != obs.canonical_payload_json:
+            raise StateEventConflict("observation hash is reused with different facts")
         return str(_row_value(existing, 0, "id")), True
+
+    def _replay_existing_events(self, cursor: Cursor, decision: RecoveryDecision) -> tuple[StateEventResult | None, StateEventResult | None]:
+        if decision.order_transition is None and decision.attempt_transition is None:
+            return None, None
+        order_result = self._states._apply_order_locked(cursor, decision.order_transition) if decision.order_transition else None
+        attempt_result = self._states._apply_attempt_locked(cursor, decision.attempt_transition) if decision.attempt_transition else None
+        results = tuple(result for result in (order_result, attempt_result) if result is not None)
+        if any(result.disposition.value != "REPLAYED" for result in results):
+            raise StateEventConflict("recovery replay has partial event history")
+        return order_result, attempt_result

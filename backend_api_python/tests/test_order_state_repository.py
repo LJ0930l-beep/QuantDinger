@@ -11,6 +11,7 @@ repository = modules.states
 
 ORDER_ID = "00000000-0000-0000-0000-000000000301"
 NOW = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+SCOPE = machine.EconomicOrderScope(1, 2, "account-a", "BTCUSDT", "swap")
 
 
 class FakeCursor:
@@ -51,7 +52,7 @@ def transition(idempotency_key="event-1"):
         target_state=contracts.EconomicOrderState.SUBMITTED, expected_version=2,
         cause=machine.TransitionCause.VENUE_OBSERVATION, actor=contracts.Actor.ADMIN,
         reason_code="VENUE_QUERY_FOUND", correlation_id="correlation-1", occurred_at=NOW,
-        evidence_hash="a" * 64, canonical_payload={"source": "test"}, idempotency_key=idempotency_key,
+        evidence_hash="a" * 64, canonical_payload={"source": "test"}, idempotency_key=idempotency_key, aggregate_scope=SCOPE,
     )
 
 
@@ -110,6 +111,7 @@ class OrderStateRepositoryTests(unittest.TestCase):
             cause=machine.TransitionCause.VENUE_OBSERVATION, actor=contracts.Actor.ADMIN,
             reason_code="TEST", correlation_id="c", occurred_at=NOW, evidence_hash="a",
             canonical_payload={}, idempotency_key="event-2",
+            aggregate_scope=machine.SubmissionAttemptScope(1, 2, "account-a", "BTCUSDT", "swap", ORDER_ID, "binance"),
         )
         with self.assertRaises(machine.StateEventConflict):
             repository.OrderStateRepository().apply_order_transition(FakeConnection(FakeCursor([])), attempt)

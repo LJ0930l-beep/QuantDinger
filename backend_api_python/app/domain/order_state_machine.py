@@ -74,6 +74,43 @@ class StateEventConflict(StateMachineContractError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class EconomicOrderScope:
+    tenant_id: int
+    credential_id: int
+    account_scope: str
+    instrument_id: str
+    market_type: str
+
+    def __post_init__(self) -> None:
+        for name in ("tenant_id", "credential_id"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise StateMachineContractError(f"{name} must be a non-negative integer")
+        object.__setattr__(self, "account_scope", _required_text(self.account_scope, "account_scope"))
+        object.__setattr__(self, "instrument_id", _required_text(self.instrument_id, "instrument_id").upper())
+        object.__setattr__(self, "market_type", _required_text(self.market_type, "market_type").lower())
+
+    def canonical_material(self) -> Mapping[str, Any]:
+        return {"tenant_id": self.tenant_id, "credential_id": self.credential_id,
+                "account_scope": self.account_scope, "instrument_id": self.instrument_id,
+                "market_type": self.market_type}
+
+
+@dataclass(frozen=True, slots=True)
+class SubmissionAttemptScope(EconomicOrderScope):
+    economic_order_id: str
+    exchange: str
+
+    def __post_init__(self) -> None:
+        EconomicOrderScope.__post_init__(self)
+        object.__setattr__(self, "economic_order_id", _canonical_uuid(self.economic_order_id, "economic_order_id"))
+        object.__setattr__(self, "exchange", _required_text(self.exchange, "exchange").lower())
+
+    def canonical_material(self) -> Mapping[str, Any]:
+        return {**EconomicOrderScope.canonical_material(self), "economic_order_id": self.economic_order_id, "exchange": self.exchange}
+
+
 def _enum(value: object, enum_type: type[Enum], error_type: type[StateMachineContractError]) -> Enum:
     if isinstance(value, enum_type):
         return value
@@ -150,6 +187,7 @@ class AuthorizedTransition:
     evidence_hash: str
     canonical_payload: Mapping[str, Any]
     idempotency_key: str
+    aggregate_scope: EconomicOrderScope | SubmissionAttemptScope
     reducer_proof: object = field(default=None, repr=False, compare=False)
     contract_version: str = STATE_EVENT_CONTRACT_VERSION
     canonical_payload_json: str = field(init=False, repr=False)
@@ -161,6 +199,10 @@ class AuthorizedTransition:
         object.__setattr__(self, "aggregate_id", _canonical_uuid(self.aggregate_id, "aggregate_id"))
         if not isinstance(self.aggregate_type, AggregateType):
             raise StateMachineContractError("aggregate_type is required")
+        if self.aggregate_type is AggregateType.ECONOMIC_ORDER and type(self.aggregate_scope) is not EconomicOrderScope:
+            raise StateMachineContractError("economic-order transition requires EconomicOrderScope")
+        if self.aggregate_type is AggregateType.SUBMISSION_ATTEMPT and type(self.aggregate_scope) is not SubmissionAttemptScope:
+            raise StateMachineContractError("attempt transition requires SubmissionAttemptScope")
         if not isinstance(self.expected_version, int) or isinstance(self.expected_version, bool) or self.expected_version < 0:
             raise StateEventVersionError("expected_version must be a non-negative integer")
         if self.resulting_version != self.expected_version + 1:
@@ -179,6 +221,7 @@ class AuthorizedTransition:
         material = {
             "aggregate_id": self.aggregate_id,
             "aggregate_type": self.aggregate_type.value,
+            "aggregate_scope": self.aggregate_scope.canonical_material(),
             "canonical_payload": json.loads(payload_json),
             "contract_version": self.contract_version,
             "current_state": self.current_state,
@@ -228,6 +271,17 @@ def _order_cause_authorized(
     return False
 
 
+def _actor_cause_authorized(actor: Actor, cause: TransitionCause) -> bool:
+    """The smallest explicit matrix; unspecified runtime principals fail closed."""
+    if cause in {TransitionCause.VENUE_OBSERVATION, TransitionCause.CANCEL_OBSERVATION,
+                 TransitionCause.RECONCILIATION_CONFLICT}:
+        return actor is Actor.ADMIN
+    if cause is TransitionCause.MANUAL_APPROVED_RECOVERY:
+        return actor in {Actor.HUMAN, Actor.ADMIN}
+    # PR-05 has no approved risk/execution runtime principal contract yet.
+    return False
+
+
 def _attempt_cause_authorized(
     current: SubmissionAttemptState,
     target: SubmissionAttemptState,
@@ -259,6 +313,7 @@ def _authorized_event(
     evidence_hash: str,
     canonical_payload: Mapping[str, Any],
     idempotency_key: str,
+    aggregate_scope: EconomicOrderScope | SubmissionAttemptScope,
 ) -> AuthorizedTransition:
     parsed_cause = _enum(cause, TransitionCause, UnknownTransitionCauseError)
     parsed_actor = _enum(actor, Actor, UnknownActorError)
@@ -278,6 +333,7 @@ def _authorized_event(
         evidence_hash=evidence_hash,
         canonical_payload=canonical_payload,
         idempotency_key=idempotency_key,
+        aggregate_scope=aggregate_scope,
         reducer_proof=_REDUCER_PROOF,
     )
 
@@ -296,6 +352,7 @@ def authorize_order_transition(
     evidence_hash: str,
     canonical_payload: Mapping[str, Any],
     idempotency_key: str,
+    aggregate_scope: EconomicOrderScope,
 ) -> AuthorizedTransition:
     """Authorize one EconomicOrder transition without persisting it."""
 
@@ -308,6 +365,8 @@ def authorize_order_transition(
         raise OperationalAuthorizationError("unknown submission cannot resume submitting in this PR")
     if not _order_cause_authorized(current, target, parsed_cause):
         raise OperationalAuthorizationError("transition cause is not authorized for this economic order transition")
+    if not _actor_cause_authorized(_enum(actor, Actor, UnknownActorError), parsed_cause):
+        raise OperationalAuthorizationError("actor is not authorized for this transition cause")
     return _authorized_event(
         aggregate_id=aggregate_id,
         aggregate_type=AggregateType.ECONOMIC_ORDER,
@@ -322,6 +381,7 @@ def authorize_order_transition(
         evidence_hash=evidence_hash,
         canonical_payload=canonical_payload,
         idempotency_key=idempotency_key,
+        aggregate_scope=aggregate_scope,
     )
 
 
@@ -339,6 +399,7 @@ def authorize_attempt_transition(
     evidence_hash: str,
     canonical_payload: Mapping[str, Any],
     idempotency_key: str,
+    aggregate_scope: SubmissionAttemptScope,
 ) -> AuthorizedTransition:
     """Authorize one SubmissionAttempt transition without persisting it."""
 
@@ -351,6 +412,8 @@ def authorize_attempt_transition(
         raise OperationalAuthorizationError("confirmed absent is intentionally unavailable in this PR")
     if not _attempt_cause_authorized(current, target, parsed_cause):
         raise OperationalAuthorizationError("transition cause is not authorized for this submission attempt transition")
+    if not _actor_cause_authorized(_enum(actor, Actor, UnknownActorError), parsed_cause):
+        raise OperationalAuthorizationError("actor is not authorized for this transition cause")
     return _authorized_event(
         aggregate_id=aggregate_id,
         aggregate_type=AggregateType.SUBMISSION_ATTEMPT,
@@ -365,4 +428,5 @@ def authorize_attempt_transition(
         evidence_hash=evidence_hash,
         canonical_payload=canonical_payload,
         idempotency_key=idempotency_key,
+        aggregate_scope=aggregate_scope,
     )

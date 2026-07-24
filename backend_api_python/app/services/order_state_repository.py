@@ -79,10 +79,13 @@ class OrderStateRepository:
         cursor.execute(
             """
             SELECT state, version, last_event_seq
-              FROM qd_economic_orders
-             WHERE id = %s FOR UPDATE
+             FROM qd_economic_orders
+             WHERE id = %s AND tenant_id = %s AND credential_id = %s
+               AND account_scope = %s AND instrument_id = %s AND market_type = %s
+             FOR UPDATE
             """,
-            (transition.aggregate_id,),
+            (transition.aggregate_id, transition.aggregate_scope.tenant_id, transition.aggregate_scope.credential_id,
+             transition.aggregate_scope.account_scope, transition.aggregate_scope.instrument_id, transition.aggregate_scope.market_type),
         )
         row = cursor.fetchone()
         if row is None:
@@ -109,11 +112,14 @@ class OrderStateRepository:
             """
             UPDATE qd_economic_orders
                SET state = %s, version = %s, last_event_seq = %s, updated_at = NOW()
-             WHERE id = %s AND state = %s AND version = %s AND last_event_seq = %s
+             WHERE id = %s AND tenant_id = %s AND credential_id = %s AND account_scope = %s
+               AND instrument_id = %s AND market_type = %s AND state = %s AND version = %s AND last_event_seq = %s
             RETURNING state, version
             """,
             (transition.target_state, transition.resulting_version, transition.event_seq,
-             transition.aggregate_id, transition.current_state, transition.expected_version,
+             transition.aggregate_id, transition.aggregate_scope.tenant_id, transition.aggregate_scope.credential_id,
+             transition.aggregate_scope.account_scope, transition.aggregate_scope.instrument_id, transition.aggregate_scope.market_type,
+             transition.current_state, transition.expected_version,
              transition.expected_version),
         )
         changed = cursor.fetchone()
@@ -126,9 +132,13 @@ class OrderStateRepository:
             """
             SELECT economic_order_id, state, version, last_event_seq
               FROM qd_submission_attempts
-             WHERE id = %s FOR UPDATE
+             WHERE id = %s AND economic_order_id = %s AND tenant_id = %s AND credential_id = %s
+               AND account_scope = %s AND instrument_id = %s AND exchange = %s AND market_type = %s
+             FOR UPDATE
             """,
-            (transition.aggregate_id,),
+            (transition.aggregate_id, transition.aggregate_scope.economic_order_id, transition.aggregate_scope.tenant_id,
+             transition.aggregate_scope.credential_id, transition.aggregate_scope.account_scope,
+             transition.aggregate_scope.instrument_id, transition.aggregate_scope.exchange, transition.aggregate_scope.market_type),
         )
         row = cursor.fetchone()
         if row is None:
@@ -160,11 +170,16 @@ class OrderStateRepository:
             """
             UPDATE qd_submission_attempts
                SET state = %s, version = %s, last_event_seq = %s
-             WHERE id = %s AND state = %s AND version = %s AND last_event_seq = %s
+             WHERE id = %s AND economic_order_id = %s AND tenant_id = %s AND credential_id = %s
+               AND account_scope = %s AND instrument_id = %s AND exchange = %s AND market_type = %s
+               AND state = %s AND version = %s AND last_event_seq = %s
             RETURNING state, version
             """,
             (transition.target_state, transition.resulting_version, transition.event_seq,
-             transition.aggregate_id, transition.current_state, transition.expected_version,
+             transition.aggregate_id, transition.aggregate_scope.economic_order_id, transition.aggregate_scope.tenant_id,
+             transition.aggregate_scope.credential_id, transition.aggregate_scope.account_scope,
+             transition.aggregate_scope.instrument_id, transition.aggregate_scope.exchange, transition.aggregate_scope.market_type,
+             transition.current_state, transition.expected_version,
              transition.expected_version),
         )
         changed = cursor.fetchone()
@@ -176,12 +191,16 @@ class OrderStateRepository:
         cursor.execute(
             """
             SELECT to_state, resulting_version, event_fingerprint, idempotency_key
-              FROM qd_order_state_events
-             WHERE economic_order_id = %s
-               AND (idempotency_key = %s OR event_fingerprint = %s)
+              FROM qd_order_state_events AS event
+              JOIN qd_economic_orders AS aggregate ON aggregate.id = event.economic_order_id
+             WHERE event.economic_order_id = %s AND aggregate.tenant_id = %s AND aggregate.credential_id = %s
+               AND aggregate.account_scope = %s AND aggregate.instrument_id = %s AND aggregate.market_type = %s
+               AND (event.idempotency_key = %s OR event.event_fingerprint = %s)
              FOR UPDATE
             """,
-            (transition.aggregate_id, transition.idempotency_key, transition.event_fingerprint),
+            (transition.aggregate_id, transition.aggregate_scope.tenant_id, transition.aggregate_scope.credential_id,
+             transition.aggregate_scope.account_scope, transition.aggregate_scope.instrument_id, transition.aggregate_scope.market_type,
+             transition.idempotency_key, transition.event_fingerprint),
         )
         return self._replay_or_conflict(cursor.fetchone(), transition)
 
@@ -189,12 +208,18 @@ class OrderStateRepository:
         cursor.execute(
             """
             SELECT to_state, resulting_version, event_fingerprint, idempotency_key
-              FROM qd_submission_attempt_state_events
-             WHERE attempt_id = %s
-               AND (idempotency_key = %s OR event_fingerprint = %s)
+              FROM qd_submission_attempt_state_events AS event
+              JOIN qd_submission_attempts AS aggregate ON aggregate.id = event.attempt_id
+             WHERE event.attempt_id = %s AND aggregate.economic_order_id = %s AND aggregate.tenant_id = %s
+               AND aggregate.credential_id = %s AND aggregate.account_scope = %s AND aggregate.instrument_id = %s
+               AND aggregate.exchange = %s AND aggregate.market_type = %s
+               AND (event.idempotency_key = %s OR event.event_fingerprint = %s)
              FOR UPDATE
             """,
-            (transition.aggregate_id, transition.idempotency_key, transition.event_fingerprint),
+            (transition.aggregate_id, transition.aggregate_scope.economic_order_id, transition.aggregate_scope.tenant_id,
+             transition.aggregate_scope.credential_id, transition.aggregate_scope.account_scope,
+             transition.aggregate_scope.instrument_id, transition.aggregate_scope.exchange, transition.aggregate_scope.market_type,
+             transition.idempotency_key, transition.event_fingerprint),
         )
         return self._replay_or_conflict(cursor.fetchone(), transition)
 
