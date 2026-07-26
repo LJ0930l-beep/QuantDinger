@@ -31,6 +31,7 @@ from app.domain.outbox_projection_contracts import (
 class Cursor(Protocol):
     def execute(self, query: str, params: tuple[Any, ...] = ()) -> Any: ...
     def fetchone(self) -> Any: ...
+    def fetchall(self) -> list[Any]: ...
     def close(self) -> None: ...
 
 
@@ -140,6 +141,22 @@ def _event_from_row(row: Any) -> OutboxEvent:
     if event.payload_hash != str(_row(row, 7, "payload_hash")):
         raise OutboxRepositoryError("persisted outbox payload hash is non-canonical")
     return event
+
+
+def _generation_from_row(row: Any) -> ProjectionGeneration:
+    """Build the public generation view only from persisted database facts."""
+
+    return ProjectionGeneration(
+        generation_id=str(_row(row, 0, "id")),
+        consumer_name=str(_row(row, 1, "consumer_name")),
+        build_fingerprint=str(_row(row, 2, "build_fingerprint")),
+        source_high_watermark=int(_row(row, 3, "source_high_watermark")),
+        state=str(_row(row, 4, "state")),
+        expected_event_count=int(_row(row, 5, "expected_event_count")),
+        applied_event_count=int(_row(row, 6, "applied_event_count")),
+        processed_high_watermark=int(_row(row, 7, "processed_high_watermark")),
+        is_current=bool(_row(row, 8, "is_current")),
+    )
 
 
 class OutboxProjectionRepository:
@@ -279,6 +296,14 @@ class OutboxProjectionRepository:
                 checkpoint, event, supported_schemas=supported_schemas, now_utc=now_utc,
             )
             if not result.idempotent_replay:
+                recorded = self._record_generation_event(
+                    cursor, generation_id=generation_id, source_offset=source_offset,
+                    event=event, applied_at=now_utc,
+                )
+                if not recorded:
+                    raise ProjectionGenerationConflict(
+                        "generation event identity replays but projection checkpoint does not"
+                    )
                 cursor.execute(
                     """
                     UPDATE qd_projection_checkpoints
@@ -297,6 +322,12 @@ class OutboxProjectionRepository:
                      WHERE id = %s
                     """,
                     (source_offset, generation_id),
+                )
+            elif not self._generation_event_matches(
+                cursor, generation_id=generation_id, source_offset=source_offset, event=event,
+            ):
+                raise ProjectionGenerationConflict(
+                    "projection replay lacks an identical immutable generation event fact"
                 )
             cursor.execute(
                 """
@@ -324,6 +355,10 @@ class OutboxProjectionRepository:
             raise ProjectionGenerationConflict("build_fingerprint must be SHA-256")
         if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (source_high_watermark, expected_event_count)):
             raise ProjectionGenerationConflict("rebuild high watermark and expected count must be non-negative")
+        if expected_event_count != source_high_watermark + 1:
+            raise ProjectionGenerationConflict(
+                "rebuild expected_event_count must describe every offset through the source high watermark"
+            )
         cursor = connection.cursor()
         try:
             generation_id = str(uuid4())
@@ -333,7 +368,9 @@ class OutboxProjectionRepository:
                     id, consumer_name, build_fingerprint, state, source_high_watermark, expected_event_count
                 ) VALUES (%s,%s,%s,'BUILDING',%s,%s)
                 ON CONFLICT (consumer_name, build_fingerprint) DO NOTHING
-                RETURNING id, state
+                RETURNING id, consumer_name, build_fingerprint, source_high_watermark,
+                          state, expected_event_count, applied_event_count,
+                          processed_high_watermark, is_current
                 """,
                 (generation_id, consumer_name, build_fingerprint, source_high_watermark, expected_event_count),
             )
@@ -341,8 +378,9 @@ class OutboxProjectionRepository:
             if row is None:
                 cursor.execute(
                     """
-                    SELECT id, state, source_high_watermark, expected_event_count,
-                           applied_event_count, processed_high_watermark, is_current
+                    SELECT id, consumer_name, build_fingerprint, source_high_watermark,
+                           state, expected_event_count, applied_event_count,
+                           processed_high_watermark, is_current
                       FROM qd_projection_generations
                      WHERE consumer_name = %s AND build_fingerprint = %s
                      FOR UPDATE
@@ -350,19 +388,12 @@ class OutboxProjectionRepository:
                     (consumer_name, build_fingerprint),
                 )
                 row = cursor.fetchone()
-                if row is None or (int(_row(row, 2, "source_high_watermark")), int(_row(row, 3, "expected_event_count"))) != (source_high_watermark, expected_event_count):
+                if row is None or (
+                    int(_row(row, 3, "source_high_watermark")),
+                    int(_row(row, 5, "expected_event_count")),
+                ) != (source_high_watermark, expected_event_count):
                     raise ProjectionGenerationConflict("rebuild fingerprint names different immutable source facts")
-                generation_id = str(_row(row, 0, "id"))
-                state = str(_row(row, 1, "state"))
-                applied = int(_row(row, 4, "applied_event_count"))
-                processed = int(_row(row, 5, "processed_high_watermark"))
-                is_current = bool(_row(row, 6, "is_current"))
-            else:
-                state = str(_row(row, 1, "state"))
-                applied = 0
-                processed = -1
-                is_current = False
-            return ProjectionGeneration(generation_id, consumer_name, build_fingerprint, source_high_watermark, state, expected_event_count, applied, processed, is_current)
+            return _generation_from_row(row)
         finally:
             cursor.close()
 
@@ -370,32 +401,35 @@ class OutboxProjectionRepository:
         now_utc = _zero_utc(now_utc, "now_utc")
         cursor = connection.cursor()
         try:
-            cursor.execute(
-                """
-                SELECT source_high_watermark, processed_high_watermark,
-                       expected_event_count, applied_event_count, is_current
-                  FROM qd_projection_generations
-                 WHERE id = %s AND consumer_name = %s AND build_fingerprint = %s
-                   AND state = 'BUILDING'
-                 FOR UPDATE
-                """,
-                (generation.generation_id, generation.consumer_name, generation.build_fingerprint),
+            persisted = self._load_generation(
+                cursor, generation, required_state="BUILDING",
             )
-            row = cursor.fetchone()
-            if row is None:
-                raise ProjectionGenerationConflict("rebuild generation is not in BUILDING state")
-            if int(_row(row, 1, "processed_high_watermark")) < int(_row(row, 0, "source_high_watermark")) or int(_row(row, 3, "applied_event_count")) != int(_row(row, 2, "expected_event_count")):
-                raise ProjectionGenerationConflict("rebuild source high watermark or completeness is not satisfied")
+            cursor.execute(
+                "SELECT source_offset FROM qd_projection_generation_events "
+                "WHERE generation_id = %s ORDER BY source_offset FOR UPDATE",
+                (persisted.generation_id,),
+            )
+            offsets = [int(_row(row, 0, "source_offset")) for row in cursor.fetchall()]
+            event_count = len(offsets)
+            first_offset = offsets[0] if offsets else -1
+            last_offset = offsets[-1] if offsets else -1
+            distinct_offset_count = len(set(offsets))
+            contiguous = offsets == list(range(event_count))
+            if not (
+                event_count == persisted.expected_event_count == persisted.applied_event_count
+                and event_count == distinct_offset_count
+                and first_offset == 0
+                and last_offset == persisted.source_high_watermark == persisted.processed_high_watermark
+                and contiguous
+            ):
+                raise ProjectionGenerationConflict(
+                    "rebuild event count, contiguous offsets, and exact high watermark are required"
+                )
             cursor.execute(
                 "UPDATE qd_projection_generations SET state = 'READY', completed_at = %s WHERE id = %s",
-                (now_utc, generation.generation_id),
+                (now_utc, persisted.generation_id),
             )
-            return ProjectionGeneration(
-                generation.generation_id, generation.consumer_name,
-                generation.build_fingerprint, generation.source_high_watermark, "READY",
-                int(_row(row, 2, "expected_event_count")), int(_row(row, 3, "applied_event_count")),
-                int(_row(row, 1, "processed_high_watermark")), bool(_row(row, 4, "is_current")),
-            )
+            return self._load_generation(cursor, persisted, required_state="READY")
         finally:
             cursor.close()
 
@@ -416,14 +450,12 @@ class OutboxProjectionRepository:
         reason = _text(failure_reason, "failure_reason", max_length=512)
         cursor = connection.cursor()
         try:
+            persisted = self._load_generation(cursor, generation, required_state="BUILDING")
             cursor.execute(
-                """UPDATE qd_projection_generations SET state = 'FAILED', failure_reason = %s
-                     WHERE id = %s AND consumer_name = %s AND state = 'BUILDING' RETURNING id""",
-                (reason, generation.generation_id, generation.consumer_name),
+                "UPDATE qd_projection_generations SET state = 'FAILED', failure_reason = %s WHERE id = %s",
+                (reason, persisted.generation_id),
             )
-            if cursor.fetchone() is None:
-                raise ProjectionGenerationConflict("only a BUILDING generation may fail")
-            return ProjectionGeneration(generation.generation_id, generation.consumer_name, generation.build_fingerprint, generation.source_high_watermark, "FAILED", generation.expected_event_count, generation.applied_event_count, generation.processed_high_watermark, False)
+            return self._load_generation(cursor, persisted, required_state="FAILED")
         finally:
             cursor.close()
 
@@ -431,20 +463,105 @@ class OutboxProjectionRepository:
         now_utc = _zero_utc(now_utc, "now_utc")
         cursor = connection.cursor()
         try:
-            cursor.execute("SELECT id FROM qd_projection_generations WHERE id = %s AND consumer_name = %s AND state = 'READY' FOR UPDATE", (generation.generation_id, generation.consumer_name))
-            if cursor.fetchone() is None:
-                raise ProjectionGenerationConflict("only a complete READY generation may be promoted")
-            cursor.execute("UPDATE qd_projection_generations SET is_current = FALSE WHERE consumer_name = %s AND is_current", (generation.consumer_name,))
-            cursor.execute("UPDATE qd_projection_generations SET is_current = TRUE, promoted_at = %s WHERE id = %s", (now_utc, generation.generation_id))
-            return ProjectionGeneration(generation.generation_id, generation.consumer_name, generation.build_fingerprint, generation.source_high_watermark, "READY", generation.expected_event_count, generation.applied_event_count, generation.processed_high_watermark, True)
+            persisted = self._load_generation(cursor, generation, required_state="READY")
+            cursor.execute("UPDATE qd_projection_generations SET is_current = FALSE WHERE consumer_name = %s AND is_current", (persisted.consumer_name,))
+            cursor.execute("UPDATE qd_projection_generations SET is_current = TRUE, promoted_at = %s WHERE id = %s", (now_utc, persisted.generation_id))
+            return self._load_generation(cursor, persisted, required_state="READY")
         finally:
             cursor.close()
 
     def _load_generation_for_apply(self, cursor: Cursor, generation_id: str, consumer_name: str) -> None:
         cursor.execute("SELECT state FROM qd_projection_generations WHERE id = %s AND consumer_name = %s FOR UPDATE", (generation_id, consumer_name))
         row = cursor.fetchone()
-        if row is None or str(_row(row, 0, "state")) not in ("BUILDING", "READY"):
-            raise ProjectionRepositoryConflict("projection generation is absent or not writable")
+        if row is None or str(_row(row, 0, "state")) != "BUILDING":
+            raise ProjectionRepositoryConflict("only a BUILDING generation may accept source events")
+
+    def _load_generation(
+        self,
+        cursor: Cursor,
+        generation: ProjectionGeneration,
+        *,
+        required_state: str,
+    ) -> ProjectionGeneration:
+        """Lock the canonical generation identity and discard caller-provided counters."""
+
+        cursor.execute(
+            """
+            SELECT id, consumer_name, build_fingerprint, source_high_watermark,
+                   state, expected_event_count, applied_event_count,
+                   processed_high_watermark, is_current
+              FROM qd_projection_generations
+             WHERE id = %s AND consumer_name = %s AND build_fingerprint = %s
+               AND state = %s
+             FOR UPDATE
+            """,
+            (
+                generation.generation_id, generation.consumer_name,
+                generation.build_fingerprint, required_state,
+            ),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise ProjectionGenerationConflict(
+                f"generation identity is absent or not {required_state}"
+            )
+        return _generation_from_row(row)
+
+    def _record_generation_event(
+        self,
+        cursor: Cursor,
+        *,
+        generation_id: str,
+        source_offset: int,
+        event: OutboxEvent,
+        applied_at: datetime,
+    ) -> bool:
+        """Append one immutable source application or classify its exact replay."""
+
+        cursor.execute(
+            """
+            INSERT INTO qd_projection_generation_events (
+                generation_id, source_offset, event_id, payload_hash, applied_at
+            ) VALUES (%s,%s,%s,%s,%s)
+            ON CONFLICT DO NOTHING
+            RETURNING generation_id
+            """,
+            (generation_id, source_offset, event.event_id, event.payload_hash, applied_at),
+        )
+        if cursor.fetchone() is not None:
+            return True
+        if self._generation_event_matches(
+            cursor, generation_id=generation_id, source_offset=source_offset, event=event,
+        ):
+            return False
+        raise ProjectionGenerationConflict(
+            "generation source offset or event identity names different immutable facts"
+        )
+
+    def _generation_event_matches(
+        self,
+        cursor: Cursor,
+        *,
+        generation_id: str,
+        source_offset: int,
+        event: OutboxEvent,
+    ) -> bool:
+        cursor.execute(
+            """
+            SELECT source_offset, event_id, payload_hash
+              FROM qd_projection_generation_events
+             WHERE generation_id = %s AND (source_offset = %s OR event_id = %s)
+             ORDER BY source_offset
+             FOR UPDATE
+            """,
+            (generation_id, source_offset, event.event_id),
+        )
+        rows = cursor.fetchall()
+        return len(rows) == 1 and (
+            int(_row(rows[0], 0, "source_offset")),
+            str(_row(rows[0], 1, "event_id")),
+            str(_row(rows[0], 2, "payload_hash")),
+        ) == (source_offset, event.event_id, event.payload_hash)
 
     def _load_or_create_checkpoint(self, cursor: Cursor, generation_id: str, consumer_name: str, event: OutboxEvent) -> tuple[str, ProjectionCheckpoint]:
         checkpoint_id = str(uuid4())

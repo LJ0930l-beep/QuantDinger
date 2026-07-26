@@ -19,6 +19,7 @@ OutboxPersistDisposition = MODULES.OutboxPersistDisposition
 OutboxConflict = MODULES.OutboxConflict
 OutboxLeaseConflict = MODULES.OutboxLeaseConflict
 ProjectionGenerationConflict = MODULES.ProjectionGenerationConflict
+ProjectionGeneration = MODULES.ProjectionGeneration
 ProjectionGap = MODULES.ProjectionGap
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
@@ -145,22 +146,119 @@ class OutboxProjectionRepositoryPostgresTests(unittest.TestCase):
         fingerprint = "a" * 64
         started = self.repository.start_rebuild(
             self.connection, consumer_name="ledger-read-model",
-            build_fingerprint=fingerprint, source_high_watermark=7, expected_event_count=0,
+            build_fingerprint=fingerprint, source_high_watermark=7, expected_event_count=8,
         )
         replay = self.repository.start_rebuild(
             self.connection, consumer_name="ledger-read-model",
-            build_fingerprint=fingerprint, source_high_watermark=7, expected_event_count=0,
+            build_fingerprint=fingerprint, source_high_watermark=7, expected_event_count=8,
         )
         self.assertEqual(replay.generation_id, started.generation_id)
         with self.assertRaises(ProjectionGenerationConflict):
             self.repository.start_rebuild(
                 self.connection, consumer_name="ledger-read-model",
-                build_fingerprint=fingerprint, source_high_watermark=8, expected_event_count=0,
+                build_fingerprint=fingerprint, source_high_watermark=8, expected_event_count=9,
             )
-        self.assertEqual(
-            self.repository.fail_rebuild(self.connection, started, failure_reason="source replay unavailable").state,
-            "FAILED",
+        failed = self.repository.fail_rebuild(
+            self.connection,
+            ProjectionGeneration(
+                started.generation_id, started.consumer_name, started.build_fingerprint,
+                999, "BUILDING", 999, 999, 999, True,
+            ),
+            failure_reason="source replay unavailable",
         )
+        self.assertEqual(failed.state, "FAILED")
+        self.assertEqual((failed.source_high_watermark, failed.expected_event_count), (7, 8))
+
+    def test_generation_event_identity_and_offset_conflicts_fail_closed(self):
+        first = self._event(0)
+        other = self._event(0)
+        self.repository.persist_event(self.connection, first, available_at=NOW)
+        self.repository.persist_event(self.connection, other, available_at=NOW)
+        generation = self.repository.start_rebuild(
+            self.connection, consumer_name="generation-fact-reader",
+            build_fingerprint="c" * 64, source_high_watermark=1, expected_event_count=2,
+        )
+        supported = {("FILL_APPLIED", "v1")}
+        self.repository.apply_to_projection(
+            self.connection, consumer_name="generation-fact-reader", event=first,
+            supported_schemas=supported, now_utc=NOW, generation_id=generation.generation_id,
+            source_offset=0,
+        )
+        with self.assertRaises(ProjectionGenerationConflict):
+            self.repository.apply_to_projection(
+                self.connection, consumer_name="generation-fact-reader", event=other,
+                supported_schemas=supported, now_utc=NOW, generation_id=generation.generation_id,
+                source_offset=0,
+            )
+        with self.assertRaises(ProjectionGenerationConflict):
+            self.repository.apply_to_projection(
+                self.connection, consumer_name="generation-fact-reader", event=first,
+                supported_schemas=supported, now_utc=NOW, generation_id=generation.generation_id,
+                source_offset=1,
+            )
+
+    def test_complete_rebuild_rejects_offset_gap_and_event_fact_tampering(self):
+        import psycopg2
+
+        first, last = self._event(0), self._event(0)
+        self.repository.persist_event(self.connection, first, available_at=NOW)
+        self.repository.persist_event(self.connection, last, available_at=NOW)
+        generation = self.repository.start_rebuild(
+            self.connection, consumer_name="gap-reader",
+            build_fingerprint="d" * 64, source_high_watermark=2, expected_event_count=3,
+        )
+        supported = {("FILL_APPLIED", "v1")}
+        for event, offset in ((first, 0), (last, 2)):
+            self.repository.apply_to_projection(
+                self.connection, consumer_name="gap-reader", event=event,
+                supported_schemas=supported, now_utc=NOW, generation_id=generation.generation_id,
+                source_offset=offset,
+            )
+        with self.assertRaises(ProjectionGenerationConflict):
+            self.repository.complete_rebuild(self.connection, generation, now_utc=NOW)
+        with self.connection.cursor() as cursor:
+            cursor.execute("SAVEPOINT generation_event_immutable")
+            try:
+                with self.assertRaises(psycopg2.Error):
+                    cursor.execute(
+                        "UPDATE qd_projection_generation_events SET payload_hash = %s "
+                        "WHERE generation_id = %s AND source_offset = 0",
+                        ("0" * 64, generation.generation_id),
+                    )
+                cursor.execute("ROLLBACK TO SAVEPOINT generation_event_immutable")
+                with self.assertRaises(psycopg2.Error):
+                    cursor.execute(
+                        "DELETE FROM qd_projection_generation_events "
+                        "WHERE generation_id = %s AND source_offset = 0",
+                        (generation.generation_id,),
+                    )
+            finally:
+                cursor.execute("ROLLBACK TO SAVEPOINT generation_event_immutable")
+                cursor.execute("RELEASE SAVEPOINT generation_event_immutable")
+
+    def test_completion_and_failure_reload_database_generation_facts(self):
+        event = self._event(0)
+        self.repository.persist_event(self.connection, event, available_at=NOW)
+        generation = self.repository.start_rebuild(
+            self.connection, consumer_name="forged-reader",
+            build_fingerprint="e" * 64, source_high_watermark=0, expected_event_count=1,
+        )
+        self.repository.apply_to_projection(
+            self.connection, consumer_name="forged-reader", event=event,
+            supported_schemas={("FILL_APPLIED", "v1")}, now_utc=NOW,
+            generation_id=generation.generation_id, source_offset=0,
+        )
+        forged = ProjectionGeneration(
+            generation.generation_id, generation.consumer_name, generation.build_fingerprint,
+            999, "BUILDING", 999, 999, 999, True,
+        )
+        ready = self.repository.complete_rebuild(self.connection, forged, now_utc=NOW)
+        self.assertEqual((ready.source_high_watermark, ready.expected_event_count, ready.applied_event_count), (0, 1, 1))
+        promoted = self.repository.promote_rebuild(self.connection, forged.__class__(
+            ready.generation_id, ready.consumer_name, ready.build_fingerprint, 999,
+            "READY", 999, 999, 999, False,
+        ), now_utc=NOW)
+        self.assertTrue(promoted.is_current)
 
     def test_two_connections_create_one_event_and_one_replay(self):
         import psycopg2
