@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import threading
 import unittest
+from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -71,15 +73,24 @@ class RiskEnforcementRepositoryPostgresTests(unittest.TestCase):
 
     def _facts(self, graph):
         command_id, economic_order_id, tenant_id, credential_id = graph
-        scope = enforcement.RiskEnforcementScope(command_id, economic_order_id, tenant_id, credential_id, "account-a", "BTCUSDT", "swap", contracts.OrderAction.OPEN, contracts.Actor.STRATEGY)
+        scope = enforcement.RiskEnforcementScope(
+            command_id, economic_order_id, tenant_id, credential_id, "account-a", "BTCUSDT", "swap",
+            contracts.OrderAction.OPEN, contracts.Actor.STRATEGY, "risk-test", "risk-correlation",
+        )
         policy = risk.RiskLimitPolicy("policy-1", "USDT", decimal.QuoteAmount("1000"), decimal.QuoteAmount("800"), decimal.QuoteAmount("900"), "5", decimal.QuoteAmount("10"), decimal.QuoteAmount("100"), "0.50")
         exposure = risk.RiskExposureSnapshot("account-a", "BTCUSDT", "USDT", "100", "100", "100", "900", "1000", "1000", "0", contracts.ReconciliationHealth.HEALTHY, risk.MarketDataHealth.FRESH, True)
         request = risk.HardRiskRequest(contracts.OrderAction.OPEN, contracts.Actor.STRATEGY, None, "10", "10", "10", "2")
         disabled = risk.KillSwitchState(0, False)
         evaluated = risk.evaluate_hard_risk(policy=policy, snapshot=exposure, request=request, kill_switches=risk.KillSwitchSnapshot(disabled, disabled, disabled))
         policy_fact = enforcement.RiskPolicySnapshotFact(str(uuid4()), scope, policy)
-        input_fact = enforcement.RiskInputSnapshotFact(str(uuid4()), scope, "input-1", exposure)
-        decision = enforcement.RiskDecisionFact(str(uuid4()), scope, policy_fact, input_fact, evaluated)
+        now_utc = datetime(2026, 7, 26, tzinfo=timezone.utc)
+        input_fact = enforcement.RiskInputSnapshotFact(
+            str(uuid4()), scope, "input-1", exposure,
+            risk.KillSwitchSnapshot(disabled, disabled, disabled), now_utc, now_utc,
+        )
+        decision = enforcement.RiskDecisionFact(
+            str(uuid4()), scope, policy_fact, input_fact, evaluated, now_utc, now_utc,
+        )
         reservation = enforcement.build_risk_reservation_fact(reservation_id=str(uuid4()), decision=decision, request=request, reservation_kind="OPEN_CAPACITY")
         return policy_fact, input_fact, decision, reservation
 
@@ -126,6 +137,97 @@ class RiskEnforcementRepositoryPostgresTests(unittest.TestCase):
             with connection.cursor() as cursor:
                 cursor.execute("SELECT COUNT(*) FROM qd_risk_decisions WHERE id = %s", (facts[2].decision_id,))
                 self.assertEqual(cursor.fetchone()[0], 0)
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_exact_reservation_replay_and_conflicts_compare_full_demand(self):
+        facts = self._facts(self._graph())
+        connection = __import__("psycopg2").connect(os.environ["DATABASE_URL"])
+        try:
+            writer = repository.RiskEnforcementRepository()
+            created = writer.persist(
+                connection, policy_snapshot=facts[0], input_snapshot=facts[1],
+                decision=facts[2], reservation=facts[3],
+            )
+            connection.commit()
+            self.assertEqual(created.disposition, repository.RiskEnforcementDisposition.CREATED)
+            replay = writer.persist(
+                connection, policy_snapshot=facts[0], input_snapshot=facts[1],
+                decision=facts[2], reservation=facts[3],
+            )
+            self.assertEqual(replay.disposition, repository.RiskEnforcementDisposition.REPLAYED)
+            changed_demand = replace(
+                facts[3].demand,
+                gross_notional=decimal.QuoteAmount("11"),
+            )
+            with self.assertRaises(repository.RiskEnforcementConflict):
+                writer.persist(
+                    connection, policy_snapshot=facts[0], input_snapshot=facts[1], decision=facts[2],
+                    reservation=enforcement.RiskReservationFact(
+                        facts[3].reservation_id, facts[2], changed_demand, facts[3].reservation_kind,
+                    ),
+                )
+            connection.rollback()
+            other_id = str(uuid4())
+            other_reservation = enforcement.RiskReservationFact(
+                other_id, facts[2], replace(facts[3].demand, reservation_id=other_id), facts[3].reservation_kind,
+            )
+            with self.assertRaises(repository.RiskEnforcementConflict):
+                writer.persist(
+                    connection, policy_snapshot=facts[0], input_snapshot=facts[1], decision=facts[2],
+                    reservation=other_reservation,
+                )
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_database_error_is_typed_and_caller_rollback_leaves_no_partial_graph(self):
+        import psycopg2
+
+        facts = self._facts(self._graph())
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "CREATE FUNCTION pg_temp.fail_risk_decision_insert() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                    "BEGIN RAISE EXCEPTION 'injected risk decision failure'; END; $$"
+                )
+                cursor.execute(
+                    "CREATE TRIGGER pr10_injected_risk_decision_failure BEFORE INSERT ON qd_risk_decisions "
+                    "FOR EACH ROW EXECUTE FUNCTION pg_temp.fail_risk_decision_insert()"
+                )
+            with self.assertRaises(repository.RiskEnforcementRepositoryError) as failure:
+                repository.RiskEnforcementRepository().persist(
+                    connection, policy_snapshot=facts[0], input_snapshot=facts[1],
+                    decision=facts[2], reservation=facts[3],
+                )
+            self.assertIsInstance(failure.exception.__cause__, psycopg2.Error)
+            connection.rollback()
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM qd_risk_policy_snapshots WHERE id = %s", (facts[0].snapshot_id,))
+                self.assertEqual(cursor.fetchone()[0], 0)
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_enforcement_reservation_demand_is_immutable_in_postgres(self):
+        import psycopg2
+
+        facts = self._facts(self._graph())
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            repository.RiskEnforcementRepository().persist(
+                connection, policy_snapshot=facts[0], input_snapshot=facts[1],
+                decision=facts[2], reservation=facts[3],
+            )
+            connection.commit()
+            with connection.cursor() as cursor:
+                with self.assertRaises(psycopg2.Error):
+                    cursor.execute(
+                        "UPDATE qd_risk_reservations SET reserved_gross_notional = '99' WHERE id = %s",
+                        (facts[3].reservation_id,),
+                    )
         finally:
             connection.rollback()
             connection.close()

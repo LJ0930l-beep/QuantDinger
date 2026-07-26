@@ -308,7 +308,7 @@ class RiskEnforcementRepository:
                 instrument_id, market_type, action, policy_snapshot_id,
                 risk_input_snapshot_id, enforcement_contract_version,
                 reserved_gross_notional, reserved_net_notional, reserved_instrument_notional, correlation_id
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s::jsonb,%s,'ACTIVE',%s,0,%s,%s,%s,%s,%s,%s,'hard-risk-enforcement-v1',%s,%s,%s,%s,%s)
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,%s::jsonb,%s,'ACTIVE',%s,0,%s,%s,%s,%s,%s,%s,'hard-risk-enforcement-v1',%s,%s,%s,%s)
             ON CONFLICT DO NOTHING RETURNING id
             """,
             (fact.reservation_id, scope.command_id, scope.economic_order_id, scope.tenant_id,
@@ -325,7 +325,9 @@ class RiskEnforcementRepository:
             """
             SELECT id, decision_id, command_id, economic_order_id, tenant_id,
                    credential_id, account_scope, reservation_kind, currency,
-                   reserved_notional, reserved_margin, risk_input_hash, state
+                   reserved_notional, reserved_margin, risk_input_hash, state,
+                   reserved_gross_notional, reserved_net_notional,
+                   reserved_instrument_notional, correlation_id
               FROM qd_risk_reservations
              WHERE id = %s
                 OR (command_id = %s AND reservation_kind = %s AND state = 'ACTIVE')
@@ -344,12 +346,18 @@ class RiskEnforcementRepository:
             _row(row, 7, "reservation_kind"), _row(row, 8, "currency"),
             str(_row(row, 9, "reserved_notional")), str(_row(row, 10, "reserved_margin")),
             _row(row, 11, "risk_input_hash"), _row(row, 12, "state"),
+            str(_row(row, 13, "reserved_gross_notional")),
+            str(_row(row, 14, "reserved_net_notional")),
+            str(_row(row, 15, "reserved_instrument_notional")),
+            _row(row, 16, "correlation_id"),
         )
         expected = (
             fact.reservation_id, decision.decision_id, scope.command_id, scope.economic_order_id,
             scope.tenant_id, scope.credential_id, scope.account_scope, fact.reservation_kind,
             demand.valuation_currency, str(demand.gross_notional), str(demand.margin),
             decision.input_snapshot.input_hash, "ACTIVE",
+            str(demand.gross_notional), str(demand.net_notional),
+            str(demand.instrument_notional), scope.correlation_id,
         )
         if observed != expected:
             raise RiskEnforcementConflict("reservation identity names different immutable facts")
