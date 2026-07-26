@@ -28,6 +28,7 @@ def load_pr11_contracts() -> SimpleNamespace:
         "app.domain",
         "app.domain.order_contracts",
         "app.domain.canonical_entry_contracts",
+        "app.domain.canonical_entry_adapters",
     )
     original = {name: sys.modules.get(name, _MISSING) for name in names}
     try:
@@ -41,7 +42,11 @@ def load_pr11_contracts() -> SimpleNamespace:
             "app.domain.canonical_entry_contracts",
             app_dir / "domain" / "canonical_entry_contracts.py",
         )
-        return SimpleNamespace(order=order, entry=entry)
+        adapters = _load(
+            "app.domain.canonical_entry_adapters",
+            app_dir / "domain" / "canonical_entry_adapters.py",
+        )
+        return SimpleNamespace(order=order, entry=entry, adapters=adapters)
     finally:
         for name in reversed(names):
             previous = original[name]

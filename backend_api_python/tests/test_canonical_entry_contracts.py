@@ -9,6 +9,7 @@ from tests.pr11_contract_loader import load_pr11_contracts
 modules = load_pr11_contracts()
 o = modules.order
 e = modules.entry
+a = modules.adapters
 
 
 def entry_request(**changes):
@@ -98,6 +99,53 @@ class CanonicalEntryContractTests(unittest.TestCase):
         self.assertEqual(rejected.rejection, e.EntryRejection.UNSAFE_MODE)
         with self.assertRaises(e.EntryContractError):
             e.CanonicalCommandDraft(request, rejection=e.EntryRejection.UNSAFE_MODE)
+
+    def test_source_adapters_own_actor_source_and_mode_boundary(self):
+        facts = {
+            "tenant_id": 1,
+            "credential_id": 2,
+            "account_scope": "primary",
+            "instrument_id": "BTCUSDT",
+            "market_type": "swap",
+            "action": o.OrderAction.OPEN,
+            "idempotency_key": "case-1",
+            "correlation_id": "corr-1",
+            "occurred_at": datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc),
+        }
+        rest = a.adapt_rest("human-42", **facts)
+        agent = a.adapt_agent("agent-42", **facts)
+        paper_agent = a.adapt_agent("agent-42", mode=e.EntryMode.PAPER, **facts)
+        self.assertEqual(rest.request.actor.entry_source, e.EntrySource.REST)
+        self.assertEqual(agent.request.mode, e.EntryMode.DISABLED)
+        self.assertEqual(paper_agent.request.mode, e.EntryMode.PAPER)
+        with self.assertRaises(a.EntryAdapterError):
+            a.adapt_rest("human-42", actor=rest.request.actor, **facts)
+
+    def test_protection_adapter_preserves_risk_reducing_boundary(self):
+        facts = {
+            "tenant_id": 1,
+            "credential_id": 2,
+            "account_scope": "primary",
+            "instrument_id": "BTCUSDT",
+            "market_type": "swap",
+            "idempotency_key": "case-1",
+            "correlation_id": "corr-1",
+            "occurred_at": datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc),
+        }
+        draft = a.adapt_protection(
+            "protect-1",
+            action=o.OrderAction.EMERGENCY_CLOSE,
+            risk_effect=o.RiskEffect.REDUCE_RISK,
+            **facts,
+        )
+        self.assertEqual(draft.request.actor.entry_source, e.EntrySource.PROTECTION)
+        with self.assertRaises(e.EntryContractError):
+            a.adapt_protection(
+                "protect-1",
+                action=o.OrderAction.OPEN,
+                risk_effect=o.RiskEffect.INCREASE_RISK,
+                **facts,
+            )
 
 
 if __name__ == "__main__":
