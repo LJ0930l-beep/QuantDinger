@@ -25,7 +25,8 @@ def load_pr10_contracts() -> SimpleNamespace:
     app_dir = Path(__file__).resolve().parents[1] / "app"
     names = (
         "app", "app.domain", "app.domain.decimal_values", "app.domain.order_contracts",
-        "app.domain.hard_risk_contracts",
+        "app.domain.hard_risk_contracts", "app.domain.risk_enforcement_contracts",
+        "app.services", "app.services.risk_enforcement_repository",
     )
     original = {name: sys.modules.get(name, _MISSING) for name in names}
     try:
@@ -33,11 +34,15 @@ def load_pr10_contracts() -> SimpleNamespace:
         app.__path__ = [str(app_dir)]
         domain = ModuleType("app.domain")
         domain.__path__ = [str(app_dir / "domain")]
-        sys.modules.update({"app": app, "app.domain": domain})
+        services = ModuleType("app.services")
+        services.__path__ = [str(app_dir / "services")]
+        sys.modules.update({"app": app, "app.domain": domain, "app.services": services})
         decimal = _load("app.domain.decimal_values", app_dir / "domain" / "decimal_values.py")
         contracts = _load("app.domain.order_contracts", app_dir / "domain" / "order_contracts.py")
         hard_risk = _load("app.domain.hard_risk_contracts", app_dir / "domain" / "hard_risk_contracts.py")
-        return SimpleNamespace(decimal=decimal, contracts=contracts, hard_risk=hard_risk)
+        enforcement = _load("app.domain.risk_enforcement_contracts", app_dir / "domain" / "risk_enforcement_contracts.py")
+        repository = _load("app.services.risk_enforcement_repository", app_dir / "services" / "risk_enforcement_repository.py")
+        return SimpleNamespace(decimal=decimal, contracts=contracts, hard_risk=hard_risk, enforcement=enforcement, repository=repository)
     finally:
         for name in reversed(names):
             previous = original[name]
