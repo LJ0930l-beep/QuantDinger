@@ -40,6 +40,7 @@ EXPECTED_TABLES = {
     "qd_transactional_outbox",
     "qd_projection_checkpoints",
     "qd_projection_generations",
+    "qd_projection_generation_events",
     "qd_consumer_inbox",
     "qd_projection_snapshots",
     "qd_venue_capability_snapshots",
@@ -149,7 +150,7 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
         migration = WAVE2_MIGRATION.read_text(encoding="utf-8")
         for table in (
             "qd_risk_policy_snapshots", "qd_risk_input_snapshots", "qd_risk_decisions",
-            "qd_projection_checkpoints", "qd_projection_generations",
+            "qd_projection_checkpoints", "qd_projection_generations", "qd_projection_generation_events",
         ):
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
         for fragment in (
@@ -172,6 +173,8 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "lease_fencing_token BIGINT NOT NULL DEFAULT 0",
             "qd_guard_risk_reservation_enforcement_update",
             "uq_qd_projection_generations_current_consumer",
+            "UNIQUE(generation_id, event_id)",
+            "qd_reject_projection_generation_event_mutation",
         ):
             self.assertIn(fragment, migration)
         self.assertNotIn("ON DELETE CASCADE", migration)
