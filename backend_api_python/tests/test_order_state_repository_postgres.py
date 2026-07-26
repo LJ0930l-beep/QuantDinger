@@ -225,8 +225,9 @@ class OrderStateRepositoryPostgresTests(unittest.TestCase):
         import psycopg2
         graph = self._setup_recovery_graph(client_query_authoritative=False)
         result = self._apply_recovery(self._decision(graph, str(uuid.uuid4())))
-        self.assertEqual("RECONCILIATION_REQUIRED", result.disposition.value)
+        self.assertEqual("APPLIED", result.disposition.value)
         self.assertIsNotNone(result.order_event); self.assertIsNone(result.attempt_event)
+        self.assertEqual("RECONCILIATION_REQUIRED", result.order_event.resulting_state)
         connection = psycopg2.connect(os.environ["DATABASE_URL"])
         try:
             with connection.cursor() as cursor:
