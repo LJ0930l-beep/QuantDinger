@@ -73,15 +73,19 @@ class OrderStateRepositoryPostgresTests(unittest.TestCase):
         connection = psycopg2.connect(os.environ["DATABASE_URL"]); connection.autocommit = False
         cursor = connection.cursor()
         capability_id, policy_id, attempt_id, exchange_pk = (str(uuid.uuid4()) for _ in range(4))
+        capability_version = f"cap-{graph['economic_order_id']}"
+        policy_version = f"policy-{graph['economic_order_id']}"
+        profile_hash = f"profile-{graph['economic_order_id']}"
+        policy_hash = f"policy-hash-{graph['economic_order_id']}"
         cursor.execute("""INSERT INTO qd_venue_capability_snapshots
             (id,exchange,market_type,capability_version,profile_hash,accepts_external_client_order_id,
              can_generate_safe_client_order_id,query_by_exchange_order_id,query_by_client_order_id,list_order_fills,stable_fill_id)
-            VALUES (%s,'schema-test','spot','cap-v1','profile',true,true,true,true,true,true)""", (capability_id,))
+            VALUES (%s,'schema-test','spot',%s,%s,true,true,true,true,true,true)""", (capability_id, capability_version, profile_hash))
         cursor.execute("""INSERT INTO qd_submission_recovery_policy_snapshots
             (id,exchange,market_type,policy_version,policy_hash,capability_snapshot_id,capability_query_by_client_order_id,
              client_id_query_authoritative,order_history_authoritative,fill_history_authoritative,not_found_min_query_count,
              not_found_grace_seconds,not_found_action)
-            VALUES (%s,'schema-test','spot','policy-v1','policy',%s,true,true,true,true,1,0,'KEEP_UNKNOWN')""", (policy_id, capability_id))
+            VALUES (%s,'schema-test','spot',%s,%s,%s,true,true,true,true,1,0,'KEEP_UNKNOWN')""", (policy_id, policy_version, policy_hash, capability_id))
         cursor.execute("""INSERT INTO qd_submission_attempts
             (id,economic_order_id,exchange,tenant_id,credential_id,account_scope,instrument_id,market_type,child_seq,attempt_no,
              role,canonical_client_order_id,venue_client_order_id,request_fingerprint,state,venue_capability_snapshot_id,
@@ -95,7 +99,8 @@ class OrderStateRepositoryPostgresTests(unittest.TestCase):
             VALUES (%s,%s,%s,'PRIMARY','schema-test',%s,%s,'spot','account-a','BTC-USDT','exchange-1','venue-1','SUBMITTED','1')""",
                        (exchange_pk, attempt_id, graph["economic_order_id"], graph["user_id"], graph["credential_id"]))
         connection.commit(); cursor.close(); connection.close()
-        return {**graph, "capability_id": capability_id, "policy_id": policy_id, "attempt_id": attempt_id, "exchange_pk": exchange_pk}
+        return {**graph, "capability_id": capability_id, "policy_id": policy_id, "attempt_id": attempt_id, "exchange_pk": exchange_pk,
+                "capability_version": capability_version, "profile_hash": profile_hash, "policy_version": policy_version, "policy_hash": policy_hash}
 
     def _decision(self, graph, invocation, status=venue.OrderQueryStatus.FOUND, normalized="SUBMITTED"):
         scope = machine.EconomicOrderScope(graph["user_id"], graph["credential_id"], "account-a", "BTC-USDT", "spot")
@@ -103,10 +108,11 @@ class OrderStateRepositoryPostgresTests(unittest.TestCase):
         attempt_scope = machine.SubmissionAttemptScope(graph["user_id"], graph["credential_id"], "account-a", "BTC-USDT", "spot", graph["economic_order_id"], "schema-test")
         attempt = recovery.SubmissionAttemptRecoveryFact(graph["attempt_id"], attempt_scope, contracts.SubmissionAttemptState.UNKNOWN, 0, 0,
             graph["capability_id"], graph["policy_id"], "canonical-1", "venue-1", "v1", "norm-v1", "Q")
-        capability = recovery.VenueCapabilitySnapshotFact(graph["capability_id"], "schema-test", "spot", "cap-v1", "profile", True, True)
-        policy = recovery.RecoveryPolicySnapshotFact(graph["policy_id"], graph["capability_id"], "schema-test", "spot", "policy-v1", "policy", True, True, True, True, 1, 0)
+        capability = recovery.VenueCapabilitySnapshotFact(graph["capability_id"], "schema-test", "spot", graph["capability_version"], graph["profile_hash"], True, True)
+        policy = recovery.RecoveryPolicySnapshotFact(graph["policy_id"], graph["capability_id"], "schema-test", "spot", graph["policy_version"], graph["policy_hash"], True, True, True, True, 1, 0)
         exchange = recovery.ExchangeOrderRecoveryFact(graph["exchange_pk"], graph["attempt_id"], graph["economic_order_id"], "schema-test", graph["user_id"], graph["credential_id"], "spot", "account-a", "BTC-USDT", "exchange-1", "venue-1")
-        query = venue.NormalizedOrderQuery(status, venue.OrderQueryReference.CLIENT_ORDER_ID, "schema-test", "spot", "account-a", "BTC-USDT", "exchange-1", "venue-1", normalized, "RAW")
+        raw_state = "RAW" if status is venue.OrderQueryStatus.FOUND else ""
+        query = venue.NormalizedOrderQuery(status, venue.OrderQueryReference.CLIENT_ORDER_ID, "schema-test", "spot", "account-a", "BTC-USDT", "exchange-1", "venue-1", normalized, raw_state)
         return recovery.decide_submission_recovery(order=order, attempt=attempt, capability=capability, policy=policy,
             exchange_order=exchange, query=query, queried_at=datetime(2026,7,25,tzinfo=timezone.utc), correlation_id="pg-recovery", query_invocation_id=invocation)
 
