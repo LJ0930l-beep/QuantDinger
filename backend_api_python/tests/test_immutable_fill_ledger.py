@@ -43,7 +43,13 @@ def fill_identity(*, account_scope="account-a", fees=()):
     )
 
 
-def fill_input(*, side=ledger.FillSide.BUY, account_scope="account-a", include_fees=True):
+def fill_input(
+    *,
+    side=ledger.FillSide.BUY,
+    account_scope="account-a",
+    include_fees=True,
+    economic_order_id="00000000-0000-0000-0000-000000000001",
+):
     fees = ()
     if include_fees:
         fees = (
@@ -72,7 +78,7 @@ def fill_input(*, side=ledger.FillSide.BUY, account_scope="account-a", include_f
         )
     return ledger.FillLedgerInput(
         venue_fill=venue_fill,
-        economic_order_id="00000000-0000-0000-0000-000000000001",
+        economic_order_id=economic_order_id,
         side=side,
         assets=ledger.InstrumentAssetScope("BTC-USDT", "BTC", "USDT"),
         valuation_ccy="USDT",

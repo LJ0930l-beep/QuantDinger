@@ -62,8 +62,13 @@ class ImmutableFillLedgerPostgresTests(unittest.TestCase):
 
     def _persist(self, fill=None):
         return repository.ImmutableFillLedgerRepository().persist_fill_bundle(
-            self.connection, scope=_scope(self.graph), fill=fill or fill_input()
+            self.connection,
+            scope=_scope(self.graph),
+            fill=fill or fill_input(economic_order_id=self.graph["economic_order_id"]),
         )
+
+    def _fill(self, **changes):
+        return fill_input(economic_order_id=self.graph["economic_order_id"], **changes)
 
     def test_atomic_fill_fee_evidence_and_balanced_entries_commit_together(self):
         result = self._persist()
@@ -89,7 +94,7 @@ class ImmutableFillLedgerPostgresTests(unittest.TestCase):
         self.assertEqual(first.disposition, repository.FillLedgerCommitDisposition.APPLIED)
         self.assertEqual(replay.disposition, repository.FillLedgerCommitDisposition.REPLAYED)
         with self.assertRaises(repository.FillLedgerReplayConflict):
-            self._persist(fill_input(side=ledger.FillSide.SELL))
+            self._persist(self._fill(side=ledger.FillSide.SELL))
 
     def test_append_only_guards_reject_update_and_delete(self):
         result = self._persist()
@@ -204,7 +209,7 @@ class ImmutableFillLedgerPostgresTests(unittest.TestCase):
             def rollback(self):
                 database_connection.rollback()
 
-        fill = fill_input(account_scope="account-a")
+        fill = self._fill(account_scope="account-a")
         fill_key = fill.venue_fill.canonical_key
         with self.assertRaises(repository.ImmutableLedgerRepositoryError):
             repository.ImmutableFillLedgerRepository().persist_fill_bundle(
@@ -224,7 +229,9 @@ class ImmutableFillLedgerPostgresTests(unittest.TestCase):
                 connection.autocommit = False
                 barrier.wait(timeout=10)
                 return repository.ImmutableFillLedgerRepository().persist_fill_bundle(
-                    connection, scope=_scope(graph), fill=fill_input()
+                    connection,
+                    scope=_scope(graph),
+                    fill=fill_input(economic_order_id=graph["economic_order_id"]),
                 )
             finally:
                 connection.close()
@@ -237,7 +244,10 @@ class ImmutableFillLedgerPostgresTests(unittest.TestCase):
             {repository.FillLedgerCommitDisposition.APPLIED, repository.FillLedgerCommitDisposition.REPLAYED},
         )
         with self.connection.cursor() as cursor:
-            cursor.execute("SELECT count(*) FROM qd_exchange_fill_events WHERE dedupe_key = %s", (fill_input().venue_fill.canonical_key,))
+            cursor.execute(
+                "SELECT count(*) FROM qd_exchange_fill_events WHERE dedupe_key = %s",
+                (self._fill().venue_fill.canonical_key,),
+            )
             self.assertEqual(cursor.fetchone()[0], 1)
 
 
