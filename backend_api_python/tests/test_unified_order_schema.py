@@ -13,7 +13,8 @@ MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 MIGRATION = MIGRATIONS / "20260722_unified_order_expand_only.sql"
 PRECONDITION_MIGRATION = MIGRATIONS / "20260723_state_recovery_ledger_preconditions.sql"
 IMMUTABLE_LEDGER_MIGRATION = MIGRATIONS / "20260724_immutable_fill_ledger_guards.sql"
-INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION)
+WAVE2_MIGRATION = MIGRATIONS / "20260725_wave2_persistence_schema.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -22,6 +23,9 @@ EXPECTED_TABLES = {
     "qd_order_intents_v2",
     "qd_economic_orders",
     "qd_risk_reservations",
+    "qd_risk_policy_snapshots",
+    "qd_risk_input_snapshots",
+    "qd_risk_decisions",
     "qd_order_state_events",
     "qd_submission_attempts",
     "qd_exchange_orders",
@@ -34,6 +38,8 @@ EXPECTED_TABLES = {
     "qd_reconciliation_checkpoints",
     "qd_reconciliation_issues",
     "qd_transactional_outbox",
+    "qd_projection_checkpoints",
+    "qd_projection_generations",
     "qd_consumer_inbox",
     "qd_projection_snapshots",
     "qd_venue_capability_snapshots",
@@ -138,6 +144,24 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "qd_ledger_entries",
         ):
             self.assertIn(f"{table}_append_only", migration)
+
+    def test_wave2_schema_has_immutable_risk_facts_and_canonical_outbox_identity(self):
+        migration = WAVE2_MIGRATION.read_text(encoding="utf-8")
+        for table in (
+            "qd_risk_policy_snapshots", "qd_risk_input_snapshots", "qd_risk_decisions",
+            "qd_projection_checkpoints", "qd_projection_generations",
+        ):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
+        for fragment in (
+            "decision_fingerprint VARCHAR(64) NOT NULL",
+            "chk_qd_risk_reservations_enforcement_complete",
+            "fk_qd_risk_reservations_enforcement_decision",
+            "uq_qd_transactional_outbox_canonical_identity",
+            "lease_fencing_token BIGINT NOT NULL DEFAULT 0",
+            "qd_guard_risk_reservation_enforcement_update",
+        ):
+            self.assertIn(fragment, migration)
+        self.assertNotIn("ON DELETE CASCADE", migration)
 
     def test_init_sql_retains_representative_upstream_trading_tables(self):
         init_sql = INIT_SQL.read_text(encoding="utf-8")
