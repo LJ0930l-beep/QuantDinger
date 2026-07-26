@@ -6,12 +6,15 @@ from datetime import datetime, timezone
 import os
 import threading
 import unittest
+import uuid
 
 from tests.pr05_contract_loader import load_pr05_contracts
 from tests import test_unified_order_schema as schema_tests
 
 modules = load_pr05_contracts()
-contracts, machine, states = modules.contracts, modules.machine, modules.states
+contracts, machine, states, recovery, recovery_repo, venue = (
+    modules.contracts, modules.machine, modules.states, modules.recovery, modules.recovery_repo, modules.venue,
+)
 
 @unittest.skipUnless(os.getenv("DATABASE_URL"), "requires CI PostgreSQL DATABASE_URL")
 class OrderStateRepositoryPostgresTests(unittest.TestCase):
@@ -51,6 +54,71 @@ class OrderStateRepositoryPostgresTests(unittest.TestCase):
         self.assertTrue(all(not thread.is_alive() for thread in threads), "concurrency test timed out")
         return results, errors
 
+    def _concurrent_calls(self, first, second):
+        barrier, results, errors = threading.Barrier(2, timeout=10), [], []
+        def worker(call):
+            try:
+                barrier.wait(timeout=10)
+                results.append(call())
+            except Exception as exc:
+                errors.append(exc)
+        threads = [threading.Thread(target=worker, args=(call,), daemon=True) for call in (first, second)]
+        [thread.start() for thread in threads]; [thread.join(15) for thread in threads]
+        self.assertTrue(all(not thread.is_alive() for thread in threads), "concurrency test timed out")
+        return results, errors
+
+    def _setup_recovery_graph(self):
+        import psycopg2
+        graph = self._setup_graph()
+        connection = psycopg2.connect(os.environ["DATABASE_URL"]); connection.autocommit = False
+        cursor = connection.cursor()
+        capability_id, policy_id, attempt_id, exchange_pk = (str(uuid.uuid4()) for _ in range(4))
+        cursor.execute("""INSERT INTO qd_venue_capability_snapshots
+            (id,exchange,market_type,capability_version,profile_hash,accepts_external_client_order_id,
+             can_generate_safe_client_order_id,query_by_exchange_order_id,query_by_client_order_id,list_order_fills,stable_fill_id)
+            VALUES (%s,'schema-test','spot','cap-v1','profile',true,true,true,true,true,true)""", (capability_id,))
+        cursor.execute("""INSERT INTO qd_submission_recovery_policy_snapshots
+            (id,exchange,market_type,policy_version,policy_hash,capability_snapshot_id,capability_query_by_client_order_id,
+             client_id_query_authoritative,order_history_authoritative,fill_history_authoritative,not_found_min_query_count,
+             not_found_grace_seconds,not_found_action)
+            VALUES (%s,'schema-test','spot','policy-v1','policy',%s,true,true,true,true,1,0,'KEEP_UNKNOWN')""", (policy_id, capability_id))
+        cursor.execute("""INSERT INTO qd_submission_attempts
+            (id,economic_order_id,exchange,tenant_id,credential_id,account_scope,instrument_id,market_type,child_seq,attempt_no,
+             role,canonical_client_order_id,venue_client_order_id,request_fingerprint,state,venue_capability_snapshot_id,
+             recovery_policy_snapshot_id,client_id_algorithm_version,broker_prefix_normalization_version,broker_prefix,canonical_contract_version)
+            VALUES (%s,%s,'schema-test',%s,%s,'account-a','BTC-USDT','spot',1,1,'PRIMARY','canonical-1','venue-1',
+                    'attempt-recovery','UNKNOWN',%s,%s,'v1','norm-v1','Q','attempt-contract-v1')""",
+                       (attempt_id, graph["economic_order_id"], graph["user_id"], graph["credential_id"], capability_id, policy_id))
+        cursor.execute("""INSERT INTO qd_exchange_orders
+            (id,attempt_id,economic_order_id,child_role,exchange,tenant_id,credential_id,market_type,account_scope,instrument_id,
+             exchange_order_id,venue_client_order_id,normalized_state,requested_qty)
+            VALUES (%s,%s,%s,'PRIMARY','schema-test',%s,%s,'spot','account-a','BTC-USDT','exchange-1','venue-1','SUBMITTED','1')""",
+                       (exchange_pk, attempt_id, graph["economic_order_id"], graph["user_id"], graph["credential_id"]))
+        connection.commit(); cursor.close(); connection.close()
+        return {**graph, "capability_id": capability_id, "policy_id": policy_id, "attempt_id": attempt_id, "exchange_pk": exchange_pk}
+
+    def _decision(self, graph, invocation, status=venue.OrderQueryStatus.FOUND, normalized="SUBMITTED"):
+        scope = machine.EconomicOrderScope(graph["user_id"], graph["credential_id"], "account-a", "BTC-USDT", "spot")
+        order = recovery.EconomicOrderRecoveryFact(graph["economic_order_id"], scope, contracts.EconomicOrderState.SUBMISSION_UNKNOWN, 0, 0)
+        attempt_scope = machine.SubmissionAttemptScope(graph["user_id"], graph["credential_id"], "account-a", "BTC-USDT", "spot", graph["economic_order_id"], "schema-test")
+        attempt = recovery.SubmissionAttemptRecoveryFact(graph["attempt_id"], attempt_scope, contracts.SubmissionAttemptState.UNKNOWN, 0, 0,
+            graph["capability_id"], graph["policy_id"], "canonical-1", "venue-1", "v1", "norm-v1", "Q")
+        capability = recovery.VenueCapabilitySnapshotFact(graph["capability_id"], "schema-test", "spot", "cap-v1", "profile", True, True)
+        policy = recovery.RecoveryPolicySnapshotFact(graph["policy_id"], graph["capability_id"], "schema-test", "spot", "policy-v1", "policy", True, True, True, True, 1, 0)
+        exchange = recovery.ExchangeOrderRecoveryFact(graph["exchange_pk"], graph["attempt_id"], graph["economic_order_id"], "schema-test", graph["user_id"], graph["credential_id"], "spot", "account-a", "BTC-USDT", "exchange-1", "venue-1")
+        query = venue.NormalizedOrderQuery(status, venue.OrderQueryReference.CLIENT_ORDER_ID, "schema-test", "spot", "account-a", "BTC-USDT", "exchange-1", "venue-1", normalized, "RAW")
+        return recovery.decide_submission_recovery(order=order, attempt=attempt, capability=capability, policy=policy,
+            exchange_order=exchange, query=query, queried_at=datetime(2026,7,25,tzinfo=timezone.utc), correlation_id="pg-recovery", query_invocation_id=invocation)
+
+    @staticmethod
+    def _apply_recovery(decision):
+        import psycopg2
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            return recovery_repo.SubmissionRecoveryRepository().apply(connection, decision)
+        finally:
+            connection.close()
+
     def test_same_order_event_two_connections_apply_then_replay(self):
         graph = self._setup_graph(); event = self._transition(graph, "pg-event-1", {"case":"same"})
         results, errors = self._concurrent(graph, event, event)
@@ -63,5 +131,103 @@ class OrderStateRepositoryPostgresTests(unittest.TestCase):
                                            self._transition(graph, "pg-event-b", {"case":"b"}))
         self.assertEqual(1, len(results)); self.assertEqual("APPLIED", results[0].disposition.value)
         self.assertEqual(1, len(errors)); self.assertIsInstance(errors[0], machine.StateEventConflict)
+
+    def test_same_attempt_event_two_connections_apply_then_replay(self):
+        graph = self._setup_recovery_graph()
+        scope = machine.SubmissionAttemptScope(graph["user_id"], graph["credential_id"], "account-a", "BTC-USDT", "spot", graph["economic_order_id"], "schema-test")
+        event = machine.authorize_attempt_transition(aggregate_id=graph["attempt_id"], aggregate_scope=scope,
+            current_state=contracts.SubmissionAttemptState.UNKNOWN, target_state=contracts.SubmissionAttemptState.ACKED,
+            expected_version=0, cause=machine.TransitionCause.VENUE_OBSERVATION, actor=contracts.Actor.ADMIN,
+            reason_code="PG_TEST", correlation_id="pg-attempt", occurred_at=datetime(2026,7,25,tzinfo=timezone.utc),
+            evidence_hash="b"*64, canonical_payload={"case":"same-attempt"}, idempotency_key="pg-attempt-1")
+        results, errors = self._concurrent_calls(
+            lambda: self._apply_attempt(event), lambda: self._apply_attempt(event))
+        self.assertEqual([], errors); self.assertEqual(["APPLIED", "REPLAYED"], sorted(item.disposition.value for item in results))
+
+    def test_same_attempt_version_with_different_events_returns_typed_conflict(self):
+        graph = self._setup_recovery_graph()
+        scope = machine.SubmissionAttemptScope(graph["user_id"], graph["credential_id"], "account-a", "BTC-USDT", "spot", graph["economic_order_id"], "schema-test")
+        def event(key, payload):
+            return machine.authorize_attempt_transition(aggregate_id=graph["attempt_id"], aggregate_scope=scope,
+                current_state=contracts.SubmissionAttemptState.UNKNOWN, target_state=contracts.SubmissionAttemptState.ACKED,
+                expected_version=0, cause=machine.TransitionCause.VENUE_OBSERVATION, actor=contracts.Actor.ADMIN,
+                reason_code="PG_TEST", correlation_id="pg-attempt", occurred_at=datetime(2026,7,25,tzinfo=timezone.utc),
+                evidence_hash="b"*64, canonical_payload=payload, idempotency_key=key)
+        results, errors = self._concurrent_calls(
+            lambda: self._apply_attempt(event("pg-attempt-a", {"case":"a"})),
+            lambda: self._apply_attempt(event("pg-attempt-b", {"case":"b"})),
+        )
+        self.assertEqual(1, len(results)); self.assertEqual("APPLIED", results[0].disposition.value)
+        self.assertEqual(1, len(errors)); self.assertIsInstance(errors[0], machine.StateEventConflict)
+
+    @staticmethod
+    def _apply_attempt(event):
+        import psycopg2
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try: return states.OrderStateRepository().apply_attempt_transition(connection, event)
+        finally: connection.close()
+
+    def test_same_recovery_decision_two_connections_apply_then_replay(self):
+        graph = self._setup_recovery_graph(); decision = self._decision(graph, str(uuid.uuid4()))
+        results, errors = self._concurrent_calls(lambda: self._apply_recovery(decision), lambda: self._apply_recovery(decision))
+        self.assertEqual([], errors); self.assertEqual(["APPLIED", "REPLAYED"], sorted(item.disposition.value for item in results))
+
+    def test_same_invocation_with_different_observation_facts_keeps_one_observation(self):
+        import psycopg2
+        graph = self._setup_recovery_graph(); invocation = str(uuid.uuid4())
+        first = self._decision(graph, invocation, venue.OrderQueryStatus.NOT_FOUND, "")
+        second = self._decision(graph, invocation, venue.OrderQueryStatus.TEMPORARY_FAILURE, "")
+        results, errors = self._concurrent_calls(lambda: self._apply_recovery(first), lambda: self._apply_recovery(second))
+        self.assertEqual(1, len(results)); self.assertEqual("OBSERVATION_ONLY", results[0].disposition.value)
+        self.assertEqual(1, len(errors)); self.assertIsInstance(errors[0], machine.StateEventConflict)
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT count(*) FROM qd_exchange_order_observations WHERE attempt_id=%s", (graph["attempt_id"],))
+                self.assertEqual(1, cursor.fetchone()[0])
+        finally: connection.close()
+
+    def test_same_not_found_persistence_replay_does_not_append_again(self):
+        import psycopg2
+        graph = self._setup_recovery_graph(); decision = self._decision(graph, str(uuid.uuid4()), venue.OrderQueryStatus.NOT_FOUND, "")
+        self.assertEqual("OBSERVATION_ONLY", self._apply_recovery(decision).disposition.value)
+        self.assertEqual("REPLAYED", self._apply_recovery(decision).disposition.value)
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT count(*) FROM qd_exchange_order_observations WHERE attempt_id=%s", (graph["attempt_id"],))
+                self.assertEqual(1, cursor.fetchone()[0])
+        finally: connection.close()
+
+    def test_found_recovery_commits_observation_and_both_state_events_atomically(self):
+        import psycopg2
+        graph = self._setup_recovery_graph(); result = self._apply_recovery(self._decision(graph, str(uuid.uuid4())))
+        self.assertEqual("APPLIED", result.disposition.value)
+        self.assertEqual("APPLIED", result.order_event.disposition.value); self.assertEqual("APPLIED", result.attempt_event.disposition.value)
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            with connection.cursor() as cursor:
+                for table, column, identifier in (("qd_exchange_order_observations", "attempt_id", graph["attempt_id"]),
+                                                  ("qd_order_state_events", "economic_order_id", graph["economic_order_id"]),
+                                                  ("qd_submission_attempt_state_events", "attempt_id", graph["attempt_id"])):
+                    cursor.execute(f"SELECT count(*) FROM {table} WHERE {column}=%s", (identifier,))
+                    self.assertEqual(1, cursor.fetchone()[0])
+        finally: connection.close()
+
+    def test_distinct_not_found_invocations_append_two_observations_without_state_change(self):
+        import psycopg2
+        graph = self._setup_recovery_graph()
+        first = self._decision(graph, str(uuid.uuid4()), venue.OrderQueryStatus.NOT_FOUND, "")
+        second = self._decision(graph, str(uuid.uuid4()), venue.OrderQueryStatus.NOT_FOUND, "")
+        self.assertEqual("OBSERVATION_ONLY", self._apply_recovery(first).disposition.value)
+        self.assertEqual("OBSERVATION_ONLY", self._apply_recovery(second).disposition.value)
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT count(*) FROM qd_exchange_order_observations WHERE attempt_id=%s", (graph["attempt_id"],))
+                self.assertEqual(2, cursor.fetchone()[0])
+                cursor.execute("SELECT state,version,last_event_seq FROM qd_economic_orders WHERE id=%s", (graph["economic_order_id"],))
+                self.assertEqual(("SUBMISSION_UNKNOWN", 0, 0), cursor.fetchone())
+        finally: connection.close()
 
 if __name__ == "__main__": unittest.main()

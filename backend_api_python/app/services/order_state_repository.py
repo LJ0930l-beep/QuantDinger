@@ -91,7 +91,7 @@ class OrderStateRepository:
         if row is None:
             raise StateEventConflict("economic order does not exist")
         state, version, sequence = self._aggregate_values(row)
-        replay = self._existing_order_event(cursor, transition)
+        replay = self._existing_order_event(cursor, transition, state, version, sequence)
         if replay is not None:
             return replay
         self._verify_aggregate(state, version, sequence, transition)
@@ -145,7 +145,7 @@ class OrderStateRepository:
             raise StateEventConflict("submission attempt does not exist")
         economic_order_id = str(_row_value(row, 0, "economic_order_id"))
         state, version, sequence = self._aggregate_values(row, offset=1)
-        replay = self._existing_attempt_event(cursor, transition)
+        replay = self._existing_attempt_event(cursor, transition, state, version, sequence)
         if replay is not None:
             return replay
         self._verify_aggregate(state, version, sequence, transition)
@@ -187,7 +187,7 @@ class OrderStateRepository:
             raise StateEventConflict("submission attempt CAS did not apply")
         return StateEventResult(transition.aggregate_id, str(_row_value(changed, 0, "state")), int(_row_value(changed, 1, "version")), StateEventDisposition.APPLIED)
 
-    def _existing_order_event(self, cursor: Cursor, transition: AuthorizedTransition) -> StateEventResult | None:
+    def _existing_order_event(self, cursor: Cursor, transition: AuthorizedTransition, state: str, version: int, sequence: int) -> StateEventResult | None:
         cursor.execute(
             """
             SELECT to_state, resulting_version, event_fingerprint, idempotency_key
@@ -202,9 +202,9 @@ class OrderStateRepository:
              transition.aggregate_scope.account_scope, transition.aggregate_scope.instrument_id, transition.aggregate_scope.market_type,
              transition.idempotency_key, transition.event_fingerprint),
         )
-        return self._replay_or_conflict(cursor.fetchone(), transition)
+        return self._replay_or_conflict(cursor.fetchone(), transition, state, version, sequence)
 
-    def _existing_attempt_event(self, cursor: Cursor, transition: AuthorizedTransition) -> StateEventResult | None:
+    def _existing_attempt_event(self, cursor: Cursor, transition: AuthorizedTransition, state: str, version: int, sequence: int) -> StateEventResult | None:
         cursor.execute(
             """
             SELECT to_state, resulting_version, event_fingerprint, idempotency_key
@@ -221,7 +221,7 @@ class OrderStateRepository:
              transition.aggregate_scope.instrument_id, transition.aggregate_scope.exchange, transition.aggregate_scope.market_type,
              transition.idempotency_key, transition.event_fingerprint),
         )
-        return self._replay_or_conflict(cursor.fetchone(), transition)
+        return self._replay_or_conflict(cursor.fetchone(), transition, state, version, sequence)
 
     @staticmethod
     def _aggregate_values(row: Any, offset: int = 0) -> tuple[str, int, int]:
@@ -235,17 +235,25 @@ class OrderStateRepository:
             raise StateEventConflict("aggregate state or version conflict")
 
     @staticmethod
-    def _replay_or_conflict(row: Any | None, transition: AuthorizedTransition) -> StateEventResult | None:
+    def _replay_or_conflict(row: Any | None, transition: AuthorizedTransition, state: str, version: int, sequence: int) -> StateEventResult | None:
         if row is None:
             return None
         fingerprint = str(_row_value(row, 2, "event_fingerprint"))
         idempotency_key = str(_row_value(row, 3, "idempotency_key"))
         if fingerprint != transition.event_fingerprint or idempotency_key != transition.idempotency_key:
             raise StateEventConflict("idempotency key has different immutable event facts")
+        resulting_version = int(_row_value(row, 1, "resulting_version"))
+        target_state = str(_row_value(row, 0, "to_state"))
+        if version != sequence:
+            raise StateEventConflict("aggregate version/sequence drift during replay")
+        if version < resulting_version:
+            raise StateEventConflict("aggregate version precedes replay event")
+        if version == resulting_version and state != target_state:
+            raise StateEventConflict("aggregate state conflicts with replay event target")
         return StateEventResult(
             transition.aggregate_id,
-            str(_row_value(row, 0, "to_state")),
-            int(_row_value(row, 1, "resulting_version")),
+            target_state,
+            resulting_version,
             StateEventDisposition.REPLAYED,
         )
 

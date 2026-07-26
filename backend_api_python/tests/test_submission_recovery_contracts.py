@@ -19,7 +19,7 @@ def facts(with_exchange=False, client_id="venue-client"):
         CAPABILITY_ID, POLICY_ID, "canonical-client", client_id, "v1", "ascii-nonsensitive-v1", "Q")
     capability = recovery.VenueCapabilitySnapshotFact(CAPABILITY_ID, "binance", "swap", "cap-v1", "profile-hash", True, True)
     policy = recovery.RecoveryPolicySnapshotFact(POLICY_ID, CAPABILITY_ID, "binance", "swap", "policy-v1", "policy-hash", True, True, True, True, 1, 0)
-    exchange = recovery.ExchangeOrderRecoveryFact(EXCHANGE_PK, ATTEMPT_ID, ORDER_ID, "binance", "swap", "account-a", "BTCUSDT", "exchange-1", client_id) if with_exchange else None
+    exchange = recovery.ExchangeOrderRecoveryFact(EXCHANGE_PK, ATTEMPT_ID, ORDER_ID, "binance", 1, 2, "swap", "account-a", "BTCUSDT", "exchange-1", client_id) if with_exchange else None
     return order, attempt, capability, policy, exchange
 
 def query(status, normalized="", reference=None, client_id="venue-client", exchange_id="", account="account-a"):
@@ -65,6 +65,26 @@ class SubmissionRecoveryContractTests(unittest.TestCase):
         for decision in (wrong_client, no_capability):
             self.assertEqual("RECONCILIATION_REQUIRED", decision.order_transition.target_state)
             self.assertIsNone(decision.attempt_transition)
+
+    def test_client_query_requires_persisted_authoritative_policy(self):
+        order, attempt, capability, policy, exchange = facts(True)
+        non_authoritative = recovery.RecoveryPolicySnapshotFact(
+            POLICY_ID, CAPABILITY_ID, "binance", "swap", "policy-v1", "policy-hash",
+            True, False, True, True, 1, 0,
+        )
+        decision = decide(order=order, attempt=attempt, capability=capability, policy=non_authoritative,
+                          exchange_order=exchange, query=query(venue.OrderQueryStatus.FOUND, "SUBMITTED"))
+        self.assertEqual("RECONCILIATION_REQUIRED", decision.disposition)
+        self.assertIsNone(decision.attempt_transition)
+
+    def test_exchange_order_fact_requires_complete_parent_scope(self):
+        order, attempt, capability, policy, exchange = facts(True)
+        bad_exchange = recovery.ExchangeOrderRecoveryFact(
+            EXCHANGE_PK, ATTEMPT_ID, ORDER_ID, "binance", 99, 2, "swap", "account-a", "BTCUSDT", "exchange-1", "venue-client",
+        )
+        with self.assertRaises(recovery.SubmissionRecoveryContractError):
+            decide(order=order, attempt=attempt, capability=capability, policy=policy, exchange_order=bad_exchange,
+                   query=query(venue.OrderQueryStatus.FOUND, "SUBMITTED"))
 
     def test_not_found_is_observation_only_and_invocations_are_distinct(self):
         order, attempt, capability, policy, exchange = facts(True)

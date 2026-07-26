@@ -85,9 +85,9 @@ class SubmissionRecoveryRepository:
         if fact is None:
             return
         cursor.execute("""SELECT id FROM qd_exchange_orders WHERE id=%s AND attempt_id=%s AND economic_order_id=%s
-                          AND exchange=%s AND market_type=%s AND account_scope=%s AND instrument_id=%s
+                          AND tenant_id=%s AND credential_id=%s AND exchange=%s AND market_type=%s AND account_scope=%s AND instrument_id=%s
                           AND exchange_order_id=%s AND venue_client_order_id=%s FOR KEY SHARE""",
-                       (fact.exchange_order_pk, fact.attempt_id, fact.economic_order_id, fact.exchange, fact.market_type,
+                       (fact.exchange_order_pk, fact.attempt_id, fact.economic_order_id, fact.tenant_id, fact.credential_id, fact.exchange, fact.market_type,
                         fact.account_scope, fact.instrument_id, fact.exchange_order_id, fact.venue_client_order_id))
         if cursor.fetchone() is None:
             raise SubmissionRecoveryContractError("persisted exchange-order identity mismatch")
@@ -151,6 +151,7 @@ class SubmissionRecoveryRepository:
         return str(_row_value(existing, 0, "id")), True
 
     def _replay_existing_events(self, cursor: Cursor, decision: RecoveryDecision) -> tuple[StateEventResult | None, StateEventResult | None]:
+        self._verify_replay_aggregate_consistency(cursor, decision)
         if decision.order_transition is None and decision.attempt_transition is None:
             return None, None
         order_result = self._states._apply_order_locked(cursor, decision.order_transition) if decision.order_transition else None
@@ -159,3 +160,12 @@ class SubmissionRecoveryRepository:
         if any(result.disposition.value != "REPLAYED" for result in results):
             raise StateEventConflict("recovery replay has partial event history")
         return order_result, attempt_result
+
+    @staticmethod
+    def _verify_replay_aggregate_consistency(cursor: Cursor, decision: RecoveryDecision) -> None:
+        """Observation replays accept later valid progression, never aggregate drift."""
+        for table, aggregate_id in (("qd_economic_orders", decision.order.id), ("qd_submission_attempts", decision.attempt.id)):
+            cursor.execute(f"SELECT version,last_event_seq FROM {table} WHERE id=%s FOR UPDATE", (aggregate_id,))
+            row = cursor.fetchone()
+            if row is None or int(_row_value(row, 0, "version")) != int(_row_value(row, 1, "last_event_seq")):
+                raise StateEventConflict("recovery replay aggregate version/sequence drift")

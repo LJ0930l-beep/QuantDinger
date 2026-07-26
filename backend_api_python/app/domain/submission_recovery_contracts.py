@@ -118,6 +118,8 @@ class ExchangeOrderRecoveryFact:
     attempt_id: str
     economic_order_id: str
     exchange: str
+    tenant_id: int
+    credential_id: int
     market_type: str
     account_scope: str
     instrument_id: str
@@ -128,6 +130,8 @@ class ExchangeOrderRecoveryFact:
         for name in ("exchange_order_pk", "attempt_id", "economic_order_id"):
             object.__setattr__(self, name, _uuid(getattr(self, name), name))
         object.__setattr__(self, "exchange", _text(self.exchange, "exchange", "lower"))
+        object.__setattr__(self, "tenant_id", _integer(self.tenant_id, "tenant_id"))
+        object.__setattr__(self, "credential_id", _integer(self.credential_id, "credential_id"))
         object.__setattr__(self, "market_type", _text(self.market_type, "market_type", "lower"))
         object.__setattr__(self, "account_scope", _text(self.account_scope, "account_scope"))
         object.__setattr__(self, "instrument_id", _text(self.instrument_id, "instrument_id", "upper"))
@@ -237,6 +241,19 @@ class RecoveryDecision:
             raise SubmissionRecoveryContractError("policy scope mismatch")
         if self.policy.capability_query_by_client_order_id != self.capability.query_by_client_order_id:
             raise SubmissionRecoveryContractError("policy/capability query fact mismatch")
+        if self.exchange_order is not None:
+            exchange = self.exchange_order
+            if (exchange.attempt_id, exchange.economic_order_id) != (self.attempt.id, self.order.id):
+                raise SubmissionRecoveryContractError("exchange-order parent mismatch")
+            if (exchange.tenant_id, exchange.credential_id, exchange.account_scope, exchange.instrument_id) != (
+                self.order.scope.tenant_id, self.order.scope.credential_id, self.order.scope.account_scope,
+                self.order.scope.instrument_id,
+            ):
+                raise SubmissionRecoveryContractError("exchange-order economic scope mismatch")
+            if (exchange.exchange, exchange.market_type, exchange.venue_client_order_id) != (
+                self.attempt.scope.exchange, self.attempt.scope.market_type, self.attempt.venue_client_order_id,
+            ):
+                raise SubmissionRecoveryContractError("exchange-order attempt scope mismatch")
         if self.observation.attempt_id != self.attempt.id:
             raise SubmissionRecoveryContractError("observation attempt mismatch")
         for transition, aggregate, aggregate_type in ((self.order_transition, self.order, AggregateType.ECONOMIC_ORDER),
@@ -245,6 +262,8 @@ class RecoveryDecision:
                 continue
             if transition.aggregate_id != aggregate.id or transition.aggregate_type is not aggregate_type:
                 raise SubmissionRecoveryContractError("transition aggregate mismatch")
+            if transition.aggregate_scope != aggregate.scope:
+                raise SubmissionRecoveryContractError("transition aggregate scope mismatch")
             if transition.current_state != aggregate.state.value or transition.expected_version != aggregate.version:
                 raise SubmissionRecoveryContractError("transition fact version/state mismatch")
             if transition.event_seq != transition.resulting_version or transition.evidence_hash != self.observation.payload_hash:
@@ -259,6 +278,48 @@ class RecoveryDecision:
             raise SubmissionRecoveryContractError("stateful recovery requires order transition")
         if self.disposition == "ATTEMPT_ACKED_ONLY" and (self.order_transition is not None or self.attempt_transition is None):
             raise SubmissionRecoveryContractError("attempt-only recovery has invalid transitions")
+        self._verify_disposition_transition_matrix()
+
+    def _verify_disposition_transition_matrix(self) -> None:
+        """Bind reducer disposition to exact current/target/cause/actor tuples."""
+        order_transition, attempt_transition = self.order_transition, self.attempt_transition
+        if self.disposition == "OBSERVATION_ONLY":
+            return
+        if self.disposition == "ATTEMPT_ACKED_ONLY":
+            if (attempt_transition is None or attempt_transition.target_state != SubmissionAttemptState.ACKED.value
+                    or attempt_transition.transition_cause is not TransitionCause.VENUE_OBSERVATION
+                    or attempt_transition.actor is not Actor.ADMIN):
+                raise SubmissionRecoveryContractError("attempt acknowledgement matrix mismatch")
+            return
+        if self.disposition == "RECONCILIATION_REQUIRED":
+            if (order_transition is None or order_transition.target_state != EconomicOrderState.RECONCILIATION_REQUIRED.value
+                    or order_transition.transition_cause is not TransitionCause.RECONCILIATION_CONFLICT
+                    or order_transition.actor is not Actor.ADMIN):
+                raise SubmissionRecoveryContractError("reconciliation recovery matrix mismatch")
+            if attempt_transition is not None and (
+                attempt_transition.target_state != SubmissionAttemptState.ACKED.value
+                or attempt_transition.transition_cause is not TransitionCause.VENUE_OBSERVATION
+                or attempt_transition.actor is not Actor.ADMIN
+            ):
+                raise SubmissionRecoveryContractError("reconciliation attempt matrix mismatch")
+            return
+        if self.disposition == "STATE_UPDATED":
+            targets = {
+                "SUBMITTED": (EconomicOrderState.SUBMITTED.value, SubmissionAttemptState.ACKED.value),
+                "PARTIALLY_FILLED": (EconomicOrderState.PARTIALLY_FILLED.value, SubmissionAttemptState.ACKED.value),
+                "FILLED": (EconomicOrderState.FILLED.value, SubmissionAttemptState.ACKED.value),
+                "REJECTED": (EconomicOrderState.REJECTED.value, SubmissionAttemptState.REJECTED.value),
+            }
+            normalized_state = self.observation.payload["query"]["normalized_state"]
+            if normalized_state not in targets or order_transition is None or attempt_transition is None:
+                raise SubmissionRecoveryContractError("state recovery matrix mismatch")
+            if ((order_transition.target_state, attempt_transition.target_state) != targets[normalized_state]
+                    or order_transition.transition_cause is not TransitionCause.VENUE_OBSERVATION
+                    or attempt_transition.transition_cause is not TransitionCause.VENUE_OBSERVATION
+                    or order_transition.actor is not Actor.ADMIN or attempt_transition.actor is not Actor.ADMIN):
+                raise SubmissionRecoveryContractError("state recovery transition tuple mismatch")
+            return
+        raise SubmissionRecoveryContractError("unknown recovery disposition")
 
 
 def _scope_matches(attempt: SubmissionAttemptRecoveryFact, query: NormalizedOrderQuery) -> bool:
@@ -282,12 +343,24 @@ def _identity_matches(attempt: SubmissionAttemptRecoveryFact, exchange_order: Ex
             return False
         if (exchange_order.exchange, exchange_order.market_type, exchange_order.account_scope, exchange_order.instrument_id) != (attempt.scope.exchange, attempt.scope.market_type, attempt.scope.account_scope, attempt.scope.instrument_id):
             return False
+        if (exchange_order.tenant_id, exchange_order.credential_id) != (attempt.scope.tenant_id, attempt.scope.credential_id):
+            return False
         return not (query.status is OrderQueryStatus.FOUND and query.client_order_id and query.client_order_id != exchange_order.venue_client_order_id)
     return False
 
 
 def _capability_allows(capability: VenueCapabilitySnapshotFact, query: NormalizedOrderQuery) -> bool:
     return capability.query_by_client_order_id if query.reference is OrderQueryReference.CLIENT_ORDER_ID else capability.query_by_exchange_order_id
+
+
+def _policy_authorizes_found(capability: VenueCapabilitySnapshotFact, policy: RecoveryPolicySnapshotFact,
+                             query: NormalizedOrderQuery) -> bool:
+    """Require an authoritative persisted policy in addition to venue capability."""
+
+    if query.reference is OrderQueryReference.CLIENT_ORDER_ID:
+        return (capability.query_by_client_order_id and policy.capability_query_by_client_order_id
+                and policy.client_id_query_authoritative)
+    return capability.query_by_exchange_order_id
 
 
 def _material(*, query: NormalizedOrderQuery, capability: VenueCapabilitySnapshotFact, policy: RecoveryPolicySnapshotFact,
@@ -327,11 +400,17 @@ def decide_submission_recovery(*, order: EconomicOrderRecoveryFact, attempt: Sub
             reason_code="VENUE_QUERY_FOUND", correlation_id=correlation_id, occurred_at=queried_at, evidence_hash=evidence,
             canonical_payload=payload, idempotency_key=f"recovery:{invocation_id}:attempt")
     identity_ok = _scope_matches(attempt, query) and _identity_matches(attempt, exchange_order, query)
-    if query.status is OrderQueryStatus.CONFLICT or not identity_ok or (query.status is OrderQueryStatus.FOUND and not _capability_allows(capability, query)):
+    capability_allows = _capability_allows(capability, query)
+    policy_authorizes_found = _policy_authorizes_found(capability, policy, query)
+    if query.status is OrderQueryStatus.CONFLICT or not identity_ok or (query.status is OrderQueryStatus.FOUND and not policy_authorizes_found):
         return RecoveryDecision(order, attempt, capability, policy, exchange_order, observation,
                                 order_event(EconomicOrderState.RECONCILIATION_REQUIRED, "RECOVERY_IDENTITY_OR_CAPABILITY_CONFLICT", TransitionCause.RECONCILIATION_CONFLICT),
                                 None, "RECONCILIATION_REQUIRED", _RECOVERY_REDUCER_PROOF)
     if query.status is not OrderQueryStatus.FOUND:
+        if not capability_allows and query.status is not OrderQueryStatus.UNSUPPORTED:
+            return RecoveryDecision(order, attempt, capability, policy, exchange_order, observation,
+                                    order_event(EconomicOrderState.RECONCILIATION_REQUIRED, "RECOVERY_UNSUPPORTED_REFERENCE_CONFLICT", TransitionCause.RECONCILIATION_CONFLICT),
+                                    None, "RECONCILIATION_REQUIRED", _RECOVERY_REDUCER_PROOF)
         return RecoveryDecision(order, attempt, capability, policy, exchange_order, observation, None, None, "OBSERVATION_ONLY", _RECOVERY_REDUCER_PROOF)
     targets = {"SUBMITTED": EconomicOrderState.SUBMITTED, "PARTIALLY_FILLED": EconomicOrderState.PARTIALLY_FILLED,
                "FILLED": EconomicOrderState.FILLED, "REJECTED": EconomicOrderState.REJECTED,

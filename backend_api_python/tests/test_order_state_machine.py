@@ -99,6 +99,27 @@ class OrderStateMachineTests(unittest.TestCase):
                 cause=machine.TransitionCause.VENUE_OBSERVATION, actor=contracts.Actor.HUMAN, reason_code="TEST",
                 correlation_id="c", occurred_at=NOW, evidence_hash="a", canonical_payload={}, idempotency_key="i",
             )
+
+    def test_venue_and_cancel_authority_is_an_explicit_four_tuple_matrix(self):
+        venue_pairs = (
+            ("SUBMISSION_UNKNOWN", "SUBMITTED"), ("SUBMISSION_UNKNOWN", "PARTIALLY_FILLED"),
+            ("SUBMISSION_UNKNOWN", "FILLED"), ("SUBMISSION_UNKNOWN", "REJECTED"),
+            ("SUBMITTED", "PARTIALLY_FILLED"), ("SUBMITTED", "FILLED"),
+            ("PARTIALLY_FILLED", "PARTIALLY_FILLED"), ("PARTIALLY_FILLED", "FILLED"),
+        )
+        cancel_pairs = (
+            ("CANCEL_REQUESTED", "CANCELLING"), ("CANCEL_REQUESTED", "CANCELLED"),
+            ("CANCEL_REQUESTED", "FILLED"), ("CANCELLING", "PARTIALLY_FILLED"),
+            ("CANCELLING", "FILLED"), ("CANCELLING", "CANCELLED"),
+        )
+        for current, target in venue_pairs:
+            self.assertEqual(target, order_event(current, target).target_state)
+        for current, target in cancel_pairs:
+            self.assertEqual(target, order_event(current, target, machine.TransitionCause.CANCEL_OBSERVATION).target_state)
+        with self.assertRaises(machine.OperationalAuthorizationError):
+            order_event("SUBMISSION_UNKNOWN", "RECONCILIATION_REQUIRED")
+        with self.assertRaises(machine.StateMachineContractError):
+            order_event("SUBMITTED", "SUBMITTED", machine.TransitionCause.CANCEL_OBSERVATION)
         with self.assertRaises(machine.OperationalAuthorizationError):
             machine.authorize_order_transition(
                 aggregate_id=ORDER_ID, aggregate_scope=ORDER_SCOPE, current_state=contracts.EconomicOrderState.CREATED,

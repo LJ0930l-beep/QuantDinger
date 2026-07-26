@@ -259,13 +259,25 @@ def _order_cause_authorized(
     if cause is TransitionCause.SUBMISSION_RESULT:
         return current in {EconomicOrderState.RISK_RESERVED, EconomicOrderState.SUBMITTING}
     if cause is TransitionCause.VENUE_OBSERVATION:
-        return current in {
-            EconomicOrderState.SUBMISSION_UNKNOWN,
-            EconomicOrderState.SUBMITTED,
-            EconomicOrderState.PARTIALLY_FILLED,
+        return (current, target) in {
+            (EconomicOrderState.SUBMISSION_UNKNOWN, EconomicOrderState.SUBMITTED),
+            (EconomicOrderState.SUBMISSION_UNKNOWN, EconomicOrderState.PARTIALLY_FILLED),
+            (EconomicOrderState.SUBMISSION_UNKNOWN, EconomicOrderState.FILLED),
+            (EconomicOrderState.SUBMISSION_UNKNOWN, EconomicOrderState.REJECTED),
+            (EconomicOrderState.SUBMITTED, EconomicOrderState.PARTIALLY_FILLED),
+            (EconomicOrderState.SUBMITTED, EconomicOrderState.FILLED),
+            (EconomicOrderState.PARTIALLY_FILLED, EconomicOrderState.PARTIALLY_FILLED),
+            (EconomicOrderState.PARTIALLY_FILLED, EconomicOrderState.FILLED),
         }
     if cause is TransitionCause.CANCEL_OBSERVATION:
-        return current in {EconomicOrderState.CANCEL_REQUESTED, EconomicOrderState.CANCELLING}
+        return (current, target) in {
+            (EconomicOrderState.CANCEL_REQUESTED, EconomicOrderState.CANCELLING),
+            (EconomicOrderState.CANCEL_REQUESTED, EconomicOrderState.CANCELLED),
+            (EconomicOrderState.CANCEL_REQUESTED, EconomicOrderState.FILLED),
+            (EconomicOrderState.CANCELLING, EconomicOrderState.PARTIALLY_FILLED),
+            (EconomicOrderState.CANCELLING, EconomicOrderState.FILLED),
+            (EconomicOrderState.CANCELLING, EconomicOrderState.CANCELLED),
+        }
     if cause is TransitionCause.MANUAL_APPROVED_RECOVERY:
         return current is EconomicOrderState.RECONCILIATION_REQUIRED and target is not EconomicOrderState.SUBMITTING
     return False

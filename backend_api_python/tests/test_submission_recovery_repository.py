@@ -50,10 +50,21 @@ class RecoveryRepositoryTests(unittest.TestCase):
         snapshot = (c.id,c.exchange,c.market_type,c.capability_version,c.profile_hash,c.query_by_exchange_order_id,c.query_by_client_order_id,
                     p.id,p.capability_snapshot_id,p.exchange,p.market_type,p.policy_version,p.policy_hash,p.capability_query_by_client_order_id,
                     p.client_id_query_authoritative,p.order_history_authoritative,p.fill_history_authoritative,p.not_found_min_query_count,p.not_found_grace_seconds,p.not_found_action)
-        cursor = Cursor([(ORDER_ID,), (ATTEMPT_ID,), snapshot, ("00000000-0000-0000-0000-000000000499", item.observation.canonical_payload_json)])
+        cursor = Cursor([(ORDER_ID,), (ATTEMPT_ID,), snapshot, ("00000000-0000-0000-0000-000000000499", item.observation.canonical_payload_json),
+                         (0,0), (0,0)])
         connection = Connection(cursor)
         result = repository.SubmissionRecoveryRepository().apply(connection, item)
         self.assertEqual(repository.RecoveryDisposition.REPLAYED, result.disposition)
         self.assertEqual(1, connection.commits)
+
+    def test_observation_replay_rejects_version_sequence_drift(self):
+        item = decision(); c, p = item.capability, item.policy
+        snapshot = (c.id,c.exchange,c.market_type,c.capability_version,c.profile_hash,c.query_by_exchange_order_id,c.query_by_client_order_id,
+                    p.id,p.capability_snapshot_id,p.exchange,p.market_type,p.policy_version,p.policy_hash,p.capability_query_by_client_order_id,
+                    p.client_id_query_authoritative,p.order_history_authoritative,p.fill_history_authoritative,p.not_found_min_query_count,p.not_found_grace_seconds,p.not_found_action)
+        cursor = Cursor([(ORDER_ID,), (ATTEMPT_ID,), snapshot, ("00000000-0000-0000-0000-000000000499", item.observation.canonical_payload_json),
+                         (1,0)])
+        with self.assertRaises(machine.StateEventConflict):
+            repository.SubmissionRecoveryRepository().apply(Connection(cursor), item)
 
 if __name__ == "__main__": unittest.main()

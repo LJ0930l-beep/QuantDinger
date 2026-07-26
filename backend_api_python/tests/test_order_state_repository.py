@@ -75,7 +75,7 @@ class OrderStateRepositoryTests(unittest.TestCase):
     def test_same_idempotency_and_same_fingerprint_replays(self):
         event = transition()
         cursor = FakeCursor([
-            ("SUBMISSION_UNKNOWN", 2, 2),
+            ("SUBMITTED", 3, 3),
             ("SUBMITTED", 3, event.event_fingerprint, event.idempotency_key),
         ])
         connection = FakeConnection(cursor)
@@ -83,6 +83,19 @@ class OrderStateRepositoryTests(unittest.TestCase):
         self.assertEqual(repository.StateEventDisposition.REPLAYED, result.disposition)
         self.assertEqual(1, connection.commits)
         self.assertFalse(any("INSERT INTO qd_order_state_events" in query for query, _ in cursor.executed))
+
+    def test_replay_rejects_regressed_or_drifted_aggregate(self):
+        event = transition()
+        for aggregate in (("SUBMISSION_UNKNOWN", 2, 2), ("SUBMITTED", 3, 2), ("FILLED", 3, 3)):
+            cursor = FakeCursor([aggregate, ("SUBMITTED", 3, event.event_fingerprint, event.idempotency_key)])
+            with self.assertRaises(machine.StateEventConflict):
+                repository.OrderStateRepository().apply_order_transition(FakeConnection(cursor), event)
+
+    def test_replay_allows_aggregate_that_legally_advanced_after_event(self):
+        event = transition()
+        cursor = FakeCursor([("FILLED", 4, 4), ("SUBMITTED", 3, event.event_fingerprint, event.idempotency_key)])
+        result = repository.OrderStateRepository().apply_order_transition(FakeConnection(cursor), event)
+        self.assertEqual(repository.StateEventDisposition.REPLAYED, result.disposition)
 
     def test_same_idempotency_with_different_facts_rolls_back(self):
         cursor = FakeCursor([
