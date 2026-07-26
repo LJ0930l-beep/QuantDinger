@@ -8,6 +8,7 @@ expand-only schema.  It does not call a gateway, worker, exchange, or runtime.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -204,13 +205,15 @@ class RiskReservationFact:
     decision: RiskDecisionFact
     demand: RiskReservationDemand
     reservation_kind: str
-    expires_at: str | None = None
+    expires_at: datetime | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "reservation_id", _uuid(self.reservation_id, "reservation_id"))
         object.__setattr__(self, "reservation_kind", _text(self.reservation_kind, "reservation_kind", max_length=32))
         if not isinstance(self.decision, RiskDecisionFact) or not isinstance(self.demand, RiskReservationDemand):
             raise RiskEnforcementContractError("reservation requires decision and demand facts")
+        if self.reservation_id != self.demand.reservation_id:
+            raise RiskEnforcementContractError("reservation id must match immutable demand identity")
         if not self.decision.decision.allowed:
             raise RiskEnforcementContractError("denied decision cannot reserve risk capacity")
         scope = self.decision.scope
@@ -219,7 +222,9 @@ class RiskReservationFact:
         ):
             raise RiskEnforcementContractError("reservation demand must exactly match decision scope and currency")
         if self.expires_at is not None:
-            object.__setattr__(self, "expires_at", _text(self.expires_at, "expires_at", max_length=64))
+            if not isinstance(self.expires_at, datetime) or self.expires_at.tzinfo is None or self.expires_at.utcoffset() != timezone.utc.utcoffset(self.expires_at):
+                raise RiskEnforcementContractError("expires_at must use a zero UTC offset")
+            object.__setattr__(self, "expires_at", self.expires_at.astimezone(timezone.utc))
 
 
 def build_risk_reservation_fact(
@@ -228,7 +233,7 @@ def build_risk_reservation_fact(
     decision: RiskDecisionFact,
     request: HardRiskRequest,
     reservation_kind: str,
-    expires_at: str | None = None,
+    expires_at: datetime | None = None,
 ) -> RiskReservationFact | None:
     """Build a capacity fact only for an allowed risk-increasing decision."""
 

@@ -1,0 +1,104 @@
+"""Focused atomicity contracts for the PR-10 enforcement repository."""
+
+from __future__ import annotations
+
+from uuid import uuid4
+import unittest
+
+from tests.pr10_contract_loader import load_pr10_contracts
+
+
+modules = load_pr10_contracts()
+decimal, contracts, risk = modules.decimal, modules.contracts, modules.hard_risk
+enforcement, repository = modules.enforcement, modules.repository
+
+
+class _Cursor:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.queries = []
+        self.closed = False
+
+    def execute(self, query, params=()):
+        self.queries.append((query, params))
+
+    def fetchone(self):
+        return self.responses.pop(0) if self.responses else None
+
+    def fetchall(self):
+        return self.responses.pop(0) if self.responses else []
+
+    def close(self):
+        self.closed = True
+
+
+class _Connection:
+    def __init__(self, cursor):
+        self.cursor_value = cursor
+        self.commits = self.rollbacks = 0
+
+    def cursor(self):
+        return self.cursor_value
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+def _facts():
+    scope = enforcement.RiskEnforcementScope(
+        str(uuid4()), str(uuid4()), 1, 2, "account-a", "BTCUSDT", "swap",
+        contracts.OrderAction.OPEN, contracts.Actor.STRATEGY,
+    )
+    policy = risk.RiskLimitPolicy(
+        "policy-1", "USDT", decimal.QuoteAmount("1000"), decimal.QuoteAmount("800"),
+        decimal.QuoteAmount("900"), "5", decimal.QuoteAmount("10"), decimal.QuoteAmount("100"), "0.50",
+    )
+    exposure = risk.RiskExposureSnapshot(
+        "account-a", "BTCUSDT", "USDT", "100", "100", "100", "900", "1000", "1000", "0",
+        contracts.ReconciliationHealth.HEALTHY, risk.MarketDataHealth.FRESH, True,
+    )
+    request = risk.HardRiskRequest(contracts.OrderAction.OPEN, contracts.Actor.STRATEGY, None, "10", "10", "10", "2")
+    disabled = risk.KillSwitchState(0, False)
+    decision_value = risk.evaluate_hard_risk(
+        policy=policy, snapshot=exposure, request=request,
+        kill_switches=risk.KillSwitchSnapshot(disabled, disabled, disabled),
+    )
+    policy_fact = enforcement.RiskPolicySnapshotFact(str(uuid4()), scope, policy)
+    input_fact = enforcement.RiskInputSnapshotFact(str(uuid4()), scope, "input-1", exposure)
+    decision = enforcement.RiskDecisionFact(str(uuid4()), scope, policy_fact, input_fact, decision_value)
+    reservation = enforcement.build_risk_reservation_fact(
+        reservation_id=str(uuid4()), decision=decision, request=request, reservation_kind="OPEN_CAPACITY",
+    )
+    return policy_fact, input_fact, decision, reservation
+
+
+class RiskEnforcementRepositoryTests(unittest.TestCase):
+    def test_persist_writes_one_atomic_graph_when_all_insertions_succeed(self):
+        policy, inputs, decision, reservation = _facts()
+        cursor = _Cursor([(policy.snapshot_id,), (inputs.snapshot_id,), (decision.decision_id,), (reservation.reservation_id,)])
+        connection = _Connection(cursor)
+        result = repository.RiskEnforcementRepository().persist(
+            connection, policy_snapshot=policy, input_snapshot=inputs, decision=decision, reservation=reservation,
+        )
+        self.assertEqual(result.disposition, repository.RiskEnforcementDisposition.CREATED)
+        self.assertEqual(connection.commits, 1)
+        self.assertEqual(connection.rollbacks, 0)
+        self.assertTrue(cursor.closed)
+        self.assertIn("qd_risk_decisions", "\n".join(query for query, _ in cursor.queries))
+        self.assertIn("qd_risk_reservations", "\n".join(query for query, _ in cursor.queries))
+
+    def test_mixed_graph_fails_before_any_database_side_effect(self):
+        policy, inputs, decision, reservation = _facts()
+        other_policy, _, _, _ = _facts()
+        cursor = _Cursor([])
+        connection = _Connection(cursor)
+        with self.assertRaises(repository.RiskEnforcementConflict):
+            repository.RiskEnforcementRepository().persist(
+                connection, policy_snapshot=other_policy, input_snapshot=inputs, decision=decision, reservation=reservation,
+            )
+        self.assertEqual(cursor.queries, [])
+        self.assertEqual(connection.commits, 0)
+        self.assertEqual(connection.rollbacks, 0)
