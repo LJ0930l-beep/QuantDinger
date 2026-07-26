@@ -19,6 +19,7 @@ from app.domain.decimal_values import canonical_decimal_string
 from app.domain.hard_risk_contracts import (
     HardRiskDecision,
     HardRiskRequest,
+    KillSwitchSnapshot,
     RiskExposureSnapshot,
     RiskLimitPolicy,
     RiskReservationDemand,
@@ -83,6 +84,8 @@ class RiskEnforcementScope:
     market_type: str
     action: OrderAction
     actor: Actor
+    actor_id: str
+    correlation_id: str
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "command_id", _uuid(self.command_id, "command_id"))
@@ -94,6 +97,8 @@ class RiskEnforcementScope:
         object.__setattr__(self, "market_type", _text(self.market_type, "market_type", lowercase=True, max_length=20))
         if not isinstance(self.action, OrderAction) or not isinstance(self.actor, Actor):
             raise RiskEnforcementContractError("action and actor must use PR-00 enums")
+        object.__setattr__(self, "actor_id", _text(self.actor_id, "actor_id"))
+        object.__setattr__(self, "correlation_id", _text(self.correlation_id, "correlation_id"))
 
     def canonical(self) -> dict[str, Any]:
         return {
@@ -101,7 +106,8 @@ class RiskEnforcementScope:
             "tenant_id": self.tenant_id, "credential_id": self.credential_id,
             "account_scope": self.account_scope, "instrument_id": self.instrument_id,
             "market_type": self.market_type, "action": self.action.value,
-            "actor": self.actor.value,
+            "actor": self.actor.value, "actor_id": self.actor_id,
+            "correlation_id": self.correlation_id,
         }
 
 
@@ -139,15 +145,27 @@ class RiskInputSnapshotFact:
     scope: RiskEnforcementScope
     input_version: str
     exposure: RiskExposureSnapshot
+    kill_switches: KillSwitchSnapshot
+    observed_at: datetime
+    occurred_at: datetime
     input_hash: str = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "snapshot_id", _uuid(self.snapshot_id, "snapshot_id"))
         object.__setattr__(self, "input_version", _text(self.input_version, "input_version", max_length=96))
-        if not isinstance(self.scope, RiskEnforcementScope) or not isinstance(self.exposure, RiskExposureSnapshot):
-            raise RiskEnforcementContractError("input snapshot requires canonical scope and exposure")
+        if not isinstance(self.scope, RiskEnforcementScope) or not isinstance(self.exposure, RiskExposureSnapshot) or not isinstance(self.kill_switches, KillSwitchSnapshot):
+            raise RiskEnforcementContractError("input snapshot requires canonical scope, exposure, and kill-switch facts")
         if (self.scope.account_scope, self.scope.instrument_id) != (self.exposure.account_scope, self.exposure.instrument_id):
             raise RiskEnforcementContractError("input exposure scope must match enforcement scope")
+        for field_name in ("observed_at", "occurred_at"):
+            value = getattr(self, field_name)
+            if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timezone.utc.utcoffset(value):
+                raise RiskEnforcementContractError(f"{field_name} must use a zero UTC offset")
+            object.__setattr__(self, field_name, value.astimezone(timezone.utc))
+        switches = {
+            name: {"version": item.version, "enabled": item.enabled, "mode": None if item.mode is None else item.mode.value}
+            for name, item in (("global", self.kill_switches.global_state), ("account", self.kill_switches.account_state), ("strategy", self.kill_switches.strategy_state))
+        }
         object.__setattr__(self, "input_hash", _hash({
             "version": RISK_ENFORCEMENT_CONTRACT_VERSION,
             "scope": self.scope.canonical(), "input_version": self.input_version,
@@ -155,6 +173,8 @@ class RiskInputSnapshotFact:
             "reconciliation_health": self.exposure.reconciliation_health.value,
             "market_data_health": self.exposure.market_data_health.value,
             "account_facts_verified": self.exposure.account_facts_verified,
+            "kill_switches": switches,
+            "observed_at": self.observed_at.isoformat(), "occurred_at": self.occurred_at.isoformat(),
             "facts": {name: _decimal(getattr(self.exposure, name)) for name in (
                 "gross_notional", "net_notional", "instrument_notional", "available_margin",
                 "equity", "peak_equity", "daily_realized_pnl",
@@ -169,6 +189,8 @@ class RiskDecisionFact:
     policy_snapshot: RiskPolicySnapshotFact
     input_snapshot: RiskInputSnapshotFact
     decision: HardRiskDecision
+    observed_at: datetime
+    occurred_at: datetime
     decision_status: str = field(init=False)
     decision_fingerprint: str = field(init=False)
 
@@ -188,14 +210,25 @@ class RiskDecisionFact:
             raise RiskEnforcementContractError("hard-risk decision scope must match durable scope")
         if self.decision.policy_version != self.policy_snapshot.policy.policy_version:
             raise RiskEnforcementContractError("decision policy version must match policy snapshot")
-        status = "ALLOW" if self.decision.allowed else "DENY"
+        for field_name in ("observed_at", "occurred_at"):
+            value = getattr(self, field_name)
+            if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timezone.utc.utcoffset(value):
+                raise RiskEnforcementContractError(f"{field_name} must use a zero UTC offset")
+            object.__setattr__(self, field_name, value.astimezone(timezone.utc))
+        if self.decision.allowed:
+            status = "ALLOW"
+        elif any(item.value == "RECONCILIATION_UNHEALTHY" for item in self.decision.rejections):
+            status = "RECONCILIATION_REQUIRED"
+        else:
+            status = "DENY"
         object.__setattr__(self, "decision_status", status)
         object.__setattr__(self, "decision_fingerprint", _hash({
             "version": RISK_ENFORCEMENT_CONTRACT_VERSION,
             "scope": self.scope.canonical(), "policy_snapshot_id": self.policy_snapshot.snapshot_id,
             "policy_hash": self.policy_snapshot.policy_hash, "input_snapshot_id": self.input_snapshot.snapshot_id,
             "input_hash": self.input_snapshot.input_hash, "hard_risk_fingerprint": self.decision.canonical_fingerprint,
-            "decision": status,
+            "decision": status, "observed_at": self.observed_at.isoformat(),
+            "occurred_at": self.occurred_at.isoformat(),
         }))
 
 

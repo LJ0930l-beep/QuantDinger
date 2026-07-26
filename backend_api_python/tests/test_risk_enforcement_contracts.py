@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from uuid import uuid4
+from datetime import datetime, timezone
 import unittest
 
 from tests.pr10_contract_loader import load_pr10_contracts
@@ -21,6 +22,7 @@ def _scope(**changes):
         "tenant_id": 1, "credential_id": 2, "account_scope": "account-a",
         "instrument_id": "BTCUSDT", "market_type": "swap",
         "action": contracts.OrderAction.OPEN, "actor": contracts.Actor.STRATEGY,
+        "actor_id": "strategy-a", "correlation_id": "correlation-a",
     }
     values.update(changes)
     return enforcement.RiskEnforcementScope(**values)
@@ -61,21 +63,24 @@ def _switches():
     return risk.KillSwitchSnapshot(disabled, disabled, disabled)
 
 
+NOW = datetime(2026, 7, 26, tzinfo=timezone.utc)
+
+
 def _decision(scope, policy_snapshot, input_snapshot, request=None):
     evaluated = risk.evaluate_hard_risk(
         policy=policy_snapshot.policy, snapshot=input_snapshot.exposure,
         request=request or _request(), kill_switches=_switches(),
     )
-    return enforcement.RiskDecisionFact(str(uuid4()), scope, policy_snapshot, input_snapshot, evaluated)
+    return enforcement.RiskDecisionFact(str(uuid4()), scope, policy_snapshot, input_snapshot, evaluated, NOW, NOW)
 
 
 class RiskEnforcementContractTests(unittest.TestCase):
     def test_policy_input_and_decision_are_scope_bound_and_deterministic(self):
         scope = _scope()
         policy_snapshot = enforcement.RiskPolicySnapshotFact(str(uuid4()), scope, _policy())
-        input_snapshot = enforcement.RiskInputSnapshotFact(str(uuid4()), scope, "input-1", _exposure())
+        input_snapshot = enforcement.RiskInputSnapshotFact(str(uuid4()), scope, "input-1", _exposure(), _switches(), NOW, NOW)
         first = _decision(scope, policy_snapshot, input_snapshot)
-        second = enforcement.RiskDecisionFact(first.decision_id, scope, policy_snapshot, input_snapshot, first.decision)
+        second = enforcement.RiskDecisionFact(first.decision_id, scope, policy_snapshot, input_snapshot, first.decision, NOW, NOW)
         self.assertEqual(first.decision_status, "ALLOW")
         self.assertEqual(first.decision_fingerprint, second.decision_fingerprint)
         self.assertEqual(len(first.decision_fingerprint), 64)
@@ -84,7 +89,7 @@ class RiskEnforcementContractTests(unittest.TestCase):
         scope = _scope()
         policy_snapshot = enforcement.RiskPolicySnapshotFact(str(uuid4()), scope, _policy())
         wrong_scope = _scope(command_id=scope.command_id, economic_order_id=scope.economic_order_id, instrument_id="ETHUSDT")
-        input_snapshot = enforcement.RiskInputSnapshotFact(str(uuid4()), wrong_scope, "input-1", _exposure(instrument_id="ETHUSDT"))
+        input_snapshot = enforcement.RiskInputSnapshotFact(str(uuid4()), wrong_scope, "input-1", _exposure(instrument_id="ETHUSDT"), _switches(), NOW, NOW)
         with self.assertRaises(enforcement.RiskEnforcementContractError):
             _decision(scope, policy_snapshot, input_snapshot)
 
@@ -92,7 +97,7 @@ class RiskEnforcementContractTests(unittest.TestCase):
         scope = _scope()
         policy_snapshot = enforcement.RiskPolicySnapshotFact(str(uuid4()), scope, _policy())
         input_snapshot = enforcement.RiskInputSnapshotFact(
-            str(uuid4()), scope, "input-1", _exposure(market_data_health=risk.MarketDataHealth.STALE),
+            str(uuid4()), scope, "input-1", _exposure(market_data_health=risk.MarketDataHealth.STALE), _switches(), NOW, NOW,
         )
         denied = _decision(scope, policy_snapshot, input_snapshot)
         self.assertFalse(denied.decision.allowed)
@@ -103,7 +108,7 @@ class RiskEnforcementContractTests(unittest.TestCase):
     def test_allowed_increase_reservation_carries_decision_scope_and_decimal_demand(self):
         scope = _scope()
         policy_snapshot = enforcement.RiskPolicySnapshotFact(str(uuid4()), scope, _policy())
-        input_snapshot = enforcement.RiskInputSnapshotFact(str(uuid4()), scope, "input-1", _exposure())
+        input_snapshot = enforcement.RiskInputSnapshotFact(str(uuid4()), scope, "input-1", _exposure(), _switches(), NOW, NOW)
         decision = _decision(scope, policy_snapshot, input_snapshot)
         reservation = enforcement.build_risk_reservation_fact(
             reservation_id=str(uuid4()), decision=decision, request=_request(), reservation_kind="OPEN_CAPACITY",

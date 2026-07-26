@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from uuid import uuid4
+from datetime import datetime, timezone
 import unittest
 
 from tests.pr10_contract_loader import load_pr10_contracts
@@ -51,6 +52,7 @@ def _facts():
     scope = enforcement.RiskEnforcementScope(
         str(uuid4()), str(uuid4()), 1, 2, "account-a", "BTCUSDT", "swap",
         contracts.OrderAction.OPEN, contracts.Actor.STRATEGY,
+        "strategy-a", "correlation-a",
     )
     policy = risk.RiskLimitPolicy(
         "policy-1", "USDT", decimal.QuoteAmount("1000"), decimal.QuoteAmount("800"),
@@ -67,8 +69,10 @@ def _facts():
         kill_switches=risk.KillSwitchSnapshot(disabled, disabled, disabled),
     )
     policy_fact = enforcement.RiskPolicySnapshotFact(str(uuid4()), scope, policy)
-    input_fact = enforcement.RiskInputSnapshotFact(str(uuid4()), scope, "input-1", exposure)
-    decision = enforcement.RiskDecisionFact(str(uuid4()), scope, policy_fact, input_fact, decision_value)
+    disabled = risk.KillSwitchState(0, False)
+    now = datetime(2026, 7, 26, tzinfo=timezone.utc)
+    input_fact = enforcement.RiskInputSnapshotFact(str(uuid4()), scope, "input-1", exposure, risk.KillSwitchSnapshot(disabled, disabled, disabled), now, now)
+    decision = enforcement.RiskDecisionFact(str(uuid4()), scope, policy_fact, input_fact, decision_value, now, now)
     reservation = enforcement.build_risk_reservation_fact(
         reservation_id=str(uuid4()), decision=decision, request=request, reservation_kind="OPEN_CAPACITY",
     )
@@ -78,13 +82,22 @@ def _facts():
 class RiskEnforcementRepositoryTests(unittest.TestCase):
     def test_persist_writes_one_atomic_graph_when_all_insertions_succeed(self):
         policy, inputs, decision, reservation = _facts()
-        cursor = _Cursor([(policy.snapshot_id,), (inputs.snapshot_id,), (decision.decision_id,), (reservation.reservation_id,)])
+        command_row = (
+            "OPEN", "STRATEGY", "strategy-a", 1, 2, "account-a",
+            1, 2, "account-a", "BTCUSDT", "swap",
+        )
+        cursor = _Cursor([
+            command_row, (policy.snapshot_id,), (inputs.snapshot_id,),
+            (decision.decision_id,), (reservation.reservation_id,),
+            (policy.snapshot_id,), (inputs.snapshot_id,),
+            (decision.decision_id,), (reservation.reservation_id,),
+        ])
         connection = _Connection(cursor)
         result = repository.RiskEnforcementRepository().persist(
             connection, policy_snapshot=policy, input_snapshot=inputs, decision=decision, reservation=reservation,
         )
         self.assertEqual(result.disposition, repository.RiskEnforcementDisposition.CREATED)
-        self.assertEqual(connection.commits, 1)
+        self.assertEqual(connection.commits, 0)
         self.assertEqual(connection.rollbacks, 0)
         self.assertTrue(cursor.closed)
         self.assertIn("qd_risk_decisions", "\n".join(query for query, _ in cursor.queries))

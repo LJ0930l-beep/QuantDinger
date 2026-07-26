@@ -96,6 +96,7 @@ class RiskEnforcementRepositoryPostgresTests(unittest.TestCase):
                 result = repository.RiskEnforcementRepository().persist(
                     connection, policy_snapshot=facts[0], input_snapshot=facts[1], decision=facts[2], reservation=facts[3],
                 )
+                connection.commit()
                 outcomes.append(result.disposition)
             except Exception as exc:
                 failures.append(exc)
