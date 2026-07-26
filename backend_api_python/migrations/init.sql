@@ -15,14 +15,14 @@ CREATE TABLE IF NOT EXISTS qd_users (
     status VARCHAR(20) DEFAULT 'active',  -- active/disabled/pending
     role VARCHAR(20) DEFAULT 'user',       -- admin/manager/user/viewer
     credits DECIMAL(20,2) DEFAULT 0,
-    vip_expires_at TIMESTAMP,              -- VIP閺夆晛娲﹀﹢锟犲籍閸洘锛?
+    vip_expires_at TIMESTAMP,              -- VIP杩囨湡鏃堕棿
     vip_plan VARCHAR(20) DEFAULT '',
     vip_is_lifetime BOOLEAN DEFAULT FALSE,
     vip_monthly_credits_last_grant TIMESTAMP,
     email_verified BOOLEAN DEFAULT FALSE,
-    referred_by INTEGER,                   -- 闂侇厸鍋撻悹鍥腹濮瑰D
+    referred_by INTEGER,                   -- 閭€璇蜂汉ID
     notification_settings TEXT DEFAULT '',
-    chart_templates TEXT DEFAULT '',      -- 闁活潿鍔嶉崺娑㈠炊閹规劑鈧啫螣閳╁啯绶?JSON闁挎稑鐗婄€垫岸寮介崶褏顏撮悘鐐╁亾/闁哄秴鍢茬槐锟犳晬?
+    chart_templates TEXT DEFAULT '',      -- 鐢ㄦ埛鍥捐〃妯℃澘 JSON锛堟寚鏍囧竷灞€/鏍峰紡锛?
     timezone VARCHAR(64) DEFAULT '',
     token_version INTEGER DEFAULT 1,
     password_changed_at TIMESTAMP,           -- NULL only prompts when bootstrap password is still 123456
@@ -45,10 +45,10 @@ CREATE TABLE IF NOT EXISTS qd_credits_log (
     user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
     action VARCHAR(50) NOT NULL,            -- recharge/consume/refund/admin_adjust/vip_grant
     amount DECIMAL(20,2) NOT NULL,
-    balance_after DECIMAL(20,2) NOT NULL,   -- 闁告瑦锚婵晠宕ユ惔婵堢▏濡?
-    feature VARCHAR(50) DEFAULT '',          -- 婵炴垵鐗愰崹鍌炴儍閸曨偄顫犻柤铏灮缁辩櫘i_analysis/strategy_run/backtest 缂?
+    balance_after DECIMAL(20,2) NOT NULL,   -- 鍙樺姩鍚庝綑棰?
+    feature VARCHAR(50) DEFAULT '',          -- 娑堣垂鐨勫姛鑳斤細ai_analysis/strategy_run/backtest 绛?
     reference_id VARCHAR(100) DEFAULT '',
-    remark TEXT DEFAULT '',                  -- 濠㈣泛娲﹂弫?
+    remark TEXT DEFAULT '',                  -- 澶囨敞
     operator_id INTEGER,
     created_at TIMESTAMP DEFAULT NOW()
 );
@@ -203,7 +203,7 @@ CREATE INDEX IF NOT EXISTS idx_verification_codes_type ON qd_verification_codes(
 CREATE INDEX IF NOT EXISTS idx_verification_codes_expires ON qd_verification_codes(expires_at);
 
 -- =============================================================================
--- 1.7. Login Attempts (闁谎嗩嚙缂嶅秶浜稿┑濠勬Ц閻犱焦婢樼紞?- 闂傚啳灏欓崹搴ㄦ儘?
+-- 1.7. Login Attempts (鐧诲綍灏濊瘯璁板綍 - 闃茬垎鐮?
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS qd_login_attempts (
@@ -764,10 +764,10 @@ CREATE TABLE IF NOT EXISTS qd_indicator_codes (
     source_script_source_id int4 NULL,
     source_strategy_id int4 NULL,
 
-    -- (zh-CN / en-US / ja-JP 缂?闁挎稒鎹昦me_i18n / description_i18n 闁?LLM 缂傚牊妲掗惁褔鎮介悢绋跨亣闁?
-    -- JSONB闁挎稑鐬肩划銊╁几閸曨偉鍩屽┑?{"en-US": "...", "zh-CN": "...", ...}闁?
+    -- (zh-CN / en-US / ja-JP 绛?锛沶ame_i18n / description_i18n 鏄?LLM 缈昏瘧鐢熸垚鐨?
+    -- JSONB锛岀粨鏋勫舰濡?{"en-US": "...", "zh-CN": "...", ...}銆?
 
-    -- 閻?app/services/indicator_translator.py 濞?community_service.py:_localize_indicator闁?
+    -- 瑙?app/services/indicator_translator.py 涓?community_service.py:_localize_indicator銆?
     source_language varchar(16) DEFAULT NULL,
     name_i18n        jsonb       DEFAULT NULL,
     description_i18n jsonb       DEFAULT NULL,
@@ -1505,27 +1505,27 @@ INSERT INTO qd_market_symbols (market, symbol, name, exchange, currency, is_acti
 ('Futures', 'ES', 'S&P 500 E-mini', 'CME', 'USD', 1, 1, 92),
 ('Futures', 'NQ', 'NASDAQ 100 E-mini', 'CME', 'USD', 1, 1, 91),
 -- A-share hot symbols use the canonical exchange identifier from the symbol master.
-('CNStock', '600519', '鐠愰潧绐為懠鍛酱', 'CN', 'CNY', 1, 1, 100),
-('CNStock', '600036', '閹锋稑鏅㈤柧鎯邦攽', 'CN', 'CNY', 1, 1, 99),
-('CNStock', '601318', '娑擃厼娴楅獮鍐茬暔', 'CN', 'CNY', 1, 1, 98),
-('CNStock', '600900', '闂€鎸庣潤閻㈤潧濮?, 'CN', 'CNY', 1, 1, 97),
-('CNStock', '601899', '缁鳖偊鍣鹃惌澶哥瑹', 'CN', 'CNY', 1, 1, 96),
-('CNStock', '000858', '娴滄梻浼☉?, 'CN', 'CNY', 1, 1, 95),
-('CNStock', '000333', '缂囧海娈戦梿鍡楁礋', 'CN', 'CNY', 1, 1, 94),
-('CNStock', '002594', '濮ｆ柧绨规潻?, 'CN', 'CNY', 1, 1, 93),
-('CNStock', '300750', '鐎逛礁鐥夐弮鏈靛敩', 'CN', 'CNY', 1, 1, 92),
-('CNStock', '000001', '楠炲啿鐣ㄩ柧鎯邦攽', 'CN', 'CNY', 1, 1, 91),
+('CNStock', '600519', '贵州茅台', 'CN', 'CNY', 1, 1, 100),
+('CNStock', '600036', '招商银行', 'CN', 'CNY', 1, 1, 99),
+('CNStock', '601318', '中国平安', 'CN', 'CNY', 1, 1, 98),
+('CNStock', '600900', '长江电力', 'CN', 'CNY', 1, 1, 97),
+('CNStock', '601899', '紫金矿业', 'CN', 'CNY', 1, 1, 96),
+('CNStock', '000858', '五粮液', 'CN', 'CNY', 1, 1, 95),
+('CNStock', '000333', '美的集团', 'CN', 'CNY', 1, 1, 94),
+('CNStock', '002594', '比亚迪', 'CN', 'CNY', 1, 1, 93),
+('CNStock', '300750', '宁德时代', 'CN', 'CNY', 1, 1, 92),
+('CNStock', '000001', '平安银行', 'CN', 'CNY', 1, 1, 91),
 -- Hong Kong hot symbols.
-('HKStock', '00700', '閼垫崘顔嗛幒褑鍋?, 'HKEX', 'HKD', 1, 1, 100),
-('HKStock', '09988', '闂冨潡鍣峰鏉戝弽-W', 'HKEX', 'HKD', 1, 1, 99),
-('HKStock', '03690', '缂囧骸娲?W', 'HKEX', 'HKD', 1, 1, 98),
-('HKStock', '01810', '鐏忓繒鑳岄梿鍡楁礋-W', 'HKEX', 'HKD', 1, 1, 97),
-('HKStock', '00939', '瀵ら缚顔曢柧鎯邦攽', 'HKEX', 'HKD', 1, 1, 96),
-('HKStock', '01299', '閸欏鍋婃穱婵嬫珦', 'HKEX', 'HKD', 1, 1, 95),
-('HKStock', '02318', '娑擃厼娴楅獮鍐茬暔', 'HKEX', 'HKD', 1, 1, 94),
-('HKStock', '00388', '妫ｆ瑦鑵愭禍銈嗘閹碘偓', 'HKEX', 'HKD', 1, 1, 93),
-('HKStock', '00883', '娑擃厼娴楀ù閿嬬１閻櫕琛?, 'HKEX', 'HKD', 1, 1, 92),
-('HKStock', '01398', '瀹搞儱鏅㈤柧鎯邦攽', 'HKEX', 'HKD', 1, 1, 91),
+('HKStock', '00700', '腾讯控股', 'HKEX', 'HKD', 1, 1, 100),
+('HKStock', '09988', '阿里巴巴-W', 'HKEX', 'HKD', 1, 1, 99),
+('HKStock', '03690', '美团-W', 'HKEX', 'HKD', 1, 1, 98),
+('HKStock', '01810', '小米集团-W', 'HKEX', 'HKD', 1, 1, 97),
+('HKStock', '00939', '建设银行', 'HKEX', 'HKD', 1, 1, 96),
+('HKStock', '01299', '友邦保险', 'HKEX', 'HKD', 1, 1, 95),
+('HKStock', '02318', '中国平安', 'HKEX', 'HKD', 1, 1, 94),
+('HKStock', '00388', '香港交易所', 'HKEX', 'HKD', 1, 1, 93),
+('HKStock', '00883', '中国海洋石油', 'HKEX', 'HKD', 1, 1, 92),
+('HKStock', '01398', '工商银行', 'HKEX', 'HKD', 1, 1, 91),
 -- MOEX (Moscow Exchange) blue chips
 -- Tickers are the MOEX ISS instrument codes; resolve_symbol_name() upgrades
 -- the display name from MOEX ISS securities/<sym>.json on first lookup.
@@ -1979,7 +1979,7 @@ WHERE commission_quote IS NULL
   AND UPPER(COALESCE(commission_ccy, '')) IN ('USD', 'USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD');
 
 -- =============================================================================
--- Polymarket (鐎规瓕灏欎簺闂?/ removed in v3.0.7)
+-- Polymarket (宸茬Щ闄?/ removed in v3.0.7)
 -- =============================================================================
 
 
@@ -2983,6 +2983,12 @@ END $$;
 -- Phase 0 wave 2: hard-risk enforcement and outbox/projection persistence.
 -- Expand-only. No runtime path is enabled by this migration.
 
+-- qd_order_commands does not itself carry instrument/market facts.  This
+-- non-partial unique index makes its command-level account scope referenceable
+-- by an immutable risk decision without inventing those missing facts.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_order_commands_command_scope
+    ON qd_order_commands(id, tenant_id, credential_id, account_scope);
+
 CREATE TABLE IF NOT EXISTS qd_risk_policy_snapshots (
     id UUID PRIMARY KEY,
     tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
@@ -3050,6 +3056,10 @@ CREATE TABLE IF NOT EXISTS qd_risk_decisions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(decision_fingerprint),
     UNIQUE(id, command_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    FOREIGN KEY(command_id, tenant_id, credential_id, account_scope)
+        REFERENCES qd_order_commands(id, tenant_id, credential_id, account_scope) ON DELETE RESTRICT,
+    FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_economic_orders(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT,
     FOREIGN KEY(policy_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
         REFERENCES qd_risk_policy_snapshots(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT,
     FOREIGN KEY(risk_input_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
@@ -3080,6 +3090,16 @@ BEGIN
         ALTER TABLE qd_risk_reservations ADD CONSTRAINT fk_qd_risk_reservations_enforcement_decision
             FOREIGN KEY(decision_id, command_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
             REFERENCES qd_risk_decisions(id, command_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_risk_reservations_enforcement_policy_snapshot') THEN
+        ALTER TABLE qd_risk_reservations ADD CONSTRAINT fk_qd_risk_reservations_enforcement_policy_snapshot
+            FOREIGN KEY(policy_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+            REFERENCES qd_risk_policy_snapshots(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_risk_reservations_enforcement_input_snapshot') THEN
+        ALTER TABLE qd_risk_reservations ADD CONSTRAINT fk_qd_risk_reservations_enforcement_input_snapshot
+            FOREIGN KEY(risk_input_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+            REFERENCES qd_risk_input_snapshots(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT NOT VALID;
     END IF;
 END $$;
 
@@ -3130,6 +3150,12 @@ END; $$;
 
 CREATE OR REPLACE FUNCTION qd_guard_risk_reservation_enforcement_update()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    -- Existing non-enforcement reservations keep their current repository
+    -- contract.  Once the enforcement facts exist, all later changes are
+    -- constrained by the canonical state/version transition below.
+    IF OLD.enforcement_contract_version IS NULL THEN
+        RETURN NEW;
+    END IF;
     IF ROW(NEW.id,NEW.command_id,NEW.economic_order_id,NEW.tenant_id,NEW.credential_id,NEW.account_scope,NEW.reservation_kind,NEW.currency,NEW.reserved_notional,NEW.reserved_margin,NEW.reserved_position_qty,NEW.limits_snapshot_json,NEW.risk_input_hash,NEW.decision_id,NEW.instrument_id,NEW.market_type,NEW.action,NEW.policy_snapshot_id,NEW.risk_input_snapshot_id,NEW.enforcement_contract_version)
        IS DISTINCT FROM ROW(OLD.id,OLD.command_id,OLD.economic_order_id,OLD.tenant_id,OLD.credential_id,OLD.account_scope,OLD.reservation_kind,OLD.currency,OLD.reserved_notional,OLD.reserved_margin,OLD.reserved_position_qty,OLD.limits_snapshot_json,OLD.risk_input_hash,OLD.decision_id,OLD.instrument_id,OLD.market_type,OLD.action,OLD.policy_snapshot_id,OLD.risk_input_snapshot_id,OLD.enforcement_contract_version) THEN
         RAISE EXCEPTION 'risk reservation immutable facts cannot change' USING ERRCODE = '55000';

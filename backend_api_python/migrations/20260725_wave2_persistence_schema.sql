@@ -1,6 +1,12 @@
 -- Phase 0 wave 2: hard-risk enforcement and outbox/projection persistence.
 -- Expand-only. No runtime path is enabled by this migration.
 
+-- qd_order_commands does not itself carry instrument/market facts.  This
+-- non-partial unique index makes its command-level account scope referenceable
+-- by an immutable risk decision without inventing those missing facts.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_order_commands_command_scope
+    ON qd_order_commands(id, tenant_id, credential_id, account_scope);
+
 CREATE TABLE IF NOT EXISTS qd_risk_policy_snapshots (
     id UUID PRIMARY KEY,
     tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
@@ -68,6 +74,10 @@ CREATE TABLE IF NOT EXISTS qd_risk_decisions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(decision_fingerprint),
     UNIQUE(id, command_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    FOREIGN KEY(command_id, tenant_id, credential_id, account_scope)
+        REFERENCES qd_order_commands(id, tenant_id, credential_id, account_scope) ON DELETE RESTRICT,
+    FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_economic_orders(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT,
     FOREIGN KEY(policy_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
         REFERENCES qd_risk_policy_snapshots(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT,
     FOREIGN KEY(risk_input_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
@@ -98,6 +108,16 @@ BEGIN
         ALTER TABLE qd_risk_reservations ADD CONSTRAINT fk_qd_risk_reservations_enforcement_decision
             FOREIGN KEY(decision_id, command_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
             REFERENCES qd_risk_decisions(id, command_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_risk_reservations_enforcement_policy_snapshot') THEN
+        ALTER TABLE qd_risk_reservations ADD CONSTRAINT fk_qd_risk_reservations_enforcement_policy_snapshot
+            FOREIGN KEY(policy_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+            REFERENCES qd_risk_policy_snapshots(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_risk_reservations_enforcement_input_snapshot') THEN
+        ALTER TABLE qd_risk_reservations ADD CONSTRAINT fk_qd_risk_reservations_enforcement_input_snapshot
+            FOREIGN KEY(risk_input_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+            REFERENCES qd_risk_input_snapshots(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT NOT VALID;
     END IF;
 END $$;
 
@@ -148,6 +168,12 @@ END; $$;
 
 CREATE OR REPLACE FUNCTION qd_guard_risk_reservation_enforcement_update()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    -- Existing non-enforcement reservations keep their current repository
+    -- contract.  Once the enforcement facts exist, all later changes are
+    -- constrained by the canonical state/version transition below.
+    IF OLD.enforcement_contract_version IS NULL THEN
+        RETURN NEW;
+    END IF;
     IF ROW(NEW.id,NEW.command_id,NEW.economic_order_id,NEW.tenant_id,NEW.credential_id,NEW.account_scope,NEW.reservation_kind,NEW.currency,NEW.reserved_notional,NEW.reserved_margin,NEW.reserved_position_qty,NEW.limits_snapshot_json,NEW.risk_input_hash,NEW.decision_id,NEW.instrument_id,NEW.market_type,NEW.action,NEW.policy_snapshot_id,NEW.risk_input_snapshot_id,NEW.enforcement_contract_version)
        IS DISTINCT FROM ROW(OLD.id,OLD.command_id,OLD.economic_order_id,OLD.tenant_id,OLD.credential_id,OLD.account_scope,OLD.reservation_kind,OLD.currency,OLD.reserved_notional,OLD.reserved_margin,OLD.reserved_position_qty,OLD.limits_snapshot_json,OLD.risk_input_hash,OLD.decision_id,OLD.instrument_id,OLD.market_type,OLD.action,OLD.policy_snapshot_id,OLD.risk_input_snapshot_id,OLD.enforcement_contract_version) THEN
         RAISE EXCEPTION 'risk reservation immutable facts cannot change' USING ERRCODE = '55000';

@@ -154,8 +154,13 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
         for fragment in (
             "decision_fingerprint VARCHAR(64) NOT NULL",
+            "uq_qd_order_commands_command_scope",
+            "FOREIGN KEY(command_id, tenant_id, credential_id, account_scope)",
+            "FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)",
             "chk_qd_risk_reservations_enforcement_complete",
             "fk_qd_risk_reservations_enforcement_decision",
+            "fk_qd_risk_reservations_enforcement_policy_snapshot",
+            "fk_qd_risk_reservations_enforcement_input_snapshot",
             "uq_qd_transactional_outbox_canonical_identity",
             "lease_fencing_token BIGINT NOT NULL DEFAULT 0",
             "qd_guard_risk_reservation_enforcement_update",
