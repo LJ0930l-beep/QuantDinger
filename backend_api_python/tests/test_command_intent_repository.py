@@ -170,12 +170,12 @@ class CommandIntentRepositoryTests(unittest.TestCase):
             risk_input_hash="d" * 64, expires_at=expires_at,
         )
         row = (
-            reservation.reservation_id, reservation.economic_order_id, 1, 2, "account-a", "USDT",
-            Decimal("100.000000000000000000"), Decimal("10.000000000000000000"),
-            Decimal("1.000000000000000000"), {"a": "1", "b": "2"}, reservation.risk_input_hash,
-            "ACTIVE", expires_at, 0,
+            reservation.reservation_id, reservation.command_id, reservation.economic_order_id,
+            1, 2, "account-a", "MARGIN", "USDT", Decimal("100.000000000000000000"),
+            Decimal("10.000000000000000000"), Decimal("1.000000000000000000"),
+            {"a": "1", "b": "2"}, reservation.risk_input_hash, "ACTIVE", expires_at, 0,
         )
-        connection = FakeConnection([(value.command.command_id,), row])
+        connection = FakeConnection([(value.command.command_id,), None, row, row])
         result = repository_module.CommandIntentRepository().create_reservation(connection, reservation)
         self.assertEqual(result.disposition, c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY)
 
@@ -197,12 +197,15 @@ class CommandIntentRepositoryTests(unittest.TestCase):
             reserved_position_qty=d.Quantity("1"), limits_snapshot={"max": "100"},
             risk_input_hash="b" * 64, expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
         )
-        connection = FakeConnection([(value.command.command_id,), None, (reservation.reservation_id, 0)])
+        connection = FakeConnection([(value.command.command_id,), (reservation.reservation_id, 0)])
         repo = repository_module.CommandIntentRepository()
         created = repo.create_reservation(connection, reservation)
         self.assertEqual(created.state, c.ReservationState.ACTIVE)
         self.assertEqual(created.disposition, c.ReservationTransitionDisposition.APPLIED)
         self.assertEqual(connection.commits, 1)
+        sql = "\n".join(statement for statement, _ in connection.cursor_value.executed)
+        self.assertIn("ON CONFLICT DO NOTHING", sql)
+        self.assertNotIn("ON CONFLICT (command_id, reservation_kind)", sql)
 
         transition_connection = FakeConnection([(1,)])
         consumed = repo.consume_reservation(transition_connection, reservation.reservation_id, 0)

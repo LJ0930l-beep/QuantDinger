@@ -6,6 +6,7 @@ import os
 import hashlib
 import threading
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -116,6 +117,25 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
             thread.join(timeout=20)
             self.assertFalse(thread.is_alive(), "concurrent repository test timed out")
         return results
+
+    def _assert_reservation_race(self, results, *, expected_conflict: bool) -> None:
+        raw_failures = [result for result in results if isinstance(result, BaseException) and not isinstance(result, c.ReservationConflict)]
+        self.assertEqual(raw_failures, [], f"reservation race leaked driver error: {raw_failures!r}")
+        applied = [
+            result for result in results
+            if getattr(result, "disposition", None) is c.ReservationTransitionDisposition.APPLIED
+        ]
+        self.assertEqual(len(applied), 1)
+        conflicts = [result for result in results if isinstance(result, c.ReservationConflict)]
+        if expected_conflict:
+            self.assertEqual(len(conflicts), 1)
+            return
+        replays = [
+            result for result in results
+            if getattr(result, "disposition", None) is c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY
+        ]
+        self.assertEqual(len(conflicts), 0)
+        self.assertEqual(len(replays), 1)
 
     def test_atomic_graph_accept_replay_and_conflict_use_real_unique_constraints(self):
         graph = self._graph()
@@ -305,10 +325,7 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
             lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, reservation),
             lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, reservation),
         )
-        self.assertEqual(
-            {result.disposition for result in replay_results if not isinstance(result, BaseException)},
-            {c.ReservationTransitionDisposition.APPLIED, c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY},
-        )
+        self._assert_reservation_race(replay_results, expected_conflict=False)
         with self.connection.cursor() as cursor:
             cursor.execute("SELECT count(*) FROM qd_risk_reservations WHERE command_id = %s AND state = 'ACTIVE'", (graph.command.command_id,))
             self.assertEqual(cursor.fetchone()[0], 1)
@@ -321,8 +338,7 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
             lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, conflict_first),
             lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, conflicting),
         )
-        self.assertEqual(sum(getattr(result, "disposition", None) is c.ReservationTransitionDisposition.APPLIED for result in results), 1)
-        self.assertEqual(sum(isinstance(result, c.ReservationConflict) for result in results), 1)
+        self._assert_reservation_race(results, expected_conflict=True)
 
         terminal_results = self._parallel(
             lambda connection: repository_module.CommandIntentRepository().consume_reservation(connection, reservation.reservation_id, 0),
@@ -330,6 +346,55 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
         )
         self.assertEqual(sum(getattr(result, "disposition", None) is c.ReservationTransitionDisposition.APPLIED for result in terminal_results), 1)
         self.assertEqual(sum(isinstance(result, c.ReservationStateConflict) for result in terminal_results), 1)
+
+    def test_same_reservation_race_replays_exactly_once_across_twenty_runs(self):
+        for index in range(20):
+            graph = self._graph(replay_token=f"reservation-replay-{self.suffix}-{index}")
+            self.repo.accept_command_graph(self.connection, graph)
+            reservation = self._reservation(graph, tag=f"same-{index}")
+            results = self._parallel(
+                lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, reservation),
+                lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, reservation),
+            )
+            self._assert_reservation_race(results, expected_conflict=False)
+            with self.connection.cursor() as cursor:
+                cursor.execute("SELECT count(*) FROM qd_risk_reservations WHERE id = %s", (reservation.reservation_id,))
+                self.assertEqual(cursor.fetchone()[0], 1)
+
+    def test_reservation_primary_key_and_active_scope_races_are_typed_conflicts(self):
+        primary_first_graph = self._graph(replay_token=f"reservation-primary-one-{self.suffix}")
+        primary_second_graph = self._graph(replay_token=f"reservation-primary-two-{self.suffix}")
+        self.repo.accept_command_graph(self.connection, primary_first_graph)
+        self.repo.accept_command_graph(self.connection, primary_second_graph)
+        primary_first = self._reservation(primary_first_graph, tag="primary-first")
+        primary_second = replace(
+            self._reservation(primary_second_graph, tag="primary-second"),
+            reservation_id=primary_first.reservation_id,
+        )
+        primary_results = self._parallel(
+            lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, primary_first),
+            lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, primary_second),
+        )
+        self._assert_reservation_race(primary_results, expected_conflict=True)
+        with self.connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM qd_risk_reservations WHERE id = %s", (primary_first.reservation_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+
+        scope_graph = self._graph(replay_token=f"reservation-scope-{self.suffix}")
+        self.repo.accept_command_graph(self.connection, scope_graph)
+        scope_first = self._reservation(scope_graph, tag="scope-first")
+        scope_second = self._reservation(scope_graph, tag="scope-second")
+        scope_results = self._parallel(
+            lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, scope_first),
+            lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, scope_second),
+        )
+        self._assert_reservation_race(scope_results, expected_conflict=True)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT count(*) FROM qd_risk_reservations WHERE command_id = %s AND reservation_kind = 'MARGIN' AND state = 'ACTIVE'",
+                (scope_graph.command.command_id,),
+            )
+            self.assertEqual(cursor.fetchone()[0], 1)
 
     def test_expire_and_consume_race_leaves_one_irreversible_terminal_state(self):
         graph = self._graph(replay_token="-".join(("parallel", "expire")))

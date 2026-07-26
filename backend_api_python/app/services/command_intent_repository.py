@@ -273,11 +273,6 @@ class CommandIntentRepository:
         cursor = connection.cursor()
         try:
             self._validate_reservation_scope(cursor, reservation)
-            existing = self._reservation_row(cursor, reservation)
-            if existing is not None:
-                result = self._load_matching_reservation(cursor, reservation, existing)
-                connection.commit()
-                return result
             cursor.execute(
                 """
                 INSERT INTO qd_risk_reservations (
@@ -286,8 +281,7 @@ class CommandIntentRepository:
                     reserved_margin, reserved_position_qty, limits_snapshot_json,
                     risk_input_hash, state, expires_at
                 ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,'ACTIVE',%s)
-                ON CONFLICT (command_id, reservation_kind) WHERE state = 'ACTIVE'
-                DO NOTHING RETURNING id, version
+                ON CONFLICT DO NOTHING RETURNING id, version
                 """,
                 (reservation.reservation_id, reservation.command_id, reservation.economic_order_id,
                  reservation.tenant_id, reservation.credential_id, reservation.account_scope,
@@ -301,7 +295,12 @@ class CommandIntentRepository:
                 connection.commit()
                 return ReservationTransitionResult(reservation.reservation_id, ReservationState.ACTIVE, 0,
                                                    ReservationTransitionDisposition.APPLIED)
-            result = self._load_matching_reservation(cursor, reservation)
+            # PostgreSQL decides every unique race.  Do not name one arbiter:
+            # a duplicate primary key is just as meaningful as the ACTIVE
+            # (command_id, reservation_kind) uniqueness rule.  Once the
+            # conflicting transaction is visible, prove the complete immutable
+            # reservation identity before reporting a replay.
+            result = self._load_matching_reservation_after_conflict(cursor, reservation)
             connection.commit()
             return result
         except Exception:
@@ -327,12 +326,13 @@ class CommandIntentRepository:
         if cursor.fetchone() is None:
             raise ReservationConflict("reservation command, order, and scope do not match")
 
-    def _reservation_row(self, cursor: Cursor, reservation: RiskReservation) -> Any:
+    def _reservation_row_by_command_kind(self, cursor: Cursor, reservation: RiskReservation) -> Any:
         cursor.execute(
             """
-            SELECT id, economic_order_id, tenant_id, credential_id, account_scope,
-                   currency, reserved_notional, reserved_margin, reserved_position_qty,
-                   limits_snapshot_json, risk_input_hash, state, expires_at, version
+            SELECT id, command_id, economic_order_id, tenant_id, credential_id,
+                   account_scope, reservation_kind, currency, reserved_notional,
+                   reserved_margin, reserved_position_qty, limits_snapshot_json,
+                   risk_input_hash, state, expires_at, version
               FROM qd_risk_reservations
              WHERE command_id = %s AND reservation_kind = %s
              ORDER BY created_at DESC LIMIT 1 FOR UPDATE
@@ -341,37 +341,56 @@ class CommandIntentRepository:
         )
         return cursor.fetchone()
 
-    def _load_matching_reservation(self, cursor: Cursor, reservation: RiskReservation, row: Any | None = None) -> ReservationTransitionResult:
-        if row is None:
-            row = self._reservation_row(cursor, reservation)
-        if row is None:
+    def _reservation_row_by_id(self, cursor: Cursor, reservation: RiskReservation) -> Any:
+        cursor.execute(
+            """
+            SELECT id, command_id, economic_order_id, tenant_id, credential_id,
+                   account_scope, reservation_kind, currency, reserved_notional,
+                   reserved_margin, reserved_position_qty, limits_snapshot_json,
+                   risk_input_hash, state, expires_at, version
+              FROM qd_risk_reservations
+             WHERE id = %s FOR UPDATE
+            """,
+            (reservation.reservation_id,),
+        )
+        return cursor.fetchone()
+
+    def _load_matching_reservation_after_conflict(self, cursor: Cursor, reservation: RiskReservation) -> ReservationTransitionResult:
+        by_command_kind = self._reservation_row_by_command_kind(cursor, reservation)
+        by_id = self._reservation_row_by_id(cursor, reservation)
+        if by_command_kind is None and by_id is None:
             raise ReservationConflict("active reservation conflict is not visible")
+        if by_command_kind is not None and by_id is not None:
+            if str(_row_value(by_command_kind, 0, "id")) != str(_row_value(by_id, 0, "id")):
+                raise ReservationConflict("reservation id and command scope identify different reservations")
+        row = by_id if by_id is not None else by_command_kind
         expected = (
-            reservation.reservation_id, reservation.economic_order_id, reservation.tenant_id,
-            reservation.credential_id, reservation.account_scope, reservation.currency,
-            reservation.reserved_notional.to_string(), reservation.reserved_margin.to_string(),
-            reservation.reserved_position_qty.to_string(), reservation.canonical_limits_json,
-            reservation.risk_input_hash,
+            reservation.reservation_id, reservation.command_id, reservation.economic_order_id,
+            reservation.tenant_id, reservation.credential_id, reservation.account_scope,
+            reservation.reservation_kind, reservation.currency, reservation.reserved_notional.to_string(),
+            reservation.reserved_margin.to_string(), reservation.reserved_position_qty.to_string(),
+            reservation.canonical_limits_json, reservation.risk_input_hash,
             None if reservation.expires_at is None else reservation.expires_at.isoformat(),
         )
         observed = list(_row_value(row, index, key) for index, key in enumerate(
-            ("id", "economic_order_id", "tenant_id", "credential_id", "account_scope", "currency",
-             "reserved_notional", "reserved_margin", "reserved_position_qty", "limits_snapshot_json", "risk_input_hash")
+            ("id", "command_id", "economic_order_id", "tenant_id", "credential_id", "account_scope",
+             "reservation_kind", "currency", "reserved_notional", "reserved_margin", "reserved_position_qty",
+             "limits_snapshot_json", "risk_input_hash")
         ))
-        observed.append(_row_value(row, 12, "expires_at"))
+        observed.append(_row_value(row, 14, "expires_at"))
         normalized_observed = observed
-        normalized_observed[0] = str(normalized_observed[0])
-        normalized_observed[1] = str(normalized_observed[1])
-        for index in (6, 7, 8):
+        for index in (0, 1, 2):
+            normalized_observed[index] = str(normalized_observed[index])
+        for index in (8, 9, 10):
             normalized_observed[index] = _canonical_db_decimal(normalized_observed[index])
-        normalized_observed[9] = _canonical_db_json(normalized_observed[9])
-        normalized_observed[11] = _canonical_db_timestamp(normalized_observed[11])
+        normalized_observed[11] = _canonical_db_json(normalized_observed[11])
+        normalized_observed[13] = _canonical_db_timestamp(normalized_observed[13])
         if tuple(normalized_observed) != expected:
             raise ReservationConflict("reservation identity is reused with different immutable facts")
         return ReservationTransitionResult(
             reservation_id=reservation.reservation_id,
-            state=ReservationState(str(_row_value(row, 11, "state"))),
-            version=int(_row_value(row, 13, "version")),
+            state=ReservationState(str(_row_value(row, 13, "state"))),
+            version=int(_row_value(row, 15, "version")),
             disposition=ReservationTransitionDisposition.IDEMPOTENT_REPLAY,
         )
 
