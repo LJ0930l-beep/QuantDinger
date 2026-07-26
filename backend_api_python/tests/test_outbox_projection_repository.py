@@ -65,7 +65,7 @@ class OutboxProjectionRepositoryTests(unittest.TestCase):
         connection = _Connection(cursor)
         result = OutboxProjectionRepository().persist_event(connection, self.event, available_at=self.now)
         self.assertEqual(result.disposition, OutboxPersistDisposition.CREATED)
-        self.assertEqual(connection.commits, 1)
+        self.assertEqual(connection.commits, 0)
         self.assertEqual(connection.rollbacks, 0)
         self.assertTrue(cursor.closed)
         self.assertIn("ON CONFLICT DO NOTHING", cursor.queries[0][0])
@@ -93,7 +93,7 @@ class OutboxProjectionRepositoryTests(unittest.TestCase):
         with self.assertRaises(OutboxLeaseConflict):
             OutboxProjectionRepository().mark_published(connection, leased, published_at=self.now)
         self.assertEqual(connection.commits, 0)
-        self.assertEqual(connection.rollbacks, 1)
+        self.assertEqual(connection.rollbacks, 0)
 
     def test_non_utc_lease_clock_fails_closed_before_database_access(self):
         cursor = _Cursor([])

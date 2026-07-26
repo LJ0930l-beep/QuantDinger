@@ -77,6 +77,23 @@ class OutboxProjectionRepositoryPostgresTests(unittest.TestCase):
         with self.assertRaises(OutboxConflict):
             self.repository.persist_event(self.connection, conflicting, available_at=NOW)
 
+    def test_outbox_database_guard_rejects_mutation_and_delete(self):
+        import psycopg2
+
+        event = self._event()
+        self.repository.persist_event(self.connection, event, available_at=NOW)
+        with self.connection.cursor() as cursor:
+            cursor.execute("SAVEPOINT outbox_immutable")
+            try:
+                with self.assertRaises(psycopg2.Error):
+                    cursor.execute("UPDATE qd_transactional_outbox SET payload_hash = %s WHERE event_id = %s", ("0" * 64, event.event_id))
+                cursor.execute("ROLLBACK TO SAVEPOINT outbox_immutable")
+                with self.assertRaises(psycopg2.Error):
+                    cursor.execute("DELETE FROM qd_transactional_outbox WHERE event_id = %s", (event.event_id,))
+            finally:
+                cursor.execute("ROLLBACK TO SAVEPOINT outbox_immutable")
+                cursor.execute("RELEASE SAVEPOINT outbox_immutable")
+
     def test_lease_fencing_allows_only_exact_owner_and_token_to_publish(self):
         event = self._event()
         self.repository.persist_event(self.connection, event, available_at=NOW)
@@ -101,41 +118,48 @@ class OutboxProjectionRepositoryPostgresTests(unittest.TestCase):
         self.repository.persist_event(self.connection, first, available_at=NOW)
         self.repository.persist_event(self.connection, gap, available_at=NOW)
         supported = {("FILL_APPLIED", "v1")}
+        generation = self.repository.start_rebuild(
+            self.connection, consumer_name="ledger-read-model",
+            build_fingerprint="b" * 64, source_high_watermark=0, expected_event_count=1,
+        )
         applied = self.repository.apply_to_projection(
             self.connection, consumer_name="ledger-read-model", event=first,
-            supported_schemas=supported, now_utc=NOW,
+            supported_schemas=supported, now_utc=NOW, generation_id=generation.generation_id, source_offset=0,
         )
         self.assertFalse(applied.result.idempotent_replay)
         replay = self.repository.apply_to_projection(
             self.connection, consumer_name="ledger-read-model", event=first,
-            supported_schemas=supported, now_utc=NOW,
+            supported_schemas=supported, now_utc=NOW, generation_id=generation.generation_id, source_offset=0,
         )
         self.assertTrue(replay.result.idempotent_replay)
         with self.assertRaises(ProjectionGap):
             self.repository.apply_to_projection(
                 self.connection, consumer_name="ledger-read-model", event=gap,
-                supported_schemas=supported, now_utc=NOW,
+                supported_schemas=supported, now_utc=NOW, generation_id=generation.generation_id, source_offset=2,
             )
+        ready = self.repository.complete_rebuild(self.connection, generation, now_utc=NOW)
+        self.assertFalse(ready.is_current)
+        self.assertTrue(self.repository.promote_rebuild(self.connection, ready, now_utc=NOW).is_current)
 
     def test_rebuild_generation_is_replay_safe_and_not_silently_reused(self):
         fingerprint = "a" * 64
         started = self.repository.start_rebuild(
             self.connection, consumer_name="ledger-read-model",
-            build_fingerprint=fingerprint, source_high_watermark=7,
+            build_fingerprint=fingerprint, source_high_watermark=7, expected_event_count=0,
         )
         replay = self.repository.start_rebuild(
             self.connection, consumer_name="ledger-read-model",
-            build_fingerprint=fingerprint, source_high_watermark=7,
+            build_fingerprint=fingerprint, source_high_watermark=7, expected_event_count=0,
         )
         self.assertEqual(replay.generation_id, started.generation_id)
         with self.assertRaises(ProjectionGenerationConflict):
             self.repository.start_rebuild(
                 self.connection, consumer_name="ledger-read-model",
-                build_fingerprint=fingerprint, source_high_watermark=8,
+                build_fingerprint=fingerprint, source_high_watermark=8, expected_event_count=0,
             )
         self.assertEqual(
-            self.repository.complete_rebuild(self.connection, started, now_utc=NOW).state,
-            "READY",
+            self.repository.fail_rebuild(self.connection, started, failure_reason="source replay unavailable").state,
+            "FAILED",
         )
 
     def test_two_connections_create_one_event_and_one_replay(self):

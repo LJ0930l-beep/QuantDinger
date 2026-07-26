@@ -41,6 +41,15 @@ CREATE TABLE IF NOT EXISTS qd_risk_input_snapshots (
     reconciliation_health VARCHAR(16) NOT NULL CHECK (reconciliation_health IN ('HEALTHY','DEGRADED','UNHEALTHY')),
     market_data_health VARCHAR(16) NOT NULL CHECK (market_data_health IN ('FRESH','STALE','UNKNOWN')),
     account_facts_verified BOOLEAN NOT NULL,
+    global_kill_switch_version BIGINT NOT NULL CHECK (global_kill_switch_version >= 0),
+    global_kill_switch_enabled BOOLEAN NOT NULL,
+    global_kill_switch_mode VARCHAR(32),
+    account_kill_switch_version BIGINT NOT NULL CHECK (account_kill_switch_version >= 0),
+    account_kill_switch_enabled BOOLEAN NOT NULL,
+    account_kill_switch_mode VARCHAR(32),
+    strategy_kill_switch_version BIGINT NOT NULL CHECK (strategy_kill_switch_version >= 0),
+    strategy_kill_switch_enabled BOOLEAN NOT NULL,
+    strategy_kill_switch_mode VARCHAR(32),
     gross_notional NUMERIC(38,18) NOT NULL CHECK (gross_notional >= 0),
     net_notional NUMERIC(38,18) NOT NULL,
     instrument_notional NUMERIC(38,18) NOT NULL CHECK (instrument_notional >= 0),
@@ -48,6 +57,7 @@ CREATE TABLE IF NOT EXISTS qd_risk_input_snapshots (
     equity NUMERIC(38,18) NOT NULL CHECK (equity > 0),
     peak_equity NUMERIC(38,18) NOT NULL CHECK (peak_equity >= equity),
     daily_realized_pnl NUMERIC(38,18) NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(id, tenant_id, credential_id, account_scope, instrument_id, market_type),
@@ -65,11 +75,22 @@ CREATE TABLE IF NOT EXISTS qd_risk_decisions (
     market_type VARCHAR(20) NOT NULL,
     action VARCHAR(20) NOT NULL CHECK (action IN ('OPEN','INCREASE','REDUCE','CLOSE','CANCEL','EMERGENCY_CLOSE','PROTECTION')),
     actor_type VARCHAR(16) NOT NULL CHECK (actor_type IN ('STRATEGY','HUMAN','AGENT','MCP','GRID','PROTECTION','ADMIN')),
+    actor_id VARCHAR(160) NOT NULL,
+    risk_effect VARCHAR(16) NOT NULL CHECK (risk_effect IN ('INCREASE_RISK','REDUCE_RISK','NEUTRAL')),
     policy_snapshot_id UUID NOT NULL,
     risk_input_snapshot_id UUID NOT NULL,
     decision VARCHAR(32) NOT NULL CHECK (decision IN ('ALLOW','DENY','ALLOW_RISK_REDUCING_ONLY','RECONCILIATION_REQUIRED')),
     decision_fingerprint VARCHAR(64) NOT NULL CHECK (decision_fingerprint ~ '^[0-9a-f]{64}$'),
-    correlation_id VARCHAR(160) NOT NULL DEFAULT '',
+    rejection_codes JSONB NOT NULL CHECK (jsonb_typeof(rejection_codes) = 'array'),
+    projected_gross_notional NUMERIC(38,18) NOT NULL,
+    projected_net_notional NUMERIC(38,18) NOT NULL,
+    projected_instrument_notional NUMERIC(38,18) NOT NULL,
+    projected_available_margin NUMERIC(38,18) NOT NULL,
+    projected_leverage NUMERIC(38,18) NOT NULL CHECK (projected_leverage >= 0),
+    projected_daily_loss NUMERIC(38,18) NOT NULL CHECK (projected_daily_loss >= 0),
+    projected_drawdown_ratio NUMERIC(38,18) NOT NULL CHECK (projected_drawdown_ratio >= 0 AND projected_drawdown_ratio <= 1),
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
+    observed_at TIMESTAMPTZ NOT NULL,
     occurred_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(decision_fingerprint),
@@ -91,7 +112,11 @@ ALTER TABLE qd_risk_reservations
     ADD COLUMN IF NOT EXISTS action VARCHAR(20),
     ADD COLUMN IF NOT EXISTS policy_snapshot_id UUID,
     ADD COLUMN IF NOT EXISTS risk_input_snapshot_id UUID,
-    ADD COLUMN IF NOT EXISTS enforcement_contract_version VARCHAR(64);
+    ADD COLUMN IF NOT EXISTS enforcement_contract_version VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS reserved_gross_notional NUMERIC(38,18),
+    ADD COLUMN IF NOT EXISTS reserved_net_notional NUMERIC(38,18),
+    ADD COLUMN IF NOT EXISTS reserved_instrument_notional NUMERIC(38,18),
+    ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(160);
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_risk_reservations_enforcement_decision
     ON qd_risk_reservations(decision_id) WHERE decision_id IS NOT NULL;
@@ -101,7 +126,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_qd_risk_reservations_enforcement_complete') THEN
         ALTER TABLE qd_risk_reservations ADD CONSTRAINT chk_qd_risk_reservations_enforcement_complete CHECK (
             (decision_id IS NULL AND instrument_id IS NULL AND market_type IS NULL AND action IS NULL AND policy_snapshot_id IS NULL AND risk_input_snapshot_id IS NULL AND enforcement_contract_version IS NULL)
-            OR (decision_id IS NOT NULL AND economic_order_id IS NOT NULL AND instrument_id IS NOT NULL AND market_type IS NOT NULL AND action IS NOT NULL AND policy_snapshot_id IS NOT NULL AND risk_input_snapshot_id IS NOT NULL AND enforcement_contract_version = 'hard-risk-enforcement-v1')
+            OR (decision_id IS NOT NULL AND economic_order_id IS NOT NULL AND instrument_id IS NOT NULL AND market_type IS NOT NULL AND action IS NOT NULL AND policy_snapshot_id IS NOT NULL AND risk_input_snapshot_id IS NOT NULL AND enforcement_contract_version = 'hard-risk-enforcement-v1' AND reserved_gross_notional IS NOT NULL AND reserved_net_notional IS NOT NULL AND reserved_instrument_notional IS NOT NULL AND correlation_id IS NOT NULL AND correlation_id <> '')
         ) NOT VALID;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_risk_reservations_enforcement_decision') THEN
@@ -135,30 +160,41 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_transactional_outbox_canonical_identity
     ON qd_transactional_outbox(aggregate_type, aggregate_id, aggregate_version, event_type, schema_version)
     WHERE schema_version IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS qd_projection_checkpoints (
-    id UUID PRIMARY KEY,
-    consumer_name VARCHAR(160) NOT NULL,
-    aggregate_type VARCHAR(64) NOT NULL,
-    aggregate_id UUID NOT NULL,
-    last_applied_version BIGINT NOT NULL DEFAULT -1 CHECK (last_applied_version >= -1),
-    last_event_id UUID,
-    last_payload_hash VARCHAR(64),
-    generation_id UUID,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(consumer_name, aggregate_type, aggregate_id),
-    CHECK ((last_applied_version = -1 AND last_event_id IS NULL AND last_payload_hash IS NULL) OR (last_applied_version >= 0 AND last_event_id IS NOT NULL AND last_payload_hash ~ '^[0-9a-f]{64}$'))
-);
-
 CREATE TABLE IF NOT EXISTS qd_projection_generations (
     id UUID PRIMARY KEY,
     consumer_name VARCHAR(160) NOT NULL,
     build_fingerprint VARCHAR(64) NOT NULL CHECK (build_fingerprint ~ '^[0-9a-f]{64}$'),
     state VARCHAR(16) NOT NULL CHECK (state IN ('BUILDING','READY','FAILED')),
     source_high_watermark BIGINT NOT NULL CHECK (source_high_watermark >= 0),
+    processed_high_watermark BIGINT NOT NULL DEFAULT -1 CHECK (processed_high_watermark >= -1),
+    expected_event_count BIGINT NOT NULL DEFAULT 0 CHECK (expected_event_count >= 0),
+    applied_event_count BIGINT NOT NULL DEFAULT 0 CHECK (applied_event_count >= 0),
+    is_current BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at TIMESTAMPTZ,
+    promoted_at TIMESTAMPTZ,
     failure_reason VARCHAR(512),
-    UNIQUE(consumer_name, build_fingerprint)
+    UNIQUE(consumer_name, build_fingerprint),
+    CHECK ((state = 'BUILDING' AND completed_at IS NULL AND promoted_at IS NULL AND failure_reason IS NULL)
+        OR (state = 'READY' AND completed_at IS NOT NULL AND failure_reason IS NULL)
+        OR (state = 'FAILED' AND completed_at IS NULL AND promoted_at IS NULL AND failure_reason IS NOT NULL)),
+    CHECK (NOT is_current OR state = 'READY')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_projection_generations_current_consumer
+    ON qd_projection_generations(consumer_name) WHERE is_current;
+
+CREATE TABLE IF NOT EXISTS qd_projection_checkpoints (
+    id UUID PRIMARY KEY,
+    generation_id UUID NOT NULL REFERENCES qd_projection_generations(id) ON DELETE RESTRICT,
+    consumer_name VARCHAR(160) NOT NULL,
+    aggregate_type VARCHAR(64) NOT NULL,
+    aggregate_id UUID NOT NULL,
+    last_applied_version BIGINT NOT NULL DEFAULT -1 CHECK (last_applied_version >= -1),
+    last_event_id UUID,
+    last_payload_hash VARCHAR(64),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(generation_id, consumer_name, aggregate_type, aggregate_id),
+    CHECK ((last_applied_version = -1 AND last_event_id IS NULL AND last_payload_hash IS NULL) OR (last_applied_version >= 0 AND last_event_id IS NOT NULL AND last_payload_hash ~ '^[0-9a-f]{64}$'))
 );
 
 CREATE OR REPLACE FUNCTION qd_reject_wave2_risk_fact_mutation()
@@ -187,9 +223,29 @@ RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
     RETURN NEW;
 END; $$;
 
+CREATE OR REPLACE FUNCTION qd_guard_transactional_outbox_immutable_facts()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    IF ROW(NEW.event_id, NEW.aggregate_type, NEW.aggregate_id, NEW.aggregate_version,
+           NEW.event_type, NEW.payload_json, NEW.schema_version, NEW.payload_hash,
+           NEW.event_fingerprint)
+       IS DISTINCT FROM ROW(OLD.event_id, OLD.aggregate_type, OLD.aggregate_id,
+           OLD.aggregate_version, OLD.event_type, OLD.payload_json, OLD.schema_version,
+           OLD.payload_hash, OLD.event_fingerprint) THEN
+        RAISE EXCEPTION 'transactional outbox immutable facts cannot change' USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_reject_transactional_outbox_delete()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    RAISE EXCEPTION 'transactional outbox facts are append-only' USING ERRCODE = '55000';
+END; $$;
+
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_risk_policy_snapshots_append_only') THEN CREATE TRIGGER trg_qd_risk_policy_snapshots_append_only BEFORE UPDATE OR DELETE ON qd_risk_policy_snapshots FOR EACH ROW EXECUTE FUNCTION qd_reject_wave2_risk_fact_mutation(); END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_risk_input_snapshots_append_only') THEN CREATE TRIGGER trg_qd_risk_input_snapshots_append_only BEFORE UPDATE OR DELETE ON qd_risk_input_snapshots FOR EACH ROW EXECUTE FUNCTION qd_reject_wave2_risk_fact_mutation(); END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_risk_decisions_append_only') THEN CREATE TRIGGER trg_qd_risk_decisions_append_only BEFORE UPDATE OR DELETE ON qd_risk_decisions FOR EACH ROW EXECUTE FUNCTION qd_reject_wave2_risk_fact_mutation(); END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_risk_reservations_enforcement_guard') THEN CREATE TRIGGER trg_qd_risk_reservations_enforcement_guard BEFORE UPDATE ON qd_risk_reservations FOR EACH ROW EXECUTE FUNCTION qd_guard_risk_reservation_enforcement_update(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_transactional_outbox_immutable_facts') THEN CREATE TRIGGER trg_qd_transactional_outbox_immutable_facts BEFORE UPDATE ON qd_transactional_outbox FOR EACH ROW EXECUTE FUNCTION qd_guard_transactional_outbox_immutable_facts(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_transactional_outbox_append_only') THEN CREATE TRIGGER trg_qd_transactional_outbox_append_only BEFORE DELETE ON qd_transactional_outbox FOR EACH ROW EXECUTE FUNCTION qd_reject_transactional_outbox_delete(); END IF;
 END $$;
