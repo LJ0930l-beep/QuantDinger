@@ -174,6 +174,7 @@ class OutboxProjectionRepositoryPostgresTests(unittest.TestCase):
             try:
                 barrier.wait(timeout=10)
                 outcome = OutboxProjectionRepository().persist_event(connection, event, available_at=NOW)
+                connection.commit()
                 outcomes.append(outcome.disposition)
             except Exception as exc:  # test captures any raw driver failure
                 failures.append(exc)
