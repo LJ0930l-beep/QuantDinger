@@ -64,11 +64,15 @@ class ImmutableFillLedgerPostgresTests(unittest.TestCase):
         return repository.ImmutableFillLedgerRepository().persist_fill_bundle(
             self.connection,
             scope=_scope(self.graph),
-            fill=fill or fill_input(economic_order_id=self.graph["economic_order_id"]),
+            fill=fill or self._fill(),
         )
 
     def _fill(self, **changes):
-        return fill_input(economic_order_id=self.graph["economic_order_id"], **changes)
+        return fill_input(
+            economic_order_id=self.graph["economic_order_id"],
+            market_type="spot",
+            **changes,
+        )
 
     def test_atomic_fill_fee_evidence_and_balanced_entries_commit_together(self):
         result = self._persist()
@@ -231,7 +235,7 @@ class ImmutableFillLedgerPostgresTests(unittest.TestCase):
                 return repository.ImmutableFillLedgerRepository().persist_fill_bundle(
                     connection,
                     scope=_scope(graph),
-                    fill=fill_input(economic_order_id=graph["economic_order_id"]),
+                    fill=fill_input(economic_order_id=graph["economic_order_id"], market_type="spot"),
                 )
             finally:
                 connection.close()

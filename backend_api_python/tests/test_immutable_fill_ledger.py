@@ -33,9 +33,9 @@ def valuation(fill_key, asset, valuation_ccy, price, *, source=None, label="evid
     )
 
 
-def fill_identity(*, account_scope="account-a", fees=()):
+def fill_identity(*, account_scope="account-a", market_type="swap", fees=()):
     return venue.VenueFillIdentity(
-        venue.VenueOrderScope("binance", "swap", account_scope, "BTC-USDT", "order-1"),
+        venue.VenueOrderScope("binance", market_type, account_scope, "BTC-USDT", "order-1"),
         "venue-fill-1",
         decimal_values.Quantity("1"),
         decimal_values.Price("100"),
@@ -49,6 +49,7 @@ def fill_input(
     account_scope="account-a",
     include_fees=True,
     economic_order_id="00000000-0000-0000-0000-000000000001",
+    market_type="swap",
 ):
     fees = ()
     if include_fees:
@@ -56,7 +57,7 @@ def fill_input(
             venue.FillFee("USDT", decimal_values.FeeAmount("0.1")),
             venue.FillFee("BNB", decimal_values.FeeAmount("0.001")),
         )
-    venue_fill = fill_identity(account_scope=account_scope, fees=fees)
+    venue_fill = fill_identity(account_scope=account_scope, market_type=market_type, fees=fees)
     fill_key = venue_fill.canonical_key
     quote_evidence = valuation(fill_key, "USDT", "USDT", "1", label="quote")
     components = ()
