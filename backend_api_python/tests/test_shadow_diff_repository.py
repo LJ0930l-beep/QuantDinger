@@ -77,7 +77,7 @@ class ShadowDiffRepositoryTests(unittest.TestCase):
         persisted_row = (
             run.tenant_id, run.credential_id, run.account_scope, run.instrument_id, run.market_type,
             comparison.legacy.source_fingerprint, comparison.candidate.source_fingerprint,
-            run.legacy_source_identity, run.legacy_source_version, run.candidate_generation_id,
+            run.legacy_source_identity, run.legacy_source_version, UUID(run.candidate_generation_id),
             run.candidate_checkpoint_watermark, run.as_of, run.correlation_id,
             run.policy.policy_version, run.build_fingerprint, comparison.replay_fingerprint, "COMPLETE",
         )

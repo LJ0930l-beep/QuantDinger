@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.domain.shadow_diff_contracts import (
     ShadowComparisonResult,
@@ -62,6 +62,13 @@ def _decimal_equal(left: object, right: object) -> bool:
     try:
         return Decimal(left) == Decimal(right)
     except Exception:
+        return False
+
+
+def _uuid_equal(left: object, right: object) -> bool:
+    try:
+        return str(UUID(str(left))).lower() == str(UUID(str(right))).lower()
+    except (TypeError, ValueError, AttributeError):
         return False
 
 
@@ -167,7 +174,7 @@ class ShadowDiffRepository:
             run.build_fingerprint,
         )
         actual = tuple(_row_value(row, index) for index in range(15))
-        if actual != expected:
+        if actual[:9] != expected[:9] or not _uuid_equal(actual[9], expected[9]) or actual[10:] != expected[10:]:
             raise ShadowReplayConflict("shadow run identity names different immutable facts")
 
     def _persist_diffs(self, cursor: Any, result: ShadowComparisonResult) -> None:
