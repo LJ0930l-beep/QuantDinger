@@ -37,6 +37,7 @@ from app.domain.order_contracts import EconomicOrderState
 class Cursor(Protocol):
     def execute(self, query: str, params: tuple[Any, ...] = ()) -> Any: ...
     def fetchone(self) -> Any: ...
+    def fetchall(self) -> list[Any]: ...
     def close(self) -> None: ...
 
 
@@ -326,22 +327,14 @@ class CommandIntentRepository:
         if cursor.fetchone() is None:
             raise ReservationConflict("reservation command, order, and scope do not match")
 
-    def _reservation_row_by_command_kind(self, cursor: Cursor, reservation: RiskReservation) -> Any:
-        cursor.execute(
-            """
-            SELECT id, command_id, economic_order_id, tenant_id, credential_id,
-                   account_scope, reservation_kind, currency, reserved_notional,
-                   reserved_margin, reserved_position_qty, limits_snapshot_json,
-                   risk_input_hash, state, expires_at, version
-              FROM qd_risk_reservations
-             WHERE command_id = %s AND reservation_kind = %s
-             ORDER BY created_at DESC LIMIT 1 FOR UPDATE
-            """,
-            (reservation.command_id, reservation.reservation_kind),
-        )
-        return cursor.fetchone()
+    def _reservation_conflict_rows(self, cursor: Cursor, reservation: RiskReservation) -> list[Any]:
+        """Lock every possible reservation-identity collision in one stable order.
 
-    def _reservation_row_by_id(self, cursor: Cursor, reservation: RiskReservation) -> Any:
+        A reservation ID can collide with historical rows, while command/kind is
+        unique only for ACTIVE rows.  Acquiring both potential rows in one
+        statement avoids the crossed lock order that two separate reads create.
+        """
+
         cursor.execute(
             """
             SELECT id, command_id, economic_order_id, tenant_id, credential_id,
@@ -349,21 +342,40 @@ class CommandIntentRepository:
                    reserved_margin, reserved_position_qty, limits_snapshot_json,
                    risk_input_hash, state, expires_at, version
               FROM qd_risk_reservations
-             WHERE id = %s FOR UPDATE
+             WHERE id = %s
+                OR (
+                    command_id = %s
+                    AND reservation_kind = %s
+                    AND state = 'ACTIVE'
+                )
+             ORDER BY id
+             FOR UPDATE
             """,
-            (reservation.reservation_id,),
+            (reservation.reservation_id, reservation.command_id, reservation.reservation_kind),
         )
-        return cursor.fetchone()
+        return list(cursor.fetchall())
 
     def _load_matching_reservation_after_conflict(self, cursor: Cursor, reservation: RiskReservation) -> ReservationTransitionResult:
-        by_command_kind = self._reservation_row_by_command_kind(cursor, reservation)
-        by_id = self._reservation_row_by_id(cursor, reservation)
-        if by_command_kind is None and by_id is None:
+        rows = self._reservation_conflict_rows(cursor, reservation)
+        if not rows:
             raise ReservationConflict("active reservation conflict is not visible")
-        if by_command_kind is not None and by_id is not None:
-            if str(_row_value(by_command_kind, 0, "id")) != str(_row_value(by_id, 0, "id")):
-                raise ReservationConflict("reservation id and command scope identify different reservations")
-        row = by_id if by_id is not None else by_command_kind
+        if len(rows) > 2:
+            raise ReservationConflict("reservation conflict query returned an unsafe candidate set")
+
+        id_rows = [row for row in rows if str(_row_value(row, 0, "id")) == reservation.reservation_id]
+        active_scope_rows = [
+            row for row in rows
+            if str(_row_value(row, 1, "command_id")) == reservation.command_id
+            and str(_row_value(row, 6, "reservation_kind")) == reservation.reservation_kind
+            and str(_row_value(row, 13, "state")) == ReservationState.ACTIVE.value
+        ]
+        if len(id_rows) > 1 or len(active_scope_rows) > 1:
+            raise ReservationConflict("reservation conflict query returned duplicate identities")
+        if len(rows) == 2:
+            raise ReservationConflict("reservation id and active command scope identify different reservations")
+        if not id_rows:
+            raise ReservationConflict("active reservation identity is reused with a different reservation id")
+        row = id_rows[0]
         expected = (
             reservation.reservation_id, reservation.command_id, reservation.economic_order_id,
             reservation.tenant_id, reservation.credential_id, reservation.account_scope,

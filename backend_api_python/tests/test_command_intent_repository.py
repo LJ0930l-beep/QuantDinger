@@ -47,6 +47,14 @@ class FakeCursor:
             return None
         return self.responses.pop(0)
 
+    def fetchall(self):
+        if not self.responses:
+            return []
+        value = self.responses.pop(0)
+        if value is None:
+            return []
+        return value if isinstance(value, list) else [value]
+
     def close(self):
         self.closed = True
 
@@ -175,9 +183,13 @@ class CommandIntentRepositoryTests(unittest.TestCase):
             Decimal("10.000000000000000000"), Decimal("1.000000000000000000"),
             {"a": "1", "b": "2"}, reservation.risk_input_hash, "ACTIVE", expires_at, 0,
         )
-        connection = FakeConnection([(value.command.command_id,), None, row, row])
+        connection = FakeConnection([(value.command.command_id,), None, [row]])
         result = repository_module.CommandIntentRepository().create_reservation(connection, reservation)
         self.assertEqual(result.disposition, c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY)
+        sql = "\n".join(statement for statement, _ in connection.cursor_value.executed)
+        self.assertIn("AND state = 'ACTIVE'", sql)
+        self.assertIn("ORDER BY id FOR UPDATE", sql)
+        self.assertNotIn("ORDER BY created_at DESC", sql)
 
     def test_snapshot_mismatch_fails_before_command_insert(self):
         value = graph()

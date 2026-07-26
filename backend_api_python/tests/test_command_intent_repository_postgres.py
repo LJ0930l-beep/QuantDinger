@@ -137,6 +137,11 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
         self.assertEqual(len(conflicts), 0)
         self.assertEqual(len(replays), 1)
 
+    def _assert_typed_reservation_conflicts(self, results) -> None:
+        raw_failures = [result for result in results if not isinstance(result, c.ReservationConflict)]
+        self.assertEqual(raw_failures, [], f"reservation race leaked non-typed result: {raw_failures!r}")
+        self.assertEqual(len(results), 2)
+
     def test_atomic_graph_accept_replay_and_conflict_use_real_unique_constraints(self):
         graph = self._graph()
         created = self.repo.accept_command_graph(self.connection, graph)
@@ -395,6 +400,64 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
                 (scope_graph.command.command_id,),
             )
             self.assertEqual(cursor.fetchone()[0], 1)
+
+    def test_crossed_reservation_identity_race_is_conflict_without_deadlock(self):
+        graph_a = self._graph(replay_token=f"reservation-crossed-a-{self.suffix}")
+        graph_b = self._graph(replay_token=f"reservation-crossed-b-{self.suffix}")
+        self.repo.accept_command_graph(self.connection, graph_a)
+        self.repo.accept_command_graph(self.connection, graph_b)
+        reservation_a = self._reservation(graph_a, tag="crossed-a")
+        reservation_b = self._reservation(graph_b, tag="crossed-b")
+        self.repo.create_reservation(self.connection, reservation_a)
+        self.repo.create_reservation(self.connection, reservation_b)
+
+        request_a_id_b_scope = replace(
+            reservation_a,
+            command_id=reservation_b.command_id,
+            economic_order_id=reservation_b.economic_order_id,
+        )
+        request_b_id_a_scope = replace(
+            reservation_b,
+            command_id=reservation_a.command_id,
+            economic_order_id=reservation_a.economic_order_id,
+        )
+        results = self._parallel(
+            lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, request_a_id_b_scope),
+            lambda connection: repository_module.CommandIntentRepository().create_reservation(connection, request_b_id_a_scope),
+        )
+        self._assert_typed_reservation_conflicts(results)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, command_id FROM qd_risk_reservations WHERE id IN (%s, %s) ORDER BY id",
+                (reservation_a.reservation_id, reservation_b.reservation_id),
+            )
+            self.assertEqual(
+                [(str(row[0]), str(row[1])) for row in cursor.fetchall()],
+                sorted([
+                    (reservation_a.reservation_id, reservation_a.command_id),
+                    (reservation_b.reservation_id, reservation_b.command_id),
+                ]),
+            )
+
+    def test_historical_reservation_replay_requires_no_active_scope_conflict(self):
+        graph = self._graph(replay_token=f"reservation-history-{self.suffix}")
+        self.repo.accept_command_graph(self.connection, graph)
+        first = self._reservation(graph, tag="history-first")
+        self.repo.create_reservation(self.connection, first)
+        self.repo.release_reservation(self.connection, first.reservation_id, 0)
+
+        second = self._reservation(graph, tag="history-second")
+        self.repo.create_reservation(self.connection, second)
+        self.repo.release_reservation(self.connection, second.reservation_id, 0)
+
+        replay = self.repo.create_reservation(self.connection, first)
+        self.assertEqual(replay.state, c.ReservationState.RELEASED)
+        self.assertEqual(replay.disposition, c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY)
+
+        active = self._reservation(graph, tag="history-active")
+        self.repo.create_reservation(self.connection, active)
+        with self.assertRaises(c.ReservationConflict):
+            self.repo.create_reservation(self.connection, first)
 
     def test_expire_and_consume_race_leaves_one_irreversible_terminal_state(self):
         graph = self._graph(replay_token="-".join(("parallel", "expire")))
