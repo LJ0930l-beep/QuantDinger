@@ -132,6 +132,30 @@ def _stable_uuid(material: str) -> str:
     return str(uuid.uuid5(_LEDGER_UUID_NAMESPACE, material))
 
 
+def _scoped_fill_event_id(scope: FillLedgerPersistenceScope, fill_key: str) -> str:
+    """Keep the database primary key isolated by immutable credential scope.
+
+    ``VenueFillIdentity.canonical_key`` intentionally models venue evidence
+    scope and contains no credential identifier.  Database primary keys and
+    global source-fingerprint indexes must additionally isolate tenant and
+    credential facts; otherwise identical venue identifiers from two accounts
+    collide before the composite database uniqueness rules can arbitrate.
+    """
+
+    return _stable_uuid(f"fill-event:{scope.tenant_id}:{scope.credential_id}:{fill_key}")
+
+
+def _storage_source_fingerprint(
+    scope: FillLedgerPersistenceScope,
+    transaction: LedgerTransaction,
+) -> str:
+    material = (
+        f"{scope.tenant_id}:{scope.credential_id}:{transaction.account_scope}:"
+        f"{transaction.source_fingerprint}"
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 def _payload_hash(bundle: FillLedgerBundle) -> str:
     return hashlib.sha256(bundle.replay_fingerprint.encode("ascii")).hexdigest()
 
@@ -154,7 +178,7 @@ class ImmutableFillLedgerRepository:
         self._validate_scope(scope, fill)
         cursor = connection.cursor()
         try:
-            fill_event_id = _stable_uuid(f"fill-event:{bundle.fill_key}")
+            fill_event_id = _scoped_fill_event_id(scope, bundle.fill_key)
             inserted = self._insert_fill(cursor, fill_event_id, scope, fill, bundle)
             if not inserted:
                 result = self._load_matching_replay(cursor, fill_event_id, scope, fill, bundle)
@@ -304,7 +328,8 @@ class ImmutableFillLedgerRepository:
         fill: FillLedgerInput,
         transaction: LedgerTransaction,
     ) -> str:
-        transaction_id = _stable_uuid(f"ledger-transaction:{transaction.source_fingerprint}")
+        storage_source_fingerprint = _storage_source_fingerprint(scope, transaction)
+        transaction_id = _stable_uuid(f"ledger-transaction:{storage_source_fingerprint}")
         cursor.execute(
             """
             INSERT INTO qd_ledger_transactions (
@@ -316,7 +341,7 @@ class ImmutableFillLedgerRepository:
             (
                 transaction_id, scope.tenant_id, scope.credential_id, transaction.account_scope,
                 transaction.transaction_type.value, transaction.source_event_type, fill_event_id,
-                transaction.source_fingerprint, scope.exchange_event_at, transaction.valuation_ccy,
+                storage_source_fingerprint, scope.exchange_event_at, transaction.valuation_ccy,
                 "fill-ledger-v1", fill.fill_key, "IMMUTABLE_FILL_BUNDLE",
             ),
         )
@@ -329,7 +354,7 @@ class ImmutableFillLedgerRepository:
                 ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
-                    _stable_uuid(f"ledger-entry:{transaction.source_fingerprint}:{line_no}"),
+                    _stable_uuid(f"ledger-entry:{storage_source_fingerprint}:{line_no}"),
                     transaction_id, line_no, entry.book.value, entry.account_code, entry.asset,
                     str(entry.signed_amount),
                     None if entry.value_in_valuation_ccy is None else str(entry.value_in_valuation_ccy),
@@ -377,8 +402,15 @@ class ImmutableFillLedgerRepository:
         )
         if observed != expected:
             raise FillLedgerReplayConflict("stable fill key names different immutable facts")
-        trade_id = _stable_uuid(f"ledger-transaction:{bundle.trade.source_fingerprint}")
-        fee_id = None if bundle.fee is None else _stable_uuid(f"ledger-transaction:{bundle.fee.source_fingerprint}")
+        trade_source_fingerprint = _storage_source_fingerprint(scope, bundle.trade)
+        trade_id = _stable_uuid(f"ledger-transaction:{trade_source_fingerprint}")
+        fee_source_fingerprint = (
+            None if bundle.fee is None else _storage_source_fingerprint(scope, bundle.fee)
+        )
+        fee_id = (
+            None if fee_source_fingerprint is None
+            else _stable_uuid(f"ledger-transaction:{fee_source_fingerprint}")
+        )
         cursor.execute(
             """
             SELECT id, transaction_type, source_fingerprint
@@ -389,9 +421,9 @@ class ImmutableFillLedgerRepository:
             (trade_id, fee_id, fee_id),
         )
         rows = cursor.fetchall() if hasattr(cursor, "fetchall") else []
-        expected_transactions = {(trade_id, "TRADE", bundle.trade.source_fingerprint)}
-        if bundle.fee is not None and fee_id is not None:
-            expected_transactions.add((fee_id, "FEE", bundle.fee.source_fingerprint))
+        expected_transactions = {(trade_id, "TRADE", trade_source_fingerprint)}
+        if bundle.fee is not None and fee_id is not None and fee_source_fingerprint is not None:
+            expected_transactions.add((fee_id, "FEE", fee_source_fingerprint))
         observed_transactions = {
             (str(_row_value(item, 0, "id")), _row_value(item, 1, "transaction_type"), _row_value(item, 2, "source_fingerprint"))
             for item in rows

@@ -220,7 +220,10 @@ class ImmutableFillLedgerPostgresTests(unittest.TestCase):
                 FailingConnection(), scope=_scope(self.graph), fill=fill
             )
         with self.connection.cursor() as cursor:
-            cursor.execute("SELECT count(*) FROM qd_exchange_fill_events WHERE dedupe_key = %s", (fill_key,))
+            cursor.execute(
+                "SELECT count(*) FROM qd_exchange_fill_events WHERE credential_id = %s AND dedupe_key = %s",
+                (self.graph["credential_id"], fill_key),
+            )
             self.assertEqual(cursor.fetchone()[0], 0)
 
     def test_two_connections_create_one_bundle_and_the_other_replays(self):
@@ -249,8 +252,8 @@ class ImmutableFillLedgerPostgresTests(unittest.TestCase):
         )
         with self.connection.cursor() as cursor:
             cursor.execute(
-                "SELECT count(*) FROM qd_exchange_fill_events WHERE dedupe_key = %s",
-                (self._fill().venue_fill.canonical_key,),
+                "SELECT count(*) FROM qd_exchange_fill_events WHERE credential_id = %s AND dedupe_key = %s",
+                (graph["credential_id"], self._fill().venue_fill.canonical_key),
             )
             self.assertEqual(cursor.fetchone()[0], 1)
 

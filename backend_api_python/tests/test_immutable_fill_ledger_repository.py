@@ -90,10 +90,13 @@ class ImmutableFillLedgerRepositoryTests(unittest.TestCase):
 
     def test_exact_duplicate_returns_typed_replay_without_new_facts(self):
         bundle = ledger.reduce_fill_to_ledger_bundle(fill_input())
-        fill_event_id = repository._stable_uuid(f"fill-event:{bundle.fill_key}")
-        trade_id = repository._stable_uuid(f"ledger-transaction:{bundle.trade.source_fingerprint}")
+        request_scope = scope()
+        fill_event_id = repository._scoped_fill_event_id(request_scope, bundle.fill_key)
+        trade_fingerprint = repository._storage_source_fingerprint(request_scope, bundle.trade)
+        trade_id = repository._stable_uuid(f"ledger-transaction:{trade_fingerprint}")
         assert bundle.fee is not None
-        fee_id = repository._stable_uuid(f"ledger-transaction:{bundle.fee.source_fingerprint}")
+        fee_fingerprint = repository._storage_source_fingerprint(request_scope, bundle.fee)
+        fee_id = repository._stable_uuid(f"ledger-transaction:{fee_fingerprint}")
         current = fill_input()
         fill_row = (
             fill_event_id, 1, 2, current.account_scope, current.venue_fill.order_scope.market_type,
@@ -104,10 +107,10 @@ class ImmutableFillLedgerRepositoryTests(unittest.TestCase):
         connection = FakeConnection([
             None,
             fill_row,
-            [(trade_id, "TRADE", bundle.trade.source_fingerprint), (fee_id, "FEE", bundle.fee.source_fingerprint)],
+            [(trade_id, "TRADE", trade_fingerprint), (fee_id, "FEE", fee_fingerprint)],
         ])
         result = repository.ImmutableFillLedgerRepository().persist_fill_bundle(
-            connection, scope=scope(), fill=current
+            connection, scope=request_scope, fill=current
         )
         self.assertEqual(result.disposition, repository.FillLedgerCommitDisposition.REPLAYED)
         self.assertEqual(connection.commits, 1)
@@ -117,7 +120,7 @@ class ImmutableFillLedgerRepositoryTests(unittest.TestCase):
 
     def test_duplicate_with_changed_immutable_facts_is_typed_conflict_and_rolls_back(self):
         bundle = ledger.reduce_fill_to_ledger_bundle(fill_input())
-        fill_event_id = repository._stable_uuid(f"fill-event:{bundle.fill_key}")
+        fill_event_id = repository._scoped_fill_event_id(scope(), bundle.fill_key)
         wrong_row = (
             fill_event_id, 1, 2, "other-account", "swap",
             fill_input().economic_order_id, scope().intent_id, "order-1", "venue-fill-1",
