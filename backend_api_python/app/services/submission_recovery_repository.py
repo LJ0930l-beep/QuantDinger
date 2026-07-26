@@ -108,7 +108,14 @@ class SubmissionRecoveryRepository:
                     p.policy_hash, p.capability_query_by_client_order_id, p.client_id_query_authoritative,
                     p.order_history_authoritative, p.fill_history_authoritative, p.not_found_min_query_count,
                     p.not_found_grace_seconds, p.not_found_action)
-        if row is None or tuple(row) != expected:
+        if row is None:
+            raise SubmissionRecoveryContractError("persisted capability/policy facts mismatch")
+        actual = list(row)
+        # psycopg2 materializes UUID columns as UUID objects while domain facts
+        # deliberately carry canonical strings; normalize only those durable IDs.
+        for index in (0, 7, 8):
+            actual[index] = str(actual[index])
+        if tuple(actual) != expected:
             raise SubmissionRecoveryContractError("persisted capability/policy facts mismatch")
 
     @staticmethod
