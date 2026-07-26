@@ -12,7 +12,8 @@ from pathlib import Path
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 MIGRATION = MIGRATIONS / "20260722_unified_order_expand_only.sql"
 PRECONDITION_MIGRATION = MIGRATIONS / "20260723_state_recovery_ledger_preconditions.sql"
-INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION)
+IMMUTABLE_LEDGER_MIGRATION = MIGRATIONS / "20260724_immutable_fill_ledger_guards.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -115,8 +116,28 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "uq_qd_order_state_events_idempotency",
             "qd_submission_attempt_state_events",
             "qd_exchange_fill_fee_components",
+            "uq_qd_ledger_transactions_source_fingerprint",
+            "qd_reject_immutable_fill_ledger_mutation",
+            "qd_assert_immutable_ledger_transaction_balanced",
+            "ctrg_qd_ledger_transactions_balanced",
+            "ctrg_qd_ledger_entries_balanced",
         ):
             self.assertIn(fragment, migration)
+
+    def test_immutable_ledger_schema_is_expand_only_and_commit_time_guarded(self):
+        migration = IMMUTABLE_LEDGER_MIGRATION.read_text(encoding="utf-8")
+        self.assertIn("ADD COLUMN IF NOT EXISTS account_scope VARCHAR(160)", migration)
+        self.assertIn("ADD COLUMN IF NOT EXISTS source_fingerprint VARCHAR(128)", migration)
+        self.assertIn("DEFERRABLE INITIALLY DEFERRED", migration)
+        self.assertIn("GROUP BY book, asset", migration)
+        for table in (
+            "qd_exchange_fill_events",
+            "qd_exchange_fill_fee_components",
+            "qd_ledger_valuation_evidence",
+            "qd_ledger_transactions",
+            "qd_ledger_entries",
+        ):
+            self.assertIn(f"{table}_append_only", migration)
 
     def test_init_sql_retains_representative_upstream_trading_tables(self):
         init_sql = INIT_SQL.read_text(encoding="utf-8")
@@ -538,9 +559,9 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
 
                 ledger_sql = (
                     "INSERT INTO qd_ledger_transactions "
-                    "(id, tenant_id, credential_id, transaction_type, source_event_type, source_event_id, "
+                    "(id, tenant_id, credential_id, account_scope, transaction_type, source_event_type, source_event_id, source_fingerprint, "
                     "reverses_transaction_id, effective_at, valuation_ccy, policy_version, description_code) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), 'USDT', 'v1', 'schema-test')"
+                    "VALUES (%s, %s, %s, 'account-a', %s, %s, %s, %s, %s, NOW(), 'USDT', 'v1', 'schema-test')"
                 )
                 original_transaction_id = str(uuid.uuid4())
                 cursor.execute(
@@ -552,6 +573,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         "TRADE",
                         "SCHEMA_TEST",
                         str(uuid.uuid4()),
+                        uuid.uuid4().hex + uuid.uuid4().hex,
                         None,
                     ),
                 )
@@ -564,6 +586,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                         "REVERSAL",
                         "SCHEMA_TEST_REVERSAL",
                         str(uuid.uuid4()),
+                        uuid.uuid4().hex + uuid.uuid4().hex,
                         original_transaction_id,
                     ),
                 )
@@ -572,7 +595,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     ledger_sql,
                     (
                         str(uuid.uuid4()), graph["user_id"], graph["credential_id"], "REVERSAL",
-                        "SCHEMA_TEST_REVERSAL", str(uuid.uuid4()), original_transaction_id,
+                        "SCHEMA_TEST_REVERSAL", str(uuid.uuid4()), uuid.uuid4().hex + uuid.uuid4().hex, original_transaction_id,
                     ),
                 )
                 self._assert_rejected(
@@ -580,7 +603,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     ledger_sql,
                     (
                         str(uuid.uuid4()), graph["user_id"], graph["credential_id"], "REVERSAL",
-                        "SCHEMA_TEST_REVERSAL", str(uuid.uuid4()), None,
+                        "SCHEMA_TEST_REVERSAL", str(uuid.uuid4()), uuid.uuid4().hex + uuid.uuid4().hex, None,
                     ),
                 )
                 self._assert_rejected(
@@ -588,7 +611,7 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     ledger_sql,
                     (
                         str(uuid.uuid4()), graph["user_id"], graph["credential_id"], "TRADE",
-                        "SCHEMA_TEST_TRADE", str(uuid.uuid4()), original_transaction_id,
+                        "SCHEMA_TEST_TRADE", str(uuid.uuid4()), uuid.uuid4().hex + uuid.uuid4().hex, original_transaction_id,
                     ),
                 )
 
