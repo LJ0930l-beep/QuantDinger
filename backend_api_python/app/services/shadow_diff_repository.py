@@ -95,7 +95,7 @@ class ShadowDiffRepository:
                         legacy_source_fingerprint, candidate_source_fingerprint, candidate_generation_id,
                         candidate_checkpoint_watermark, as_of, correlation_id, tolerance_policy_version, build_fingerprint,
                         replay_fingerprint, state, created_at, completed_at, failure_reason
-                    ) VALUES (%s,%s,%s,%s,%s,%s,'shadow-diff-v1',%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,'BUILDING',%s,NULL,NULL)
+                    ) VALUES (%s,%s,%s,%s,%s,%s,'shadow-diff-v1',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,'BUILDING',%s,NULL,NULL)
                     ON CONFLICT DO NOTHING
                     RETURNING id
                     """,

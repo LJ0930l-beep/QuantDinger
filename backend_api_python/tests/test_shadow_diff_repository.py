@@ -68,6 +68,8 @@ class ShadowDiffRepositoryTests(unittest.TestCase):
         self.assertEqual((connection.commits, connection.rollbacks), (0, 0))
         self.assertIn("INSERT INTO qd_shadow_comparison_runs", connection.cursor_object.statements[0][0])
         self.assertIn("UPDATE qd_shadow_comparison_runs", connection.cursor_object.statements[-1][0])
+        insert_sql, insert_parameters = connection.cursor_object.statements[0]
+        self.assertEqual(insert_sql.count("%s"), len(insert_parameters))
 
     def test_completed_identical_run_is_typed_replay_without_commit(self):
         comparison = result()
