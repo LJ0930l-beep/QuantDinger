@@ -53,9 +53,20 @@ class ShadowDiffRepositoryPostgresTests(unittest.TestCase):
             connection.close()
         observed = datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc)
         policy = s.ShadowTolerancePolicy("shadow-policy-v1", quantity_absolute="0")
-        run = s.ShadowComparisonRun(run_id or uuid.uuid4(), tenant_id, credential_id, "primary", "BTCUSDT", "swap", policy, "a" * 64)
         legacy = s.ShadowSourceSnapshot("legacy", tenant_id, credential_id, "primary", "BTCUSDT", "swap", "v1", observed, s.ShadowSourceStatus.READY, {"position": s.ShadowFactValue("1", s.ShadowValueKind.QUANTITY, "BTC")})
-        candidate = s.ShadowSourceSnapshot("candidate", tenant_id, credential_id, "primary", "BTCUSDT", "swap", "v1", observed, s.ShadowSourceStatus.READY, {"position": s.ShadowFactValue(candidate_value, s.ShadowValueKind.QUANTITY, "BTC")})
+        generation_id = uuid.uuid4()
+        connection = self._connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO qd_projection_generations (id, consumer_name, build_fingerprint, state, source_high_watermark) VALUES (%s, %s, %s, 'BUILDING', 7)",
+                    (str(generation_id), f"shadow-{suffix}", "b" * 64),
+                )
+            connection.commit()
+        finally:
+            connection.close()
+        candidate = s.ShadowSourceSnapshot("candidate", tenant_id, credential_id, "primary", "BTCUSDT", "swap", "v1", observed, s.ShadowSourceStatus.READY, {"position": s.ShadowFactValue(candidate_value, s.ShadowValueKind.QUANTITY, "BTC")}, generation_id, 7)
+        run = s.ShadowComparisonRun(run_id or uuid.uuid4(), tenant_id, credential_id, "primary", "BTCUSDT", "swap", "legacy", "v1", legacy.source_fingerprint, candidate.generation_id, candidate.checkpoint_watermark, observed, "shadow-corr-1", policy, "a" * 64)
         return s.compare_shadow_state(run, legacy, candidate)
 
     def test_atomic_create_replay_conflict_and_append_only_guard(self):

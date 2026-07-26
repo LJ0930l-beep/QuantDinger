@@ -147,6 +147,8 @@ class ShadowSourceSnapshot:
     observed_at: datetime
     status: ShadowSourceStatus
     facts: Mapping[str, ShadowFactValue]
+    generation_id: UUID | str | None = None
+    checkpoint_watermark: int | None = None
     source_fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -162,6 +164,12 @@ class ShadowSourceSnapshot:
         object.__setattr__(self, "observed_at", _utc(self.observed_at, "observed_at"))
         if not isinstance(self.status, ShadowSourceStatus):
             raise ShadowDiffContractError("status must use ShadowSourceStatus")
+        if (self.generation_id is None) != (self.checkpoint_watermark is None):
+            raise ShadowDiffContractError("generation_id and checkpoint_watermark must be supplied together")
+        if self.generation_id is not None:
+            object.__setattr__(self, "generation_id", _uuid(self.generation_id, "generation_id"))
+            if isinstance(self.checkpoint_watermark, bool) or not isinstance(self.checkpoint_watermark, int) or self.checkpoint_watermark < 0:
+                raise ShadowDiffContractError("checkpoint_watermark must be non-negative")
         canonical: dict[str, ShadowFactValue] = {}
         for key, value in self.facts.items():
             canonical[_text(key, "fact_name", max_length=100)] = value
@@ -181,6 +189,8 @@ class ShadowSourceSnapshot:
             "source_version": self.source_version,
             "observed_at": self.observed_at.isoformat(),
             "status": self.status.value,
+            "generation_id": self.generation_id,
+            "checkpoint_watermark": self.checkpoint_watermark,
             "facts": {name: value.canonical_facts() for name, value in self.facts.items()},
         }
 
@@ -193,6 +203,13 @@ class ShadowComparisonRun:
     account_scope: str
     instrument_id: str
     market_type: str
+    legacy_source_identity: str
+    legacy_source_version: str
+    legacy_source_fingerprint: str
+    candidate_generation_id: UUID | str
+    candidate_checkpoint_watermark: int
+    as_of: datetime
+    correlation_id: str
     policy: ShadowTolerancePolicy
     build_fingerprint: str
     state: ShadowRunState = ShadowRunState.BUILDING
@@ -206,6 +223,15 @@ class ShadowComparisonRun:
         object.__setattr__(self, "account_scope", _text(self.account_scope, "account_scope"))
         object.__setattr__(self, "instrument_id", _text(self.instrument_id, "instrument_id", uppercase=True, max_length=100))
         object.__setattr__(self, "market_type", _text(self.market_type, "market_type", lowercase=True, max_length=20))
+        object.__setattr__(self, "legacy_source_identity", _text(self.legacy_source_identity, "legacy_source_identity", lowercase=True, max_length=32))
+        object.__setattr__(self, "legacy_source_version", _text(self.legacy_source_version, "legacy_source_version", max_length=64))
+        if not isinstance(self.legacy_source_fingerprint, str) or len(self.legacy_source_fingerprint) != 64 or any(ch not in "0123456789abcdef" for ch in self.legacy_source_fingerprint):
+            raise ShadowDiffContractError("legacy_source_fingerprint must be SHA-256")
+        object.__setattr__(self, "candidate_generation_id", _uuid(self.candidate_generation_id, "candidate_generation_id"))
+        if isinstance(self.candidate_checkpoint_watermark, bool) or not isinstance(self.candidate_checkpoint_watermark, int) or self.candidate_checkpoint_watermark < 0:
+            raise ShadowDiffContractError("candidate_checkpoint_watermark must be non-negative")
+        object.__setattr__(self, "as_of", _utc(self.as_of, "as_of"))
+        object.__setattr__(self, "correlation_id", _text(self.correlation_id, "correlation_id"))
         if not isinstance(self.policy, ShadowTolerancePolicy) or not isinstance(self.state, ShadowRunState):
             raise ShadowDiffContractError("policy and state must use canonical contracts")
         if not isinstance(self.build_fingerprint, str) or len(self.build_fingerprint) != 64 or any(ch not in "0123456789abcdef" for ch in self.build_fingerprint):
@@ -261,6 +287,13 @@ class ShadowComparisonResult:
         object.__setattr__(self, "diffs", tuple(sorted(self.diffs, key=lambda fact: fact.diff_fingerprint)))
         object.__setattr__(self, "replay_fingerprint", _fingerprint({
             "version": SHADOW_DIFF_CONTRACT_VERSION, "run": self.run.run_id,
+            "legacy_identity": self.run.legacy_source_identity,
+            "legacy_version": self.run.legacy_source_version,
+            "legacy_source_fingerprint": self.run.legacy_source_fingerprint,
+            "candidate_generation_id": self.run.candidate_generation_id,
+            "candidate_checkpoint_watermark": self.run.candidate_checkpoint_watermark,
+            "as_of": self.run.as_of.isoformat(), "correlation_id": self.run.correlation_id,
+            "tolerance_policy_version": self.run.policy.policy_version,
             "legacy": self.legacy.source_fingerprint, "candidate": self.candidate.source_fingerprint,
             "exact": self.exact_matches, "tolerated": self.tolerated_matches,
             "diffs": [item.diff_fingerprint for item in self.diffs],
@@ -293,6 +326,17 @@ def compare_shadow_state(run: ShadowComparisonRun, legacy: ShadowSourceSnapshot,
     tolerated: list[str] = []
     if legacy.canonical_scope() != run.canonical_scope() or candidate.canonical_scope() != run.canonical_scope():
         diffs.append(ShadowDiffFact("scope", ShadowDiffKind.SCOPE_MISMATCH, ShadowDiffSeverity.BLOCKING, detail="run_scope"))
+        return ShadowComparisonResult(run, legacy, candidate, (), (), tuple(diffs))
+    if (
+        legacy.source_name != run.legacy_source_identity
+        or legacy.source_version != run.legacy_source_version
+        or legacy.source_fingerprint != run.legacy_source_fingerprint
+        or candidate.generation_id != run.candidate_generation_id
+        or candidate.checkpoint_watermark != run.candidate_checkpoint_watermark
+        or legacy.observed_at > run.as_of
+        or candidate.observed_at > run.as_of
+    ):
+        diffs.append(ShadowDiffFact("source_binding", ShadowDiffKind.VERSION_MISMATCH, ShadowDiffSeverity.BLOCKING, detail="run_binding"))
         return ShadowComparisonResult(run, legacy, candidate, (), (), tuple(diffs))
     if legacy.status is not ShadowSourceStatus.READY or candidate.status is not ShadowSourceStatus.READY:
         diffs.append(ShadowDiffFact("source_status", ShadowDiffKind.STALE_SOURCE, ShadowDiffSeverity.BLOCKING, detail="not_ready"))

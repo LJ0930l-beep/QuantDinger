@@ -9,8 +9,14 @@ CREATE TABLE IF NOT EXISTS qd_shadow_comparison_runs (
     instrument_id VARCHAR(100) NOT NULL,
     market_type VARCHAR(20) NOT NULL,
     comparison_contract_version VARCHAR(64) NOT NULL CHECK (comparison_contract_version = 'shadow-diff-v1'),
+    legacy_source_identity VARCHAR(32) NOT NULL,
+    legacy_source_version VARCHAR(64) NOT NULL,
     legacy_source_fingerprint VARCHAR(64) NOT NULL CHECK (legacy_source_fingerprint ~ '^[0-9a-f]{64}$'),
     candidate_source_fingerprint VARCHAR(64) NOT NULL CHECK (candidate_source_fingerprint ~ '^[0-9a-f]{64}$'),
+    candidate_generation_id UUID NOT NULL REFERENCES qd_projection_generations(id) ON DELETE RESTRICT,
+    candidate_checkpoint_watermark BIGINT NOT NULL CHECK (candidate_checkpoint_watermark >= 0),
+    as_of TIMESTAMPTZ NOT NULL,
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
     tolerance_policy_version VARCHAR(64) NOT NULL,
     build_fingerprint VARCHAR(64) NOT NULL CHECK (build_fingerprint ~ '^[0-9a-f]{64}$'),
     replay_fingerprint VARCHAR(64) CHECK (replay_fingerprint ~ '^[0-9a-f]{64}$'),
@@ -54,12 +60,15 @@ CREATE OR REPLACE FUNCTION qd_guard_shadow_comparison_run_update()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
     IF ROW(NEW.id, NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.instrument_id,
            NEW.market_type, NEW.comparison_contract_version, NEW.legacy_source_fingerprint,
-           NEW.candidate_source_fingerprint, NEW.tolerance_policy_version, NEW.build_fingerprint,
+           NEW.legacy_source_identity, NEW.legacy_source_version, NEW.candidate_source_fingerprint,
+           NEW.candidate_generation_id, NEW.candidate_checkpoint_watermark, NEW.as_of, NEW.correlation_id,
+           NEW.tolerance_policy_version, NEW.build_fingerprint,
            NEW.created_at)
        IS DISTINCT FROM ROW(OLD.id, OLD.tenant_id, OLD.credential_id, OLD.account_scope,
            OLD.instrument_id, OLD.market_type, OLD.comparison_contract_version,
-           OLD.legacy_source_fingerprint, OLD.candidate_source_fingerprint,
-           OLD.tolerance_policy_version, OLD.build_fingerprint, OLD.created_at) THEN
+           OLD.legacy_source_fingerprint, OLD.legacy_source_identity, OLD.legacy_source_version,
+           OLD.candidate_source_fingerprint, OLD.candidate_generation_id, OLD.candidate_checkpoint_watermark,
+           OLD.as_of, OLD.correlation_id, OLD.tolerance_policy_version, OLD.build_fingerprint, OLD.created_at) THEN
         RAISE EXCEPTION 'shadow comparison immutable facts cannot change' USING ERRCODE = '55000';
     END IF;
     IF OLD.state <> 'BUILDING' OR NEW.state NOT IN ('COMPLETE','FAILED') THEN

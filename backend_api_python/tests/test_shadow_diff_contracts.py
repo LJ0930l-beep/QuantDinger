@@ -18,14 +18,19 @@ def policy(**changes):
     return s.ShadowTolerancePolicy(**values)
 
 
-def run(**changes):
-    values = {"run_id": RUN_ID, "tenant_id": 1, "credential_id": 2, "account_scope": "primary", "instrument_id": "BTCUSDT", "market_type": "swap", "policy": policy(), "build_fingerprint": "a" * 64}
+def run(*, legacy=None, candidate=None, **changes):
+    observed = datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc)
+    legacy = legacy or snapshot("legacy", {"position": quantity("1")})
+    candidate = candidate or snapshot("candidate", {"position": quantity("1")})
+    values = {"run_id": RUN_ID, "tenant_id": 1, "credential_id": 2, "account_scope": "primary", "instrument_id": "BTCUSDT", "market_type": "swap", "legacy_source_identity": "legacy", "legacy_source_version": "state-v1", "legacy_source_fingerprint": legacy.source_fingerprint, "candidate_generation_id": candidate.generation_id, "candidate_checkpoint_watermark": candidate.checkpoint_watermark, "as_of": observed, "correlation_id": "shadow-corr-1", "policy": policy(), "build_fingerprint": "a" * 64}
     values.update(changes)
     return s.ShadowComparisonRun(**values)
 
 
 def snapshot(source_name, facts, **changes):
-    values = {"source_name": source_name, "tenant_id": 1, "credential_id": 2, "account_scope": "primary", "instrument_id": "BTCUSDT", "market_type": "swap", "source_version": "state-v1", "observed_at": datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc), "status": s.ShadowSourceStatus.READY, "facts": facts}
+    generation = UUID("22222222-2222-2222-2222-222222222222") if source_name == "candidate" else None
+    watermark = 7 if source_name == "candidate" else None
+    values = {"source_name": source_name, "tenant_id": 1, "credential_id": 2, "account_scope": "primary", "instrument_id": "BTCUSDT", "market_type": "swap", "source_version": "state-v1", "observed_at": datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc), "status": s.ShadowSourceStatus.READY, "facts": facts, "generation_id": generation, "checkpoint_watermark": watermark}
     values.update(changes)
     return s.ShadowSourceSnapshot(**values)
 
@@ -42,15 +47,17 @@ class ShadowDiffContractTests(unittest.TestCase):
     def test_exact_and_tolerated_matches_are_distinct_and_replay_is_deterministic(self):
         legacy = snapshot("legacy", {"position": quantity("1"), "equity": money("100")})
         candidate = snapshot("candidate", {"position": quantity("1.005"), "equity": money("100")})
-        first = s.compare_shadow_state(run(), legacy, candidate)
-        second = s.compare_shadow_state(run(), legacy, candidate)
+        first = s.compare_shadow_state(run(legacy=legacy, candidate=candidate), legacy, candidate)
+        second = s.compare_shadow_state(run(legacy=legacy, candidate=candidate), legacy, candidate)
         self.assertEqual(first.exact_matches, ("equity",))
         self.assertEqual(first.tolerated_matches, ("position",))
         self.assertEqual(first.diffs, ())
         self.assertEqual(first.replay_fingerprint, second.replay_fingerprint)
 
     def test_currency_mismatch_requires_valuation_and_never_matches(self):
-        result = s.compare_shadow_state(run(), snapshot("legacy", {"equity": money("100", "USDT")}), snapshot("candidate", {"equity": money("100", "USDC")}))
+        legacy = snapshot("legacy", {"equity": money("100", "USDT")})
+        candidate = snapshot("candidate", {"equity": money("100", "USDC")})
+        result = s.compare_shadow_state(run(legacy=legacy, candidate=candidate), legacy, candidate)
         self.assertEqual(result.exact_matches, ())
         self.assertEqual(result.diffs[0].kind, s.ShadowDiffKind.VALUATION_REQUIRED)
         self.assertEqual(result.diffs[0].severity, s.ShadowDiffSeverity.BLOCKING)
@@ -58,14 +65,14 @@ class ShadowDiffContractTests(unittest.TestCase):
     def test_unknown_stale_and_scope_mismatch_fail_closed(self):
         legacy = snapshot("legacy", {"position": quantity("1")}, status=s.ShadowSourceStatus.STALE)
         candidate = snapshot("candidate", {"position": quantity("1")})
-        self.assertEqual(s.compare_shadow_state(run(), legacy, candidate).diffs[0].kind, s.ShadowDiffKind.STALE_SOURCE)
+        self.assertEqual(s.compare_shadow_state(run(legacy=legacy, candidate=candidate), legacy, candidate).diffs[0].kind, s.ShadowDiffKind.STALE_SOURCE)
         cross_scope = snapshot("candidate", {"position": quantity("1")}, account_scope="other")
-        self.assertEqual(s.compare_shadow_state(run(), candidate, cross_scope).diffs[0].kind, s.ShadowDiffKind.SCOPE_MISMATCH)
+        self.assertEqual(s.compare_shadow_state(run(legacy=candidate, candidate=cross_scope), candidate, cross_scope).diffs[0].kind, s.ShadowDiffKind.SCOPE_MISMATCH)
 
     def test_missing_value_kind_and_outside_tolerance_are_explicit(self):
         legacy = snapshot("legacy", {"a": quantity("1"), "b": quantity("1"), "c": money("1")})
         candidate = snapshot("candidate", {"a": quantity("1"), "b": quantity("1.02"), "c": quantity("1", "USDT"), "d": quantity("1")})
-        result = s.compare_shadow_state(run(), legacy, candidate)
+        result = s.compare_shadow_state(run(legacy=legacy, candidate=candidate), legacy, candidate)
         self.assertEqual(result.exact_matches, ("a",))
         self.assertEqual({item.kind for item in result.diffs}, {s.ShadowDiffKind.VALUE_MISMATCH, s.ShadowDiffKind.UNSUPPORTED_FACT, s.ShadowDiffKind.MISSING_LEGACY})
 
@@ -82,7 +89,8 @@ class ShadowDiffContractTests(unittest.TestCase):
         source = snapshot("legacy", {"position": fact})
         with self.assertRaises(TypeError):
             source.facts["other"] = fact
-        result = s.compare_shadow_state(run(), source, snapshot("candidate", {"position": fact}))
+        candidate = snapshot("candidate", {"position": fact})
+        result = s.compare_shadow_state(run(legacy=source, candidate=candidate), source, candidate)
         with self.assertRaises(Exception):
             result.exact_matches += ("other",)
 

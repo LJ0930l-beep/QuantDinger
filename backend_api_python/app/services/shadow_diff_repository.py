@@ -91,17 +91,19 @@ class ShadowDiffRepository:
                     """
                     INSERT INTO qd_shadow_comparison_runs (
                         id, tenant_id, credential_id, account_scope, instrument_id, market_type,
-                        comparison_contract_version, legacy_source_fingerprint,
-                        candidate_source_fingerprint, tolerance_policy_version, build_fingerprint,
+                        comparison_contract_version, legacy_source_identity, legacy_source_version,
+                        legacy_source_fingerprint, candidate_source_fingerprint, candidate_generation_id,
+                        candidate_checkpoint_watermark, as_of, correlation_id, tolerance_policy_version, build_fingerprint,
                         replay_fingerprint, state, created_at, completed_at, failure_reason
-                    ) VALUES (%s,%s,%s,%s,%s,%s,'shadow-diff-v1',%s,%s,%s,%s,NULL,'BUILDING',%s,NULL,NULL)
+                    ) VALUES (%s,%s,%s,%s,%s,%s,'shadow-diff-v1',%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,'BUILDING',%s,NULL,NULL)
                     ON CONFLICT DO NOTHING
                     RETURNING id
                     """,
                     (
                         run.run_id, run.tenant_id, run.credential_id, run.account_scope,
-                        run.instrument_id, run.market_type, result.legacy.source_fingerprint,
-                        result.candidate.source_fingerprint, run.policy.policy_version,
+                        run.instrument_id, run.market_type, run.legacy_source_identity, run.legacy_source_version,
+                        result.legacy.source_fingerprint, result.candidate.source_fingerprint, run.candidate_generation_id,
+                        run.candidate_checkpoint_watermark, run.as_of, run.correlation_id, run.policy.policy_version,
                         run.build_fingerprint, completed_at,
                     ),
                 )
@@ -109,8 +111,8 @@ class ShadowDiffRepository:
                 if inserted is None:
                     persisted = self._lock_run(cursor, run.run_id)
                     self._assert_run_identity(persisted, result)
-                    state = _row_value(persisted, 10)
-                    persisted_replay = _row_value(persisted, 9)
+                    state = _row_value(persisted, 16)
+                    persisted_replay = _row_value(persisted, 15)
                     if state == ShadowRunState.COMPLETE.value:
                         if persisted_replay != result.replay_fingerprint:
                             raise ShadowReplayConflict("completed run names different replay facts")
@@ -141,7 +143,9 @@ class ShadowDiffRepository:
             """
             SELECT tenant_id, credential_id, account_scope, instrument_id, market_type,
                    legacy_source_fingerprint, candidate_source_fingerprint,
-                   tolerance_policy_version, build_fingerprint, replay_fingerprint, state
+                   legacy_source_identity, legacy_source_version, candidate_generation_id,
+                   candidate_checkpoint_watermark, as_of, correlation_id, tolerance_policy_version,
+                   build_fingerprint, replay_fingerprint, state
               FROM qd_shadow_comparison_runs
              WHERE id = %s
              FOR UPDATE
@@ -158,9 +162,11 @@ class ShadowDiffRepository:
         expected = (
             run.tenant_id, run.credential_id, run.account_scope, run.instrument_id,
             run.market_type, result.legacy.source_fingerprint, result.candidate.source_fingerprint,
-            run.policy.policy_version, run.build_fingerprint,
+            run.legacy_source_identity, run.legacy_source_version, run.candidate_generation_id,
+            run.candidate_checkpoint_watermark, run.as_of, run.correlation_id, run.policy.policy_version,
+            run.build_fingerprint,
         )
-        actual = tuple(_row_value(row, index) for index in range(9))
+        actual = tuple(_row_value(row, index) for index in range(15))
         if actual != expected:
             raise ShadowReplayConflict("shadow run identity names different immutable facts")
 

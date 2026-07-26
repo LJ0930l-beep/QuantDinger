@@ -14,13 +14,15 @@ r = modules.repository
 
 def result():
     policy = s.ShadowTolerancePolicy("shadow-policy-v1")
-    run = s.ShadowComparisonRun(
-        UUID("11111111-1111-1111-1111-111111111111"), 1, 2, "primary", "BTCUSDT", "swap", policy, "a" * 64,
-    )
     observed = datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc)
     value = s.ShadowFactValue("1", s.ShadowValueKind.QUANTITY, "BTC")
     legacy = s.ShadowSourceSnapshot("legacy", 1, 2, "primary", "BTCUSDT", "swap", "v1", observed, s.ShadowSourceStatus.READY, {"position": value})
-    candidate = s.ShadowSourceSnapshot("candidate", 1, 2, "primary", "BTCUSDT", "swap", "v1", observed, s.ShadowSourceStatus.READY, {"position": value})
+    candidate = s.ShadowSourceSnapshot("candidate", 1, 2, "primary", "BTCUSDT", "swap", "v1", observed, s.ShadowSourceStatus.READY, {"position": value}, UUID("22222222-2222-2222-2222-222222222222"), 7)
+    run = s.ShadowComparisonRun(
+        UUID("11111111-1111-1111-1111-111111111111"), 1, 2, "primary", "BTCUSDT", "swap",
+        "legacy", "v1", legacy.source_fingerprint, candidate.generation_id, candidate.checkpoint_watermark,
+        observed, "shadow-corr-1", policy, "a" * 64,
+    )
     return s.compare_shadow_state(run, legacy, candidate)
 
 
@@ -73,6 +75,8 @@ class ShadowDiffRepositoryTests(unittest.TestCase):
         persisted_row = (
             run.tenant_id, run.credential_id, run.account_scope, run.instrument_id, run.market_type,
             comparison.legacy.source_fingerprint, comparison.candidate.source_fingerprint,
+            run.legacy_source_identity, run.legacy_source_version, run.candidate_generation_id,
+            run.candidate_checkpoint_watermark, run.as_of, run.correlation_id,
             run.policy.policy_version, run.build_fingerprint, comparison.replay_fingerprint, "COMPLETE",
         )
         connection = Connection(rows=[None, persisted_row])
@@ -86,6 +90,8 @@ class ShadowDiffRepositoryTests(unittest.TestCase):
         conflicting_row = (
             run.tenant_id, run.credential_id, run.account_scope, run.instrument_id, run.market_type,
             "b" * 64, comparison.candidate.source_fingerprint,
+            run.legacy_source_identity, run.legacy_source_version, run.candidate_generation_id,
+            run.candidate_checkpoint_watermark, run.as_of, run.correlation_id,
             run.policy.policy_version, run.build_fingerprint, comparison.replay_fingerprint, "COMPLETE",
         )
         with self.assertRaises(r.ShadowReplayConflict):
