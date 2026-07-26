@@ -159,7 +159,7 @@ class RiskEnforcementRepositoryPostgresTests(unittest.TestCase):
             self.assertEqual(replay.disposition, repository.RiskEnforcementDisposition.REPLAYED)
             changed_demand = replace(
                 facts[3].demand,
-                gross_notional=decimal.QuoteAmount("11"),
+                gross_notional="11",
             )
             with self.assertRaises(repository.RiskEnforcementConflict):
                 writer.persist(
