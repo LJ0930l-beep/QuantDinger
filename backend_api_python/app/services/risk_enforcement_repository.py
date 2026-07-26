@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Protocol
 
@@ -38,6 +39,30 @@ class RiskEnforcementRepositoryError(RuntimeError):
 
 class RiskEnforcementConflict(RiskEnforcementRepositoryError):
     """An idempotency identity already names different immutable facts."""
+
+
+def _decimal_for_replay(value: object, field_name: str) -> Decimal:
+    """Compare NUMERIC facts by Decimal value, never presentation scale.
+
+    PostgreSQL ``NUMERIC(38,18)`` may return a padded Decimal while the
+    immutable domain contract deliberately serializes the same value without
+    insignificant zeroes.  This helper rejects ambiguous binary floats and
+    non-finite values instead of weakening replay identity semantics.
+    """
+
+    if isinstance(value, bool) or isinstance(value, float):
+        raise RiskEnforcementRepositoryError(
+            f"{field_name} must be a Decimal-compatible database value"
+        )
+    try:
+        parsed = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise RiskEnforcementRepositoryError(
+            f"{field_name} is not a valid Decimal-compatible database value"
+        ) from exc
+    if not parsed.is_finite():
+        raise RiskEnforcementRepositoryError(f"{field_name} must be finite")
+    return parsed
 
 
 class RiskEnforcementDisposition(str, Enum):
@@ -344,20 +369,21 @@ class RiskEnforcementRepository:
             str(_row(row, 3, "economic_order_id")), _row(row, 4, "tenant_id"),
             _row(row, 5, "credential_id"), _row(row, 6, "account_scope"),
             _row(row, 7, "reservation_kind"), _row(row, 8, "currency"),
-            str(_row(row, 9, "reserved_notional")), str(_row(row, 10, "reserved_margin")),
+            _decimal_for_replay(_row(row, 9, "reserved_notional"), "reserved_notional"),
+            _decimal_for_replay(_row(row, 10, "reserved_margin"), "reserved_margin"),
             _row(row, 11, "risk_input_hash"), _row(row, 12, "state"),
-            str(_row(row, 13, "reserved_gross_notional")),
-            str(_row(row, 14, "reserved_net_notional")),
-            str(_row(row, 15, "reserved_instrument_notional")),
+            _decimal_for_replay(_row(row, 13, "reserved_gross_notional"), "reserved_gross_notional"),
+            _decimal_for_replay(_row(row, 14, "reserved_net_notional"), "reserved_net_notional"),
+            _decimal_for_replay(_row(row, 15, "reserved_instrument_notional"), "reserved_instrument_notional"),
             _row(row, 16, "correlation_id"),
         )
         expected = (
             fact.reservation_id, decision.decision_id, scope.command_id, scope.economic_order_id,
             scope.tenant_id, scope.credential_id, scope.account_scope, fact.reservation_kind,
-            demand.valuation_currency, str(demand.gross_notional), str(demand.margin),
+            demand.valuation_currency, demand.gross_notional, demand.margin,
             decision.input_snapshot.input_hash, "ACTIVE",
-            str(demand.gross_notional), str(demand.net_notional),
-            str(demand.instrument_notional), scope.correlation_id,
+            demand.gross_notional, demand.net_notional,
+            demand.instrument_notional, scope.correlation_id,
         )
         if observed != expected:
             raise RiskEnforcementConflict("reservation identity names different immutable facts")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 from datetime import datetime, timezone
+from decimal import Decimal
 import unittest
 
 from tests.pr10_contract_loader import load_pr10_contracts
@@ -115,3 +116,20 @@ class RiskEnforcementRepositoryTests(unittest.TestCase):
         self.assertEqual(cursor.queries, [])
         self.assertEqual(connection.commits, 0)
         self.assertEqual(connection.rollbacks, 0)
+
+    def test_reservation_replay_compares_database_numeric_scale_by_decimal_value(self):
+        _, inputs, decision, reservation = _facts()
+        scope, demand = decision.scope, reservation.demand
+        padded = Decimal("10.000000000000000000")
+        row = (
+            reservation.reservation_id, decision.decision_id, scope.command_id,
+            scope.economic_order_id, scope.tenant_id, scope.credential_id,
+            scope.account_scope, reservation.reservation_kind, demand.valuation_currency,
+            padded, Decimal("2.000000000000000000"), inputs.input_hash, "ACTIVE",
+            padded, padded, padded, scope.correlation_id,
+        )
+        cursor = _Cursor([None, [row]])
+        replayed = repository.RiskEnforcementRepository()._insert_or_verify_reservation(
+            cursor, reservation,
+        )
+        self.assertFalse(replayed)
