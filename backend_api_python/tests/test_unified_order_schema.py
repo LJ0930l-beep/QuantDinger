@@ -161,9 +161,17 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "fk_qd_risk_reservations_enforcement_decision",
             "fk_qd_risk_reservations_enforcement_policy_snapshot",
             "fk_qd_risk_reservations_enforcement_input_snapshot",
+            "global_kill_switch_version BIGINT NOT NULL",
+            "actor_id VARCHAR(160) NOT NULL",
+            "risk_effect VARCHAR(16) NOT NULL",
+            "rejection_codes JSONB NOT NULL",
+            "projected_gross_notional NUMERIC(38,18) NOT NULL",
+            "reserved_gross_notional NUMERIC(38,18)",
+            "trg_qd_transactional_outbox_immutable_facts",
             "uq_qd_transactional_outbox_canonical_identity",
             "lease_fencing_token BIGINT NOT NULL DEFAULT 0",
             "qd_guard_risk_reservation_enforcement_update",
+            "uq_qd_projection_generations_current_consumer",
         ):
             self.assertIn(fragment, migration)
         self.assertNotIn("ON DELETE CASCADE", migration)
