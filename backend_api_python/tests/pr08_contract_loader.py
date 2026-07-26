@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 
 _MISSING = object()
@@ -33,6 +33,34 @@ def load_pr08_contracts() -> ModuleType:
         sys.modules.update({"app": app, "app.domain": domain})
         _load("app.domain.decimal_values", app_dir / "domain" / "decimal_values.py")
         return _load("app.domain.shadow_diff_contracts", app_dir / "domain" / "shadow_diff_contracts.py")
+    finally:
+        for name in reversed(names):
+            previous = original[name]
+            if previous is _MISSING:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
+
+
+def load_pr08_repository() -> SimpleNamespace:
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    names = (
+        "app", "app.domain", "app.services", "app.domain.decimal_values",
+        "app.domain.shadow_diff_contracts", "app.services.shadow_diff_repository",
+    )
+    original = {name: sys.modules.get(name, _MISSING) for name in names}
+    try:
+        app = ModuleType("app")
+        app.__path__ = [str(app_dir)]
+        domain = ModuleType("app.domain")
+        domain.__path__ = [str(app_dir / "domain")]
+        services = ModuleType("app.services")
+        services.__path__ = [str(app_dir / "services")]
+        sys.modules.update({"app": app, "app.domain": domain, "app.services": services})
+        _load("app.domain.decimal_values", app_dir / "domain" / "decimal_values.py")
+        contracts = _load("app.domain.shadow_diff_contracts", app_dir / "domain" / "shadow_diff_contracts.py")
+        repository = _load("app.services.shadow_diff_repository", app_dir / "services" / "shadow_diff_repository.py")
+        return SimpleNamespace(contracts=contracts, repository=repository)
     finally:
         for name in reversed(names):
             previous = original[name]
