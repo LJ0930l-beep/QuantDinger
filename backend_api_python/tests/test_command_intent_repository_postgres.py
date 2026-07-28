@@ -202,6 +202,59 @@ class CommandIntentRepositoryPostgresTests(unittest.TestCase):
         with self.assertRaises(c.ReservationStateConflict):
             self.repo.consume_reservation(self.connection, reservation.reservation_id, 1)
 
+    def test_caller_owned_graph_and_reservation_share_outer_commit_rollback_and_replay(self):
+        graph = self._graph(replay_token=f"caller-owned-{self.suffix}")
+        reservation = self._reservation(graph, tag="caller-owned")
+
+        created_graph = self.repo.persist_command_graph(self.connection, graph)
+        created_reservation = self.repo.persist_reservation(self.connection, reservation)
+        self.assertEqual(created_graph.disposition, c.CommandGraphDisposition.CREATED)
+        self.assertEqual(created_reservation.disposition, c.ReservationTransitionDisposition.APPLIED)
+
+        try:
+            raise RuntimeError("injected downstream failure")
+        except RuntimeError:
+            self.connection.rollback()
+
+        with self.connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM qd_order_commands WHERE id = %s", (graph.command.command_id,))
+            self.assertEqual(cursor.fetchone()[0], 0)
+            cursor.execute("SELECT count(*) FROM qd_order_intents_v2 WHERE command_id = %s", (graph.command.command_id,))
+            self.assertEqual(cursor.fetchone()[0], 0)
+            cursor.execute("SELECT count(*) FROM qd_economic_orders WHERE id = %s", (graph.intent.economic_order_id,))
+            self.assertEqual(cursor.fetchone()[0], 0)
+            cursor.execute("SELECT count(*) FROM qd_risk_reservations WHERE id = %s", (reservation.reservation_id,))
+            self.assertEqual(cursor.fetchone()[0], 0)
+
+        created_graph = self.repo.persist_command_graph(self.connection, graph)
+        created_reservation = self.repo.persist_reservation(self.connection, reservation)
+        self.assertEqual(created_graph.disposition, c.CommandGraphDisposition.CREATED)
+        self.assertEqual(created_reservation.disposition, c.ReservationTransitionDisposition.APPLIED)
+        self.connection.commit()
+
+        replay_graph = self.repo.persist_command_graph(self.connection, graph)
+        replay_reservation = self.repo.persist_reservation(self.connection, reservation)
+        self.assertEqual(replay_graph.disposition, c.CommandGraphDisposition.REPLAYED)
+        self.assertEqual(replay_reservation.disposition, c.ReservationTransitionDisposition.IDEMPOTENT_REPLAY)
+        self.connection.commit()
+
+        with self.connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM qd_order_commands WHERE id = %s", (graph.command.command_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+            cursor.execute("SELECT count(*) FROM qd_order_intents_v2 WHERE command_id = %s", (graph.command.command_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+            cursor.execute("SELECT count(*) FROM qd_economic_orders WHERE id = %s", (graph.intent.economic_order_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+            cursor.execute("SELECT count(*) FROM qd_risk_reservations WHERE id = %s", (reservation.reservation_id,))
+            self.assertEqual(cursor.fetchone()[0], 1)
+
+        reusable_graph = self._graph(replay_token=f"caller-owned-reuse-{self.suffix}")
+        self.assertEqual(
+            self.repo.persist_command_graph(self.connection, reusable_graph).disposition,
+            c.CommandGraphDisposition.CREATED,
+        )
+        self.connection.commit()
+
     def _assert_parallel_same_graph_has_one_complete_graph(self, graph):
         results = self._parallel(
             lambda connection: repository_module.CommandIntentRepository().accept_command_graph(connection, graph),

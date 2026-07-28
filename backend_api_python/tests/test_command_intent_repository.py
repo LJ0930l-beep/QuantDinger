@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import hashlib
+import inspect
 import unittest
 from uuid import uuid4
 
@@ -31,6 +33,18 @@ def graph(replay_token=TEST_REPLAY_TOKEN):
         execution_algo="DIRECT", rounding_mode="ROUND_DOWN", limit_price=d.Price("100"),
     )
     return c.CommandGraph(command, intent)
+
+
+def reservation_for(value, *, tag="unit", expires_at=None):
+    return c.RiskReservation(
+        reservation_id=uuid4(), command_id=value.command.command_id,
+        economic_order_id=value.intent.economic_order_id, tenant_id=1, credential_id=2,
+        account_scope="account-a", reservation_kind="MARGIN", currency="USDT",
+        reserved_notional=d.QuoteAmount("100"), reserved_margin=d.QuoteAmount("10"),
+        reserved_position_qty=d.Quantity("1"), limits_snapshot={"fixture": tag},
+        risk_input_hash=hashlib.sha256(tag.encode("ascii")).hexdigest(),
+        expires_at=expires_at or datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
 
 
 class FakeCursor:
@@ -76,6 +90,79 @@ class FakeConnection:
 
 
 class CommandIntentRepositoryTests(unittest.TestCase):
+    def test_caller_owned_command_persistence_never_controls_the_transaction(self):
+        value = graph()
+        repo = repository_module.CommandIntentRepository()
+        created_connection = FakeConnection([
+            (value.intent.instrument_rule_snapshot_id,), (value.command.command_id,),
+        ])
+        created = repo.persist_command_graph(created_connection, value)
+        self.assertEqual(created.disposition, c.CommandGraphDisposition.CREATED)
+        self.assertEqual(created_connection.commits, 0)
+        self.assertEqual(created_connection.rollbacks, 0)
+        self.assertTrue(created_connection.cursor_value.closed)
+
+        failing_connection = FakeConnection([None])
+        with self.assertRaises(c.InstrumentRuleSnapshotMismatch):
+            repo.persist_command_graph(failing_connection, value)
+        self.assertEqual(failing_connection.commits, 0)
+        self.assertEqual(failing_connection.rollbacks, 0)
+        self.assertTrue(failing_connection.cursor_value.closed)
+
+        source = inspect.getsource(repository_module.CommandIntentRepository.persist_command_graph)
+        self.assertNotIn(".commit(", source)
+        self.assertNotIn(".rollback(", source)
+
+    def test_caller_owned_reservation_persistence_never_controls_the_transaction(self):
+        value = graph()
+        reservation = reservation_for(value)
+        repo = repository_module.CommandIntentRepository()
+        created_connection = FakeConnection([
+            (value.command.command_id,), (reservation.reservation_id, 0),
+        ])
+        created = repo.persist_reservation(created_connection, reservation)
+        self.assertEqual(created.disposition, c.ReservationTransitionDisposition.APPLIED)
+        self.assertEqual(created_connection.commits, 0)
+        self.assertEqual(created_connection.rollbacks, 0)
+        self.assertTrue(created_connection.cursor_value.closed)
+
+        failing_connection = FakeConnection([None])
+        with self.assertRaises(c.ReservationConflict):
+            repo.persist_reservation(failing_connection, reservation)
+        self.assertEqual(failing_connection.commits, 0)
+        self.assertEqual(failing_connection.rollbacks, 0)
+        self.assertTrue(failing_connection.cursor_value.closed)
+
+        source = inspect.getsource(repository_module.CommandIntentRepository.persist_reservation)
+        self.assertNotIn(".commit(", source)
+        self.assertNotIn(".rollback(", source)
+
+    def test_compatibility_wrappers_keep_one_shot_transaction_semantics(self):
+        repo = repository_module.CommandIntentRepository()
+        command_value = graph("compat-command")
+        command_connection = FakeConnection([
+            (command_value.intent.instrument_rule_snapshot_id,), (command_value.command.command_id,),
+        ])
+        wrapped_command = repo.accept_command_graph(command_connection, command_value)
+        self.assertEqual(wrapped_command.disposition, c.CommandGraphDisposition.CREATED)
+        self.assertEqual(command_connection.commits, 1)
+        self.assertEqual(command_connection.rollbacks, 0)
+
+        reservation_value = reservation_for(command_value, tag="compat")
+        reservation_connection = FakeConnection([
+            (command_value.command.command_id,), (reservation_value.reservation_id, 0),
+        ])
+        wrapped_reservation = repo.create_reservation(reservation_connection, reservation_value)
+        self.assertEqual(wrapped_reservation.disposition, c.ReservationTransitionDisposition.APPLIED)
+        self.assertEqual(reservation_connection.commits, 1)
+        self.assertEqual(reservation_connection.rollbacks, 0)
+
+        failed_reservation_connection = FakeConnection([None])
+        with self.assertRaises(c.ReservationConflict):
+            repo.create_reservation(failed_reservation_connection, reservation_value)
+        self.assertEqual(failed_reservation_connection.commits, 0)
+        self.assertEqual(failed_reservation_connection.rollbacks, 1)
+
     def test_atomic_accept_inserts_command_intent_and_created_order(self):
         value = graph()
         connection = FakeConnection([(value.intent.instrument_rule_snapshot_id,), (value.command.command_id,)])
