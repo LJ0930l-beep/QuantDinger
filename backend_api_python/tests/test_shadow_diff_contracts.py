@@ -104,6 +104,18 @@ class ShadowDiffContractTests(unittest.TestCase):
         self.assertNotEqual(first.policy.tolerance_policy_fingerprint, changed_tolerance.policy.tolerance_policy_fingerprint)
         self.assertNotEqual(first.build_fingerprint, changed_generation.build_fingerprint)
 
+    def test_correlation_is_a_persisted_audit_fact_not_build_or_replay_identity(self):
+        legacy = snapshot("legacy", {"position": quantity("1")})
+        candidate = snapshot("candidate", {"position": quantity("1")})
+        first = run(legacy=legacy, candidate=candidate, correlation_id="corr-1")
+        second = run(legacy=legacy, candidate=candidate, correlation_id="corr-2")
+        self.assertNotEqual(first.correlation_id, second.correlation_id)
+        self.assertEqual(first.build_fingerprint, second.build_fingerprint)
+        self.assertEqual(
+            s.compare_shadow_state(first, legacy, candidate).replay_fingerprint,
+            s.compare_shadow_state(second, legacy, candidate).replay_fingerprint,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

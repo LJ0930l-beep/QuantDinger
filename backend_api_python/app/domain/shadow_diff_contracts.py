@@ -268,7 +268,6 @@ class ShadowComparisonRun:
             "candidate_generation_build_fingerprint": self.candidate_generation_build_fingerprint,
             "candidate_checkpoint_watermark": self.candidate_checkpoint_watermark,
             "as_of": self.as_of.isoformat(),
-            "correlation_id": self.correlation_id,
             "policy": self.policy.canonical_facts(),
             "tolerance_policy_fingerprint": self.policy.tolerance_policy_fingerprint,
         }
@@ -327,7 +326,7 @@ class ShadowComparisonResult:
             "candidate_consumer_name": self.run.candidate_consumer_name,
             "candidate_generation_build_fingerprint": self.run.candidate_generation_build_fingerprint,
             "candidate_checkpoint_watermark": self.run.candidate_checkpoint_watermark,
-            "as_of": self.run.as_of.isoformat(), "correlation_id": self.run.correlation_id,
+            "as_of": self.run.as_of.isoformat(),
             "tolerance_policy": self.run.policy.canonical_facts(),
             "tolerance_policy_fingerprint": self.run.policy.tolerance_policy_fingerprint,
             "build_fingerprint": self.run.build_fingerprint,
