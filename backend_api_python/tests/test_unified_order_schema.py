@@ -14,7 +14,8 @@ MIGRATION = MIGRATIONS / "20260722_unified_order_expand_only.sql"
 PRECONDITION_MIGRATION = MIGRATIONS / "20260723_state_recovery_ledger_preconditions.sql"
 IMMUTABLE_LEDGER_MIGRATION = MIGRATIONS / "20260724_immutable_fill_ledger_guards.sql"
 WAVE2_MIGRATION = MIGRATIONS / "20260725_wave2_persistence_schema.sql"
-INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION)
+SHADOW_DIFF_MIGRATION = MIGRATIONS / "20260726_shadow_diff_schema.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -48,6 +49,8 @@ EXPECTED_TABLES = {
     "qd_submission_attempt_state_events",
     "qd_ledger_valuation_evidence",
     "qd_exchange_fill_fee_components",
+    "qd_shadow_comparison_runs",
+    "qd_shadow_diff_facts",
 }
 
 # These are representative pre-existing upstream tables whose availability is
@@ -175,6 +178,26 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "uq_qd_projection_generations_current_consumer",
             "UNIQUE(generation_id, event_id)",
             "qd_reject_projection_generation_event_mutation",
+        ):
+            self.assertIn(fragment, migration)
+        self.assertNotIn("ON DELETE CASCADE", migration)
+
+    def test_shadow_diff_schema_is_expand_only_and_append_only(self):
+        migration = SHADOW_DIFF_MIGRATION.read_text(encoding="utf-8")
+        for table in ("qd_shadow_comparison_runs", "qd_shadow_diff_facts"):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
+        for fragment in (
+            "comparison_contract_version = 'shadow-diff-v1'",
+            "candidate_consumer_name VARCHAR(160) NOT NULL",
+            "candidate_generation_build_fingerprint VARCHAR(64) NOT NULL",
+            "tolerance_policy_fingerprint VARCHAR(64) NOT NULL",
+            "state IN ('BUILDING','COMPLETE','FAILED')",
+            "UNIQUE(tenant_id, credential_id, account_scope, instrument_id, market_type, build_fingerprint)",
+            "UNIQUE(run_id, diff_fingerprint)",
+            "NUMERIC(38,18)",
+            "qd_guard_shadow_comparison_run_update",
+            "qd_guard_shadow_diff_fact_insert",
+            "trg_qd_shadow_diff_facts_append_only",
         ):
             self.assertIn(fragment, migration)
         self.assertNotIn("ON DELETE CASCADE", migration)
