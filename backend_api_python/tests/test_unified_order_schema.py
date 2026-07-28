@@ -15,7 +15,8 @@ PRECONDITION_MIGRATION = MIGRATIONS / "20260723_state_recovery_ledger_preconditi
 IMMUTABLE_LEDGER_MIGRATION = MIGRATIONS / "20260724_immutable_fill_ledger_guards.sql"
 WAVE2_MIGRATION = MIGRATIONS / "20260725_wave2_persistence_schema.sql"
 SHADOW_DIFF_MIGRATION = MIGRATIONS / "20260726_shadow_diff_schema.sql"
-INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION)
+RECONCILIATION_MIGRATION = MIGRATIONS / "20260728_reconciliation_health_schema.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -51,6 +52,8 @@ EXPECTED_TABLES = {
     "qd_exchange_fill_fee_components",
     "qd_shadow_comparison_runs",
     "qd_shadow_diff_facts",
+    "qd_reconciliation_runs",
+    "qd_reconciliation_discrepancies",
 }
 
 # These are representative pre-existing upstream tables whose availability is
@@ -198,6 +201,26 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "qd_guard_shadow_comparison_run_update",
             "qd_guard_shadow_diff_fact_insert",
             "trg_qd_shadow_diff_facts_append_only",
+        ):
+            self.assertIn(fragment, migration)
+        self.assertNotIn("ON DELETE CASCADE", migration)
+
+    def test_reconciliation_schema_is_expand_only_and_uses_persisted_checkpoint_facts(self):
+        migration = RECONCILIATION_MIGRATION.read_text(encoding="utf-8")
+        for table in ("qd_reconciliation_runs", "qd_reconciliation_discrepancies"):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
+        for fragment in (
+            "reconciliation_contract_version = 'reconciliation-v1'",
+            "state IN ('BUILDING','COMPLETE','FAILED')",
+            "UNIQUE(run_id, discrepancy_fingerprint)",
+            "uq_qd_reconciliation_checkpoints_canonical_result",
+            "NUMERIC(38,18)",
+            "qd_guard_reconciliation_run_update",
+            "qd_guard_reconciliation_discrepancy_insert",
+            "trg_qd_reconciliation_checkpoints_append_only",
+            "ALTER TABLE qd_reconciliation_checkpoints",
+            "reconciliation_run_id UUID",
+            "reconciliation_discrepancy_count INTEGER",
         ):
             self.assertIn(fragment, migration)
         self.assertNotIn("ON DELETE CASCADE", migration)
