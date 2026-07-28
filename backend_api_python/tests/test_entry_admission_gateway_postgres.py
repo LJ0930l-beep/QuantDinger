@@ -20,6 +20,7 @@ class EntryAdmissionGatewayPostgresTests(unittest.TestCase):
         self.connection.autocommit = False
         with self.connection.cursor() as cursor:
             cursor.execute("CREATE TEMP TABLE entry_gateway_facts (kind TEXT PRIMARY KEY, value TEXT NOT NULL) ON COMMIT PRESERVE ROWS")
+        self.connection.commit()
 
     def tearDown(self):
         self.connection.rollback()
