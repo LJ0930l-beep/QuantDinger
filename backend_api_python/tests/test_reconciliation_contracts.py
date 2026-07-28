@@ -38,13 +38,13 @@ def run(external, **changes):
     values = {
         "run_id": RUN_ID, "tenant_id": 1, "credential_id": 2, "account_scope": "primary",
         "venue": "binance", "market_type": "swap", "instrument_id": "BTCUSDT", "asset_scope": None,
-        "local_generation_id": GENERATION_ID, "local_consumer_name": "ledger", 
+        "local_generation_id": GENERATION_ID, "local_consumer_name": "ledger",
         "local_generation_build_fingerprint": SHA, "local_checkpoint_watermark": 7,
         "external_observation_identity": external.source_identity,
         "external_observation_version": external.source_version,
         "external_observation_fingerprint": external.source_fingerprint,
         "local_observed_at": OBSERVED, "external_observed_at": external.observed_at,
-        "as_of": AS_OF, "correlation_id": "audit-correlation", 
+        "as_of": AS_OF, "correlation_id": "audit-correlation",
         "policy": s.ReconciliationPolicySnapshot("reconciliation-policy-v1", True),
     }
     values.update(changes)
