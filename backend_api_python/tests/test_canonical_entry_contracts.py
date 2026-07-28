@@ -10,6 +10,26 @@ modules = load_pr11_contracts()
 o = modules.order
 e = modules.entry
 a = modules.adapters
+d = modules.decimals
+
+
+def market_buy(quantity="1"):
+    return e.CanonicalEconomicIntent(
+        side=e.OrderSide.BUY,
+        quantity=d.Quantity(quantity),
+        execution_kind=e.ExecutionKind.MARKET,
+    )
+
+
+def reducing_close(quantity="1"):
+    return e.CanonicalEconomicIntent(
+        side=e.OrderSide.SELL,
+        quantity=d.Quantity(quantity),
+        execution_kind=e.ExecutionKind.MARKET,
+        reduce_only=True,
+        target_position_id="position-1",
+        close_quantity=d.Quantity(quantity),
+    )
 
 
 def entry_request(**changes):
@@ -20,6 +40,7 @@ def entry_request(**changes):
         "instrument_id": "BTCUSDT",
         "market_type": "swap",
         "action": o.OrderAction.OPEN,
+        "economic_intent": market_buy(),
         "actor": e.EntryActorContext(o.Actor.HUMAN, "human-42", e.EntrySource.REST),
         "idempotency_key": "case-1",
         "correlation_id": "corr-1",
@@ -50,6 +71,7 @@ class CanonicalEntryContractTests(unittest.TestCase):
                 instrument_id="BTCUSDT",
                 market_type="swap",
                 action=o.OrderAction.OPEN,
+                economic_intent=market_buy(),
                 actor=e.EntryActorContext(o.Actor.HUMAN, "human-42", e.EntrySource.REST),
                 idempotency_key="case-1",
                 correlation_id="corr-1",
@@ -84,7 +106,12 @@ class CanonicalEntryContractTests(unittest.TestCase):
             entry_request(actor=protection, action=o.OrderAction.OPEN, risk_effect=o.RiskEffect.INCREASE_RISK)
         with self.assertRaises(e.EntryContractError):
             entry_request(actor=protection, action=o.OrderAction.PROTECTION, risk_effect=o.RiskEffect.INCREASE_RISK)
-        reduced = entry_request(actor=protection, action=o.OrderAction.EMERGENCY_CLOSE, risk_effect=o.RiskEffect.REDUCE_RISK)
+        reduced = entry_request(
+            actor=protection,
+            action=o.OrderAction.EMERGENCY_CLOSE,
+            economic_intent=reducing_close(),
+            risk_effect=o.RiskEffect.REDUCE_RISK,
+        )
         self.assertEqual(reduced.risk_effect, o.RiskEffect.REDUCE_RISK)
 
     def test_command_draft_has_typed_accept_and_reject_contracts(self):
@@ -108,6 +135,7 @@ class CanonicalEntryContractTests(unittest.TestCase):
             "instrument_id": "BTCUSDT",
             "market_type": "swap",
             "action": o.OrderAction.OPEN,
+            "economic_intent": market_buy(),
             "idempotency_key": "case-1",
             "correlation_id": "corr-1",
             "occurred_at": datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc),
@@ -128,6 +156,7 @@ class CanonicalEntryContractTests(unittest.TestCase):
             "account_scope": "primary",
             "instrument_id": "BTCUSDT",
             "market_type": "swap",
+            "economic_intent": reducing_close(),
             "idempotency_key": "case-1",
             "correlation_id": "corr-1",
             "occurred_at": datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc),
@@ -146,6 +175,68 @@ class CanonicalEntryContractTests(unittest.TestCase):
                 risk_effect=o.RiskEffect.INCREASE_RISK,
                 **facts,
             )
+
+    def test_economic_fingerprint_contains_all_typed_economic_facts(self):
+        base = entry_request()
+        self.assertNotEqual(base.economic_fingerprint, entry_request(economic_intent=market_buy("0.1")).economic_fingerprint)
+        self.assertNotEqual(
+            base.economic_fingerprint,
+            entry_request(economic_intent=e.CanonicalEconomicIntent(
+                side=e.OrderSide.SELL, quantity=d.Quantity("1"), execution_kind=e.ExecutionKind.MARKET,
+            )).economic_fingerprint,
+        )
+        self.assertNotEqual(
+            base.economic_fingerprint,
+            entry_request(economic_intent=e.CanonicalEconomicIntent(
+                side=e.OrderSide.BUY, quantity=d.Quantity("1"), execution_kind=e.ExecutionKind.LIMIT,
+                limit_price=d.Price("100"),
+            )).economic_fingerprint,
+        )
+        limit_101 = entry_request(economic_intent=e.CanonicalEconomicIntent(
+            side=e.OrderSide.BUY, quantity=d.Quantity("1"), execution_kind=e.ExecutionKind.LIMIT,
+            limit_price=d.Price("101"),
+        ))
+        stop_100 = entry_request(economic_intent=e.CanonicalEconomicIntent(
+            side=e.OrderSide.BUY, quantity=d.Quantity("1"), execution_kind=e.ExecutionKind.STOP_MARKET,
+            trigger_price=d.Price("100"),
+        ))
+        self.assertNotEqual(limit_101.economic_fingerprint, stop_100.economic_fingerprint)
+
+    def test_cancel_and_closing_facts_are_typed_and_fail_closed(self):
+        first = entry_request(
+            action=o.OrderAction.CANCEL,
+            economic_intent=e.CanonicalEconomicIntent(cancel_target_id="order-1"),
+        )
+        second = entry_request(
+            action=o.OrderAction.CANCEL,
+            economic_intent=e.CanonicalEconomicIntent(cancel_target_id="order-2"),
+        )
+        self.assertNotEqual(first.economic_fingerprint, second.economic_fingerprint)
+        with self.assertRaises(e.EntryContractError):
+            entry_request(action=o.OrderAction.CANCEL, economic_intent=e.CanonicalEconomicIntent())
+        with self.assertRaises(e.EntryContractError):
+            entry_request(action=o.OrderAction.CLOSE, economic_intent=market_buy())
+        close_all = e.CanonicalEconomicIntent(
+            side=e.OrderSide.SELL,
+            quantity=d.Quantity("1"),
+            execution_kind=e.ExecutionKind.MARKET,
+            reduce_only=True,
+            target_position_id="position-1",
+            close_all=True,
+        )
+        self.assertEqual(entry_request(action=o.OrderAction.CLOSE, economic_intent=close_all).economic_intent.close_all, True)
+
+    def test_equivalent_cross_entry_intents_share_economic_but_not_request_identity(self):
+        facts = {
+            "tenant_id": 1, "credential_id": 2, "account_scope": "primary",
+            "instrument_id": "BTCUSDT", "market_type": "swap", "action": o.OrderAction.OPEN,
+            "economic_intent": market_buy(), "idempotency_key": "case-1", "correlation_id": "corr-1",
+            "occurred_at": datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc),
+        }
+        rest = a.adapt_rest("human-42", **facts)
+        strategy = a.adapt_strategy("strategy-42", **facts)
+        self.assertEqual(rest.request.economic_fingerprint, strategy.request.economic_fingerprint)
+        self.assertNotEqual(rest.request.request_fingerprint, strategy.request.request_fingerprint)
 
 
 if __name__ == "__main__":

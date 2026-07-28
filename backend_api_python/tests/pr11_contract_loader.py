@@ -26,6 +26,7 @@ def load_pr11_contracts() -> SimpleNamespace:
     names = (
         "app",
         "app.domain",
+        "app.domain.decimal_values",
         "app.domain.order_contracts",
         "app.domain.canonical_entry_contracts",
         "app.domain.canonical_entry_adapters",
@@ -38,6 +39,7 @@ def load_pr11_contracts() -> SimpleNamespace:
         domain.__path__ = [str(app_dir / "domain")]
         sys.modules.update({"app": app, "app.domain": domain})
         order = _load("app.domain.order_contracts", app_dir / "domain" / "order_contracts.py")
+        decimals = _load("app.domain.decimal_values", app_dir / "domain" / "decimal_values.py")
         entry = _load(
             "app.domain.canonical_entry_contracts",
             app_dir / "domain" / "canonical_entry_contracts.py",
@@ -46,7 +48,7 @@ def load_pr11_contracts() -> SimpleNamespace:
             "app.domain.canonical_entry_adapters",
             app_dir / "domain" / "canonical_entry_adapters.py",
         )
-        return SimpleNamespace(order=order, entry=entry, adapters=adapters)
+        return SimpleNamespace(order=order, decimals=decimals, entry=entry, adapters=adapters)
     finally:
         for name in reversed(names):
             previous = original[name]
