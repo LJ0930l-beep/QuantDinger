@@ -22,7 +22,7 @@ def run(*, legacy=None, candidate=None, **changes):
     observed = datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc)
     legacy = legacy or snapshot("legacy", {"position": quantity("1")})
     candidate = candidate or snapshot("candidate", {"position": quantity("1")})
-    values = {"run_id": RUN_ID, "tenant_id": 1, "credential_id": 2, "account_scope": "primary", "instrument_id": "BTCUSDT", "market_type": "swap", "legacy_source_identity": "legacy", "legacy_source_version": "state-v1", "legacy_source_fingerprint": legacy.source_fingerprint, "candidate_generation_id": candidate.generation_id, "candidate_checkpoint_watermark": candidate.checkpoint_watermark, "as_of": observed, "correlation_id": "shadow-corr-1", "policy": policy(), "build_fingerprint": "a" * 64}
+    values = {"run_id": RUN_ID, "tenant_id": 1, "credential_id": 2, "account_scope": "primary", "instrument_id": "BTCUSDT", "market_type": "swap", "legacy_source_identity": "legacy", "legacy_source_version": "state-v1", "legacy_source_fingerprint": legacy.source_fingerprint, "candidate_generation_id": candidate.generation_id, "candidate_consumer_name": "shadow-consumer", "candidate_generation_build_fingerprint": "b" * 64, "candidate_checkpoint_watermark": candidate.checkpoint_watermark, "as_of": observed, "correlation_id": "shadow-corr-1", "policy": policy()}
     values.update(changes)
     return s.ShadowComparisonRun(**values)
 
@@ -82,7 +82,7 @@ class ShadowDiffContractTests(unittest.TestCase):
         with self.assertRaises(s.ShadowDiffContractError):
             snapshot("Legacy", {"position": quantity("1")})
         with self.assertRaises(s.ShadowDiffContractError):
-            run(build_fingerprint="not-a-fingerprint")
+            run(candidate_generation_build_fingerprint="not-a-fingerprint")
 
     def test_snapshot_and_result_are_immutable(self):
         fact = quantity(Decimal("1"))
@@ -93,6 +93,16 @@ class ShadowDiffContractTests(unittest.TestCase):
         result = s.compare_shadow_state(run(legacy=source, candidate=candidate), source, candidate)
         with self.assertRaises(Exception):
             result.exact_matches += ("other",)
+
+    def test_build_fingerprint_is_derived_from_complete_policy_and_generation_facts(self):
+        first = run()
+        second = run()
+        changed_tolerance = run(policy=policy(quantity_absolute="0.02"))
+        changed_generation = run(candidate_consumer_name="other-consumer")
+        self.assertEqual(first.build_fingerprint, second.build_fingerprint)
+        self.assertNotEqual(first.build_fingerprint, changed_tolerance.build_fingerprint)
+        self.assertNotEqual(first.policy.tolerance_policy_fingerprint, changed_tolerance.policy.tolerance_policy_fingerprint)
+        self.assertNotEqual(first.build_fingerprint, changed_generation.build_fingerprint)
 
 
 if __name__ == "__main__":

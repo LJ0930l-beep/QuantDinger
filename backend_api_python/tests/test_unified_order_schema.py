@@ -188,6 +188,9 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
         for fragment in (
             "comparison_contract_version = 'shadow-diff-v1'",
+            "candidate_consumer_name VARCHAR(160) NOT NULL",
+            "candidate_generation_build_fingerprint VARCHAR(64) NOT NULL",
+            "tolerance_policy_fingerprint VARCHAR(64) NOT NULL",
             "state IN ('BUILDING','COMPLETE','FAILED')",
             "UNIQUE(tenant_id, credential_id, account_scope, instrument_id, market_type, build_fingerprint)",
             "UNIQUE(run_id, diff_fingerprint)",

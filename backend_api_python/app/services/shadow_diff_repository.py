@@ -94,15 +94,18 @@ class ShadowDiffRepository:
         run = result.run
         try:
             with connection.cursor() as cursor:
+                self._lock_candidate_generation(cursor, run)
                 cursor.execute(
                     """
                     INSERT INTO qd_shadow_comparison_runs (
                         id, tenant_id, credential_id, account_scope, instrument_id, market_type,
                         comparison_contract_version, legacy_source_identity, legacy_source_version,
                         legacy_source_fingerprint, candidate_source_fingerprint, candidate_generation_id,
-                        candidate_checkpoint_watermark, as_of, correlation_id, tolerance_policy_version, build_fingerprint,
-                        replay_fingerprint, state, created_at, completed_at, failure_reason
-                    ) VALUES (%s,%s,%s,%s,%s,%s,'shadow-diff-v1',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,'BUILDING',%s,NULL,NULL)
+                        candidate_consumer_name, candidate_generation_build_fingerprint, candidate_checkpoint_watermark,
+                        as_of, correlation_id, tolerance_policy_version, quantity_absolute, quantity_relative,
+                        monetary_absolute, monetary_relative, ratio_absolute, tolerance_policy_fingerprint,
+                        build_fingerprint, replay_fingerprint, state, completed_at, failure_reason
+                    ) VALUES (%s,%s,%s,%s,%s,%s,'shadow-diff-v1',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,'BUILDING',NULL,NULL)
                     ON CONFLICT DO NOTHING
                     RETURNING id
                     """,
@@ -110,16 +113,19 @@ class ShadowDiffRepository:
                         run.run_id, run.tenant_id, run.credential_id, run.account_scope,
                         run.instrument_id, run.market_type, run.legacy_source_identity, run.legacy_source_version,
                         result.legacy.source_fingerprint, result.candidate.source_fingerprint, run.candidate_generation_id,
+                        run.candidate_consumer_name, run.candidate_generation_build_fingerprint,
                         run.candidate_checkpoint_watermark, run.as_of, run.correlation_id, run.policy.policy_version,
-                        run.build_fingerprint, completed_at,
+                        run.policy.quantity_absolute, run.policy.quantity_relative, run.policy.monetary_absolute,
+                        run.policy.monetary_relative, run.policy.ratio_absolute,
+                        run.policy.tolerance_policy_fingerprint, run.build_fingerprint,
                     ),
                 )
                 inserted = cursor.fetchone()
                 if inserted is None:
                     persisted = self._lock_run(cursor, run.run_id)
                     self._assert_run_identity(persisted, result)
-                    state = _row_value(persisted, 16)
-                    persisted_replay = _row_value(persisted, 15)
+                    state = _row_value(persisted, 24)
+                    persisted_replay = _row_value(persisted, 23)
                     if state == ShadowRunState.COMPLETE.value:
                         if persisted_replay != result.replay_fingerprint:
                             raise ShadowReplayConflict("completed run names different replay facts")
@@ -145,14 +151,43 @@ class ShadowDiffRepository:
         except Exception as exc:
             raise _driver_error(exc) from exc
 
+    def _lock_candidate_generation(self, cursor: Any, run: object) -> None:
+        cursor.execute(
+            """
+            SELECT consumer_name, build_fingerprint, state, source_high_watermark,
+                   processed_high_watermark, completed_at
+              FROM qd_projection_generations
+             WHERE id = %s
+             FOR UPDATE
+            """,
+            (run.candidate_generation_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise ShadowRunConflict("candidate projection generation is not visible")
+        consumer, build, state, source_watermark, processed_watermark, completed = (
+            _row_value(row, index) for index in range(6)
+        )
+        if (
+            state != "READY"
+            or completed is None
+            or consumer != run.candidate_consumer_name
+            or build != run.candidate_generation_build_fingerprint
+            or source_watermark != run.candidate_checkpoint_watermark
+            or processed_watermark != run.candidate_checkpoint_watermark
+        ):
+            raise ShadowRunConflict("candidate projection generation facts are not ready or exact")
+
     def _lock_run(self, cursor: Any, run_id: str) -> object:
         cursor.execute(
             """
             SELECT tenant_id, credential_id, account_scope, instrument_id, market_type,
                    legacy_source_fingerprint, candidate_source_fingerprint,
                    legacy_source_identity, legacy_source_version, candidate_generation_id,
+                   candidate_consumer_name, candidate_generation_build_fingerprint,
                    candidate_checkpoint_watermark, as_of, correlation_id, tolerance_policy_version,
-                   build_fingerprint, replay_fingerprint, state
+                   quantity_absolute, quantity_relative, monetary_absolute, monetary_relative,
+                   ratio_absolute, tolerance_policy_fingerprint, build_fingerprint, replay_fingerprint, state
               FROM qd_shadow_comparison_runs
              WHERE id = %s
              FOR UPDATE
@@ -170,11 +205,14 @@ class ShadowDiffRepository:
             run.tenant_id, run.credential_id, run.account_scope, run.instrument_id,
             run.market_type, result.legacy.source_fingerprint, result.candidate.source_fingerprint,
             run.legacy_source_identity, run.legacy_source_version, run.candidate_generation_id,
+            run.candidate_consumer_name, run.candidate_generation_build_fingerprint,
             run.candidate_checkpoint_watermark, run.as_of, run.correlation_id, run.policy.policy_version,
-            run.build_fingerprint,
+            run.policy.quantity_absolute, run.policy.quantity_relative, run.policy.monetary_absolute,
+            run.policy.monetary_relative, run.policy.ratio_absolute,
+            run.policy.tolerance_policy_fingerprint, run.build_fingerprint,
         )
-        actual = tuple(_row_value(row, index) for index in range(15))
-        if actual[:9] != expected[:9] or not _uuid_equal(actual[9], expected[9]) or actual[10:] != expected[10:]:
+        actual = tuple(_row_value(row, index) for index in range(23))
+        if actual[:9] != expected[:9] or not _uuid_equal(actual[9], expected[9]) or actual[10:16] != expected[10:16] or not all(_decimal_equal(actual[index], expected[index]) for index in range(16, 21)) or actual[21:] != expected[21:]:
             raise ShadowReplayConflict("shadow run identity names different immutable facts")
 
     def _persist_diffs(self, cursor: Any, result: ShadowComparisonResult) -> None:

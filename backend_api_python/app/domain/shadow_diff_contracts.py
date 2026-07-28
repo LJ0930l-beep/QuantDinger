@@ -108,11 +108,23 @@ class ShadowTolerancePolicy:
     monetary_absolute: DecimalInput = Decimal(0)
     monetary_relative: DecimalInput = Decimal(0)
     ratio_absolute: DecimalInput = Decimal(0)
+    tolerance_policy_fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "policy_version", _text(self.policy_version, "policy_version", max_length=64))
         for name in ("quantity_absolute", "quantity_relative", "monetary_absolute", "monetary_relative", "ratio_absolute"):
             object.__setattr__(self, name, _decimal(getattr(self, name), name))
+        object.__setattr__(self, "tolerance_policy_fingerprint", _fingerprint(self.canonical_facts()))
+
+    def canonical_facts(self) -> dict[str, str]:
+        return {
+            "policy_version": self.policy_version,
+            "quantity_absolute": canonical_decimal_string(self.quantity_absolute),
+            "quantity_relative": canonical_decimal_string(self.quantity_relative),
+            "monetary_absolute": canonical_decimal_string(self.monetary_absolute),
+            "monetary_relative": canonical_decimal_string(self.monetary_relative),
+            "ratio_absolute": canonical_decimal_string(self.ratio_absolute),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,12 +219,14 @@ class ShadowComparisonRun:
     legacy_source_version: str
     legacy_source_fingerprint: str
     candidate_generation_id: UUID | str
+    candidate_consumer_name: str
+    candidate_generation_build_fingerprint: str
     candidate_checkpoint_watermark: int
     as_of: datetime
     correlation_id: str
     policy: ShadowTolerancePolicy
-    build_fingerprint: str
     state: ShadowRunState = ShadowRunState.BUILDING
+    build_fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_id", _uuid(self.run_id, "run_id"))
@@ -228,17 +242,36 @@ class ShadowComparisonRun:
         if not isinstance(self.legacy_source_fingerprint, str) or len(self.legacy_source_fingerprint) != 64 or any(ch not in "0123456789abcdef" for ch in self.legacy_source_fingerprint):
             raise ShadowDiffContractError("legacy_source_fingerprint must be SHA-256")
         object.__setattr__(self, "candidate_generation_id", _uuid(self.candidate_generation_id, "candidate_generation_id"))
+        object.__setattr__(self, "candidate_consumer_name", _text(self.candidate_consumer_name, "candidate_consumer_name", lowercase=True, max_length=160))
+        if not isinstance(self.candidate_generation_build_fingerprint, str) or len(self.candidate_generation_build_fingerprint) != 64 or any(ch not in "0123456789abcdef" for ch in self.candidate_generation_build_fingerprint):
+            raise ShadowDiffContractError("candidate_generation_build_fingerprint must be SHA-256")
         if isinstance(self.candidate_checkpoint_watermark, bool) or not isinstance(self.candidate_checkpoint_watermark, int) or self.candidate_checkpoint_watermark < 0:
             raise ShadowDiffContractError("candidate_checkpoint_watermark must be non-negative")
         object.__setattr__(self, "as_of", _utc(self.as_of, "as_of"))
         object.__setattr__(self, "correlation_id", _text(self.correlation_id, "correlation_id"))
         if not isinstance(self.policy, ShadowTolerancePolicy) or not isinstance(self.state, ShadowRunState):
             raise ShadowDiffContractError("policy and state must use canonical contracts")
-        if not isinstance(self.build_fingerprint, str) or len(self.build_fingerprint) != 64 or any(ch not in "0123456789abcdef" for ch in self.build_fingerprint):
-            raise ShadowDiffContractError("build_fingerprint must be SHA-256")
+        object.__setattr__(self, "build_fingerprint", _fingerprint(self.canonical_build_facts()))
 
     def canonical_scope(self) -> tuple[int, int, str, str, str]:
         return (self.tenant_id, self.credential_id, self.account_scope, self.instrument_id, self.market_type)
+
+    def canonical_build_facts(self) -> dict[str, object]:
+        return {
+            "version": SHADOW_DIFF_CONTRACT_VERSION,
+            "scope": self.canonical_scope(),
+            "legacy_source_identity": self.legacy_source_identity,
+            "legacy_source_version": self.legacy_source_version,
+            "legacy_source_fingerprint": self.legacy_source_fingerprint,
+            "candidate_generation_id": self.candidate_generation_id,
+            "candidate_consumer_name": self.candidate_consumer_name,
+            "candidate_generation_build_fingerprint": self.candidate_generation_build_fingerprint,
+            "candidate_checkpoint_watermark": self.candidate_checkpoint_watermark,
+            "as_of": self.as_of.isoformat(),
+            "correlation_id": self.correlation_id,
+            "policy": self.policy.canonical_facts(),
+            "tolerance_policy_fingerprint": self.policy.tolerance_policy_fingerprint,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,9 +324,13 @@ class ShadowComparisonResult:
             "legacy_version": self.run.legacy_source_version,
             "legacy_source_fingerprint": self.run.legacy_source_fingerprint,
             "candidate_generation_id": self.run.candidate_generation_id,
+            "candidate_consumer_name": self.run.candidate_consumer_name,
+            "candidate_generation_build_fingerprint": self.run.candidate_generation_build_fingerprint,
             "candidate_checkpoint_watermark": self.run.candidate_checkpoint_watermark,
             "as_of": self.run.as_of.isoformat(), "correlation_id": self.run.correlation_id,
-            "tolerance_policy_version": self.run.policy.policy_version,
+            "tolerance_policy": self.run.policy.canonical_facts(),
+            "tolerance_policy_fingerprint": self.run.policy.tolerance_policy_fingerprint,
+            "build_fingerprint": self.run.build_fingerprint,
             "legacy": self.legacy.source_fingerprint, "candidate": self.candidate.source_fingerprint,
             "exact": self.exact_matches, "tolerated": self.tolerated_matches,
             "diffs": [item.diff_fingerprint for item in self.diffs],
