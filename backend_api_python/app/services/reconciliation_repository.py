@@ -102,7 +102,7 @@ class ReconciliationRepository:
                         correlation_id, policy_version, warning_degrades_health, quantity_absolute,
                         monetary_absolute, max_observation_age_seconds, policy_fingerprint, build_fingerprint,
                         replay_fingerprint, discrepancy_count, state, completed_at, failure_reason
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,'reconciliation-v1',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,0,'BUILDING',NULL,NULL)
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'reconciliation-v1',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL,0,'BUILDING',NULL,NULL)
                     ON CONFLICT DO NOTHING
                     RETURNING id
                     """,

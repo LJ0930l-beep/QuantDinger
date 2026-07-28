@@ -39,6 +39,9 @@ class Cursor:
         return False
 
     def execute(self, statement, parameters=()):
+        if "INSERT INTO qd_reconciliation_runs" in statement:
+            if statement.count("%s") != len(parameters):
+                raise AssertionError("reconciliation run SQL placeholders must match canonical parameters")
         self.statements.append((" ".join(statement.split()), parameters))
 
     def fetchone(self):
