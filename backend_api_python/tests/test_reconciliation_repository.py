@@ -99,6 +99,8 @@ class ReconciliationRepositoryTests(unittest.TestCase):
             text = handle.read()
         self.assertNotIn(".commit(", text)
         self.assertNotIn(".rollback(", text)
+        self.assertIn("c.reconciliation_run_id", text)
+        self.assertNotIn("c.run_id", text)
 
 
 if __name__ == "__main__":

@@ -218,7 +218,9 @@ class ReconciliationRepository:
                    correlation_id, policy_version, warning_degrades_health, quantity_absolute,
                    monetary_absolute, max_observation_age_seconds, policy_fingerprint, build_fingerprint,
                    discrepancy_count, replay_fingerprint, state,
-                   (SELECT status FROM qd_reconciliation_checkpoints c WHERE c.run_id = qd_reconciliation_runs.id ORDER BY checkpoint_version DESC LIMIT 1)
+                   (SELECT status FROM qd_reconciliation_checkpoints c
+                     WHERE c.reconciliation_run_id = qd_reconciliation_runs.id
+                     ORDER BY reconciliation_checkpoint_version DESC LIMIT 1)
               FROM qd_reconciliation_runs WHERE id = %s FOR UPDATE
             """,
             (run_id,),
