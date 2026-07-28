@@ -139,7 +139,7 @@ class ReconciliationRepository:
                     INSERT INTO qd_reconciliation_checkpoints (
                         id, tenant_id, credential_id, exchange, market_type, account_scope, instrument_id, status,
                         reconciliation_run_id, reconciliation_checkpoint_version, result_fingerprint,
-                        discrepancy_count, policy_fingerprint, version
+                        reconciliation_discrepancy_count, policy_fingerprint, version
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0)
                     ON CONFLICT (credential_id, exchange, market_type, account_scope, instrument_id)
                     DO UPDATE SET
@@ -150,7 +150,7 @@ class ReconciliationRepository:
                             ELSE qd_reconciliation_checkpoints.reconciliation_checkpoint_version + 1
                         END,
                         result_fingerprint = EXCLUDED.result_fingerprint,
-                        discrepancy_count = EXCLUDED.discrepancy_count,
+                        reconciliation_discrepancy_count = EXCLUDED.reconciliation_discrepancy_count,
                         policy_fingerprint = EXCLUDED.policy_fingerprint,
                         version = qd_reconciliation_checkpoints.version + 1,
                         updated_at = NOW()

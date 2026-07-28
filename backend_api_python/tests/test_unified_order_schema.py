@@ -220,6 +220,7 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "trg_qd_reconciliation_checkpoints_append_only",
             "ALTER TABLE qd_reconciliation_checkpoints",
             "reconciliation_run_id UUID",
+            "reconciliation_discrepancy_count INTEGER",
         ):
             self.assertIn(fragment, migration)
         self.assertNotIn("ON DELETE CASCADE", migration)

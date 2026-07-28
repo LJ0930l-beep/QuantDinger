@@ -81,7 +81,8 @@ ALTER TABLE qd_reconciliation_checkpoints
     ADD COLUMN IF NOT EXISTS reconciliation_run_id UUID,
     ADD COLUMN IF NOT EXISTS reconciliation_checkpoint_version BIGINT,
     ADD COLUMN IF NOT EXISTS result_fingerprint VARCHAR(64),
-    ADD COLUMN IF NOT EXISTS policy_fingerprint VARCHAR(64);
+    ADD COLUMN IF NOT EXISTS policy_fingerprint VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS reconciliation_discrepancy_count INTEGER;
 
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_reconciliation_checkpoints_canonical_run') THEN
@@ -98,6 +99,16 @@ DO $$ BEGIN
                     AND reconciliation_checkpoint_version >= 0
                     AND result_fingerprint ~ '^[0-9a-f]{64}$'
                     AND policy_fingerprint ~ '^[0-9a-f]{64}$')
+            ) NOT VALID;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_qd_reconciliation_checkpoints_canonical_count') THEN
+        ALTER TABLE qd_reconciliation_checkpoints
+            ADD CONSTRAINT chk_qd_reconciliation_checkpoints_canonical_count CHECK (
+                (reconciliation_run_id IS NULL AND reconciliation_discrepancy_count IS NULL)
+                OR (reconciliation_run_id IS NOT NULL AND reconciliation_discrepancy_count >= 0)
             ) NOT VALID;
     END IF;
 END $$;
