@@ -91,11 +91,30 @@ class CommandIntentRepository:
     """Atomic command graph and reservation persistence over PR-02 tables."""
 
     def accept_command_graph(self, connection: Connection, graph: CommandGraph) -> CommandGraphResult:
-        """Atomically insert command, v1 intent, and CREATED economic order.
+        """Compatibility wrapper with the historical one-shot transaction boundary.
+
+        New aggregate workflows must call :meth:`persist_command_graph` inside
+        their own transaction.  This public method deliberately retains the
+        existing commit-on-success and rollback-on-error semantics for callers
+        that still rely on the original API.
+        """
+
+        try:
+            result = self.persist_command_graph(connection, graph)
+            connection.commit()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
+
+    def persist_command_graph(self, connection: Connection, graph: CommandGraph) -> CommandGraphResult:
+        """Persist one command graph without taking ownership of the transaction.
 
         A duplicate idempotency key only replays if all safety-relevant command
         identity facts and canonical fingerprint match.  It never regenerates
-        identifiers and never treats a generic database error as a replay.
+        identifiers and never treats a generic database error as a replay.  The
+        caller commits or rolls back the supplied connection after composing
+        this mutation with any other durable facts.
         """
 
         cursor = connection.cursor()
@@ -103,12 +122,9 @@ class CommandIntentRepository:
             self._validate_snapshot(cursor, graph)
             inserted = self._insert_command(cursor, graph)
             if not inserted:
-                result = self._load_matching_replay(cursor, graph)
-                connection.commit()
-                return result
+                return self._load_matching_replay(cursor, graph)
             self._insert_intent(cursor, graph)
             self._insert_economic_order(cursor, graph)
-            connection.commit()
             return CommandGraphResult(
                 command_id=graph.command.command_id,
                 intent_id=graph.intent.intent_id,
@@ -116,9 +132,6 @@ class CommandIntentRepository:
                 state=EconomicOrderState.CREATED,
                 disposition=CommandGraphDisposition.CREATED,
             )
-        except Exception:
-            connection.rollback()
-            raise
         finally:
             cursor.close()
 
@@ -271,6 +284,24 @@ class CommandIntentRepository:
         )
 
     def create_reservation(self, connection: Connection, reservation: RiskReservation) -> ReservationTransitionResult:
+        """Compatibility wrapper with the historical one-shot transaction boundary."""
+
+        try:
+            result = self.persist_reservation(connection, reservation)
+            connection.commit()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
+
+    def persist_reservation(self, connection: Connection, reservation: RiskReservation) -> ReservationTransitionResult:
+        """Persist one reservation without committing or rolling back the caller.
+
+        This shares the exact validation, uniqueness-race handling and locked
+        replay path used by :meth:`create_reservation`; only transaction
+        ownership differs.
+        """
+
         cursor = connection.cursor()
         try:
             self._validate_reservation_scope(cursor, reservation)
@@ -293,7 +324,6 @@ class CommandIntentRepository:
             )
             inserted = cursor.fetchone()
             if inserted is not None:
-                connection.commit()
                 return ReservationTransitionResult(reservation.reservation_id, ReservationState.ACTIVE, 0,
                                                    ReservationTransitionDisposition.APPLIED)
             # PostgreSQL decides every unique race.  Do not name one arbiter:
@@ -301,12 +331,7 @@ class CommandIntentRepository:
             # (command_id, reservation_kind) uniqueness rule.  Once the
             # conflicting transaction is visible, prove the complete immutable
             # reservation identity before reporting a replay.
-            result = self._load_matching_reservation_after_conflict(cursor, reservation)
-            connection.commit()
-            return result
-        except Exception:
-            connection.rollback()
-            raise
+            return self._load_matching_reservation_after_conflict(cursor, reservation)
         finally:
             cursor.close()
 
