@@ -24,7 +24,6 @@ def market_buy(quantity="1"):
 def reducing_close(quantity="1"):
     return e.CanonicalEconomicIntent(
         side=e.OrderSide.SELL,
-        quantity=d.Quantity(quantity),
         execution_kind=e.ExecutionKind.MARKET,
         reduce_only=True,
         target_position_id="position-1",
@@ -218,13 +217,48 @@ class CanonicalEntryContractTests(unittest.TestCase):
             entry_request(action=o.OrderAction.CLOSE, economic_intent=market_buy())
         close_all = e.CanonicalEconomicIntent(
             side=e.OrderSide.SELL,
-            quantity=d.Quantity("1"),
             execution_kind=e.ExecutionKind.MARKET,
             reduce_only=True,
             target_position_id="position-1",
             close_all=True,
         )
         self.assertEqual(entry_request(action=o.OrderAction.CLOSE, economic_intent=close_all).economic_intent.close_all, True)
+
+    def test_action_discriminated_facts_and_risk_effect_are_fail_closed(self):
+        cancel = e.CanonicalEconomicIntent(cancel_target_id="order-1")
+        accepted_cancel = entry_request(action=o.OrderAction.CANCEL, economic_intent=cancel)
+        self.assertEqual(accepted_cancel.risk_effect, o.RiskEffect.NEUTRAL)
+        with self.assertRaises(e.EntryContractError):
+            entry_request(action=o.OrderAction.CANCEL, economic_intent=cancel, risk_effect=o.RiskEffect.REDUCE_RISK)
+        with self.assertRaises(e.EntryContractError):
+            entry_request(action=o.OrderAction.OPEN, economic_intent=e.CanonicalEconomicIntent(
+                side=e.OrderSide.BUY, quantity=d.Quantity("1"), execution_kind=e.ExecutionKind.MARKET,
+                cancel_target_id="order-1",
+            ))
+        with self.assertRaises(e.EntryContractError):
+            entry_request(risk_effect=o.RiskEffect.REDUCE_RISK)
+        partial = entry_request(action=o.OrderAction.REDUCE, economic_intent=reducing_close("0.1"))
+        self.assertEqual(partial.risk_effect, o.RiskEffect.REDUCE_RISK)
+        self.assertIsNone(partial.economic_intent.quantity)
+        with self.assertRaises(e.EntryContractError):
+            entry_request(action=o.OrderAction.REDUCE, economic_intent=e.CanonicalEconomicIntent(
+                side=e.OrderSide.SELL, quantity=d.Quantity("1"), execution_kind=e.ExecutionKind.MARKET,
+                reduce_only=True, target_position_id="position-1", close_all=True,
+            ))
+
+    def test_close_all_and_protection_action_matrix(self):
+        close_all = e.CanonicalEconomicIntent(
+            side=e.OrderSide.SELL, execution_kind=e.ExecutionKind.MARKET,
+            reduce_only=True, target_position_id="position-1", close_all=True,
+        )
+        request = entry_request(action=o.OrderAction.EMERGENCY_CLOSE, economic_intent=close_all)
+        self.assertIsNone(request.economic_intent.quantity)
+        self.assertIsNone(request.economic_intent.close_quantity)
+        with self.assertRaises(e.EntryContractError):
+            entry_request(action=o.OrderAction.PROTECTION, economic_intent=close_all)
+        protection = e.EntryActorContext(o.Actor.PROTECTION, "protect-1", e.EntrySource.PROTECTION)
+        accepted = entry_request(actor=protection, action=o.OrderAction.PROTECTION, economic_intent=close_all)
+        self.assertEqual(accepted.risk_effect, o.RiskEffect.REDUCE_RISK)
 
     def test_equivalent_cross_entry_intents_share_economic_but_not_request_identity(self):
         facts = {
