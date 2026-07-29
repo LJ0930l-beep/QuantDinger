@@ -43,6 +43,8 @@ class CanonicalEconomicIntentV2:
             if (v:=getattr(self,n)) is not None and not isinstance(v,Price): raise CanonicalEntryV2Error(f"{n} must be Price")
         for n in ("cancel_target_id","target_position_id"):
             if (v:=getattr(self,n)) is not None: object.__setattr__(self,n,_text(v,n))
+        if self.cancel_target_id is not None and self.cancel_target_kind is CancelTargetKind.ECONOMIC_ORDER_ID:
+            object.__setattr__(self,"cancel_target_id",_uuid(self.cancel_target_id,"cancel_target_id"))
     def validate(self, action: OrderAction) -> None:
         if not isinstance(action,OrderAction): raise CanonicalEntryV2Error("action must be typed")
         cancel = action is OrderAction.CANCEL
@@ -67,7 +69,7 @@ class CanonicalEntryRequestV2:
     tenant_id:int; credential_id:int; account_scope:str; instrument_id:str; market_type:str; action:OrderAction; economic_intent:CanonicalEconomicIntentV2; actor:EntryActorContext; risk_effect:RiskEffect; idempotency_key:str; correlation_id:str; occurred_at:datetime; mode:EntryMode|None=None
     economic_fingerprint:str=field(init=False); request_fingerprint:str=field(init=False)
     def __post_init__(self):
-        if isinstance(self.tenant_id,bool) or isinstance(self.credential_id,bool) or self.tenant_id<=0 or self.credential_id<=0 or not isinstance(self.action,OrderAction) or not isinstance(self.actor,EntryActorContext) or not isinstance(self.economic_intent,CanonicalEconomicIntentV2): raise CanonicalEntryV2Error("invalid V2 scope")
+        if (isinstance(self.tenant_id,bool) or not isinstance(self.tenant_id,int) or self.tenant_id<=0 or isinstance(self.credential_id,bool) or not isinstance(self.credential_id,int) or self.credential_id<=0 or not isinstance(self.action,OrderAction) or not isinstance(self.actor,EntryActorContext) or not isinstance(self.economic_intent,CanonicalEconomicIntentV2)): raise CanonicalEntryV2Error("invalid V2 scope")
         for n,upper in (("account_scope",False),("instrument_id",True),("market_type",False)):
             v=_text(getattr(self,n),n); object.__setattr__(self,n,v.upper() if upper else v.lower() if n=="market_type" else v)
         expected=RiskEffect.NEUTRAL if self.action is OrderAction.CANCEL else RiskEffect.INCREASE_RISK if self.action in (OrderAction.OPEN,OrderAction.INCREASE) else RiskEffect.REDUCE_RISK
@@ -91,21 +93,26 @@ class EconomicOrderSubject:
 @dataclass(frozen=True, slots=True)
 class CancelTargetSubject:
     cancel_target_kind: CancelTargetKind; cancel_target_id:str
-    def __post_init__(self): object.__setattr__(self,"cancel_target_id",_text(self.cancel_target_id,"cancel_target_id"))
+    def __post_init__(self):
+        if not isinstance(self.cancel_target_kind,CancelTargetKind): raise CanonicalEntryV2Error("cancel_target_kind must be typed")
+        value=_uuid(self.cancel_target_id,"cancel_target_id") if self.cancel_target_kind is CancelTargetKind.ECONOMIC_ORDER_ID else _text(self.cancel_target_id,"cancel_target_id")
+        object.__setattr__(self,"cancel_target_id",value)
 @dataclass(frozen=True, slots=True)
 class DurableEntryGraphV2:
     command_id: UUID|str; specification: CanonicalEntryRequestV2; subject: EconomicOrderSubject|CancelTargetSubject
     def __post_init__(self):
         object.__setattr__(self,"command_id",_uuid(self.command_id,"command_id"))
+        if not isinstance(self.specification,CanonicalEntryRequestV2) or not isinstance(self.subject,(EconomicOrderSubject,CancelTargetSubject)): raise CanonicalEntryV2Error("graph requires typed specification and subject")
         if self.specification.action is OrderAction.CANCEL:
             if not isinstance(self.subject,CancelTargetSubject): raise CanonicalEntryV2Error("cancel requires cancel subject")
             if (self.specification.economic_intent.cancel_target_kind,self.specification.economic_intent.cancel_target_id)!=(self.subject.cancel_target_kind,self.subject.cancel_target_id): raise CanonicalEntryV2Error("cancel subject mismatch")
         elif not isinstance(self.subject,EconomicOrderSubject): raise CanonicalEntryV2Error("non-cancel requires economic order subject")
 
 def convert_v1_non_stop(request: CanonicalEntryRequest) -> CanonicalEntryRequestV2:
+    if not isinstance(request,CanonicalEntryRequest): raise CanonicalEntryV2Error("V1 request required")
     intent=request.economic_intent
     if request.action is OrderAction.CANCEL or intent.execution_kind in (ExecutionKind.STOP_MARKET,ExecutionKind.STOP_LIMIT): raise CanonicalEntryV2Error("V1 CANCEL/STOP requires explicit conversion")
     return CanonicalEntryRequestV2(request.tenant_id,request.credential_id,request.account_scope,request.instrument_id,request.market_type,request.action,CanonicalEconomicIntentV2(intent.side,intent.quantity,QuantitySemantics.ABSOLUTE if intent.quantity else None,intent.execution_kind,intent.limit_price,None,None,None,intent.reduce_only,intent.position_side,None,None,intent.target_position_id,intent.close_quantity,intent.close_all),request.actor,request.risk_effect,request.idempotency_key,request.correlation_id,request.occurred_at,request.mode)
 def convert_v1_cancel(request: CanonicalEntryRequest, *, cancel_target_kind: CancelTargetKind) -> CanonicalEntryRequestV2:
-    if request.action is not OrderAction.CANCEL or not isinstance(cancel_target_kind,CancelTargetKind): raise CanonicalEntryV2Error("explicit V1 cancel target kind required")
+    if not isinstance(request,CanonicalEntryRequest) or request.action is not OrderAction.CANCEL or not isinstance(cancel_target_kind,CancelTargetKind): raise CanonicalEntryV2Error("explicit V1 cancel target kind required")
     return CanonicalEntryRequestV2(request.tenant_id,request.credential_id,request.account_scope,request.instrument_id,request.market_type,request.action,CanonicalEconomicIntentV2(cancel_target_kind=cancel_target_kind,cancel_target_id=request.economic_intent.cancel_target_id),request.actor,request.risk_effect,request.idempotency_key,request.correlation_id,request.occurred_at,request.mode)
