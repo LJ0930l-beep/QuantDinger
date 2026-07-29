@@ -282,6 +282,35 @@ BEGIN
     RETURN NEW;
 END; $$;
 
+CREATE OR REPLACE FUNCTION qd_assert_durable_risk_v2_scope_matches_entry()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM 1
+      FROM qd_durable_entry_specifications entry_specification
+     WHERE entry_specification.command_id = NEW.command_id
+       AND entry_specification.contract_version = NEW.durable_entry_contract_version
+       AND entry_specification.economic_order_id = NEW.economic_order_id
+       AND entry_specification.economic_fingerprint = NEW.economic_fingerprint
+       AND entry_specification.request_fingerprint = NEW.request_fingerprint
+       AND entry_specification.tenant_id = NEW.tenant_id
+       AND entry_specification.credential_id = NEW.credential_id
+       AND entry_specification.account_scope = NEW.account_scope
+       AND entry_specification.instrument_id = NEW.instrument_id
+       AND entry_specification.market_type = NEW.market_type
+       AND entry_specification.action = NEW.action
+       AND entry_specification.risk_effect = NEW.risk_effect
+       AND entry_specification.actor_type = NEW.actor_type
+       AND entry_specification.actor_id = NEW.actor_id
+       AND entry_specification.source = NEW.source
+       AND entry_specification.mode = NEW.mode
+       AND entry_specification.correlation_id = NEW.correlation_id
+       AND entry_specification.occurred_at = NEW.entry_occurred_at;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'durable risk v2 scope does not match durable entry specification' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END; $$;
+
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_policy_snapshots_append_only') THEN
@@ -308,5 +337,25 @@ BEGIN
         CREATE TRIGGER trg_qd_durable_risk_reservations_allow_decision
         BEFORE INSERT ON qd_durable_risk_reservations
         FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_risk_v2_reservation_allowed();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_policy_snapshots_scope_entry') THEN
+        CREATE TRIGGER trg_qd_durable_risk_policy_snapshots_scope_entry
+        BEFORE INSERT ON qd_durable_risk_policy_snapshots
+        FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_risk_v2_scope_matches_entry();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_input_snapshots_scope_entry') THEN
+        CREATE TRIGGER trg_qd_durable_risk_input_snapshots_scope_entry
+        BEFORE INSERT ON qd_durable_risk_input_snapshots
+        FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_risk_v2_scope_matches_entry();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_decisions_scope_entry') THEN
+        CREATE TRIGGER trg_qd_durable_risk_decisions_scope_entry
+        BEFORE INSERT ON qd_durable_risk_decisions
+        FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_risk_v2_scope_matches_entry();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_reservations_scope_entry') THEN
+        CREATE TRIGGER trg_qd_durable_risk_reservations_scope_entry
+        BEFORE INSERT ON qd_durable_risk_reservations
+        FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_risk_v2_scope_matches_entry();
     END IF;
 END $$;
