@@ -277,6 +277,7 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "gross_notional NUMERIC(38,18) NOT NULL", "projected_gross_notional NUMERIC(38,18) NOT NULL",
             "reserved_gross_notional NUMERIC(38,18) NOT NULL", "global_kill_switch_version BIGINT NOT NULL",
             "qd_reject_durable_risk_v2_mutation", "qd_assert_durable_risk_v2_reservation_allowed",
+            "qd_assert_durable_risk_v2_scope_matches_entry",
             "trg_qd_durable_risk_reservations_allow_decision", "uq_qd_durable_risk_reservations_active_decision",
         ):
             self.assertIn(column, migration)
@@ -1165,6 +1166,10 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                 invalid_cancel["action"] = "CANCEL"
                 invalid_cancel["risk_effect"] = "NEUTRAL"
                 self._assert_rejected(cursor, statement("qd_durable_risk_policy_snapshots", policy_columns), tuple(invalid_cancel[name] for name in policy_columns))
+                invalid_entry_scope = dict(policy)
+                invalid_entry_scope["id"] = str(uuid.uuid4())
+                invalid_entry_scope["actor_id"] = "different-human"
+                self._assert_rejected(cursor, statement("qd_durable_risk_policy_snapshots", policy_columns), tuple(invalid_entry_scope[name] for name in policy_columns))
                 invalid_scope = dict(decision)
                 invalid_scope["id"] = str(uuid.uuid4())
                 invalid_scope["account_scope"] = "other-account"
