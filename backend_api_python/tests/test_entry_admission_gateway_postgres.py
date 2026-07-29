@@ -21,6 +21,15 @@ from tests.pr12c_admission_loader import load_pr12c_admission
 m = load_pr12c_admission()
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 INIT_SQL = MIGRATIONS / "init.sql"
+_FIXTURE_ID_PREFIX = "entry-admission-v2-"
+_FIXTURE_ID_SUFFIX_LENGTH = 20
+_QD_USER_USERNAME_MAX_LENGTH = 50
+_QD_EXCHANGE_ID_MAX_LENGTH = 50
+
+
+def _fixture_identity() -> str:
+    """Return one CI fixture identifier accepted by both legacy VARCHAR(50) columns."""
+    return f"{_FIXTURE_ID_PREFIX}{uuid4().hex[:_FIXTURE_ID_SUFFIX_LENGTH]}"
 
 
 class _Provider:
@@ -29,6 +38,14 @@ class _Provider:
 
     def prepare(self, _graph):
         return self.outcome
+
+
+class EntryAdmissionFixtureIdentityTests(unittest.TestCase):
+    def test_fixture_identity_fits_legacy_user_and_exchange_limits(self):
+        identity = _fixture_identity()
+
+        self.assertLessEqual(len(identity), _QD_USER_USERNAME_MAX_LENGTH)
+        self.assertLessEqual(len(identity), _QD_EXCHANGE_ID_MAX_LENGTH)
 
 
 @unittest.skipUnless(os.getenv("DATABASE_URL"), "requires CI PostgreSQL DATABASE_URL")
@@ -56,17 +73,17 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
 
     def setUp(self):
         self.connection = self._connection()
-        suffix = uuid4().hex
+        identity = _fixture_identity()
         with self.connection.cursor() as cursor:
             cursor.execute(
                 "INSERT INTO qd_users(username, password_hash) VALUES (%s, %s) RETURNING id",
-                (f"entry-admission-v2-{suffix}", "test"),
+                (identity, "test"),
             )
             self.tenant_id = cursor.fetchone()[0]
             cursor.execute(
                 "INSERT INTO qd_exchange_credentials(user_id, exchange_id, encrypted_config) "
                 "VALUES (%s, %s, %s) RETURNING id",
-                (self.tenant_id, f"entry-admission-v2-{suffix}", "{}"),
+                (self.tenant_id, identity, "{}"),
             )
             self.credential_id = cursor.fetchone()[0]
         self.connection.commit()
