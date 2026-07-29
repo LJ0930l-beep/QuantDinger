@@ -16,7 +16,8 @@ IMMUTABLE_LEDGER_MIGRATION = MIGRATIONS / "20260724_immutable_fill_ledger_guards
 WAVE2_MIGRATION = MIGRATIONS / "20260725_wave2_persistence_schema.sql"
 SHADOW_DIFF_MIGRATION = MIGRATIONS / "20260726_shadow_diff_schema.sql"
 RECONCILIATION_MIGRATION = MIGRATIONS / "20260728_reconciliation_health_schema.sql"
-INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION)
+DURABLE_ENTRY_MIGRATION = MIGRATIONS / "20260729_durable_entry_specifications.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -54,6 +55,7 @@ EXPECTED_TABLES = {
     "qd_shadow_diff_facts",
     "qd_reconciliation_runs",
     "qd_reconciliation_discrepancies",
+    "qd_durable_entry_specifications",
 }
 
 # These are representative pre-existing upstream tables whose availability is
@@ -223,6 +225,32 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "reconciliation_discrepancy_count INTEGER",
         ):
             self.assertIn(fragment, migration)
+        self.assertNotIn("ON DELETE CASCADE", migration)
+
+    def test_durable_entry_schema_uses_typed_v2_facts_and_append_only_guards(self):
+        migration = DURABLE_ENTRY_MIGRATION.read_text(encoding="utf-8")
+        self.assertIn("CREATE TABLE IF NOT EXISTS qd_durable_entry_specifications", migration)
+        self.assertIn("contract_version = 'canonical-entry-v2'", migration)
+        self.assertIn(
+            "UNIQUE (tenant_id, credential_id, account_scope, idempotency_key, contract_version)",
+            migration,
+        )
+        self.assertNotIn("UNIQUE (economic_order_id)", migration)
+        for column in (
+            "command_id UUID PRIMARY KEY", "economic_order_id UUID", "quantity NUMERIC(38,18)",
+            "limit_price NUMERIC(38,18)", "trigger_price NUMERIC(38,18)",
+            "close_quantity NUMERIC(38,18)", "cancel_target_kind VARCHAR(24)",
+            "target_position_id VARCHAR(160)", "economic_fingerprint VARCHAR(64)",
+            "request_fingerprint VARCHAR(64)", "correlation_id VARCHAR(160)",
+            "occurred_at TIMESTAMPTZ NOT NULL", "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+            "qd_reject_durable_entry_specification_mutation",
+            "trg_qd_durable_entry_specifications_append_only",
+        ):
+            self.assertIn(column, migration)
+        for action in ("'CANCEL'", "'OPEN'", "'INCREASE'", "'REDUCE'", "'CLOSE'", "'EMERGENCY_CLOSE'", "'PROTECTION'"):
+            self.assertIn(action, migration)
+        for execution in ("'MARKET'", "'LIMIT'", "'STOP_MARKET'", "'STOP_LIMIT'"):
+            self.assertIn(execution, migration)
         self.assertNotIn("ON DELETE CASCADE", migration)
 
     def test_init_sql_retains_representative_upstream_trading_tables(self):
@@ -802,6 +830,155 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     (graph["economic_order_id"],),
                 )
                 self.assertEqual(cursor.fetchone()[0], 1)
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_durable_entry_specifications_enforce_v2_action_matrix_and_append_only(self):
+        import psycopg2
+
+        columns = (
+            "command_id", "contract_version", "tenant_id", "credential_id", "account_scope",
+            "instrument_id", "market_type", "action", "risk_effect", "side", "quantity",
+            "quantity_semantics", "execution_kind", "limit_price", "trigger_price",
+            "trigger_direction", "trigger_price_type", "reduce_only", "position_side",
+            "cancel_target_kind", "cancel_target_id", "target_position_id", "close_quantity",
+            "close_all", "economic_order_id", "economic_fingerprint", "request_fingerprint",
+            "actor_type", "actor_id", "source", "mode", "idempotency_key", "correlation_id",
+            "occurred_at",
+        )
+        statement = (
+            "INSERT INTO qd_durable_entry_specifications (" + ", ".join(columns) + ") VALUES ("
+            + ", ".join(["%s"] * len(columns)) + ")"
+        )
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            connection.autocommit = False
+            with connection.cursor() as cursor:
+                cursor.execute(INIT_SQL.read_text(encoding="utf-8"))
+                cursor.execute(DURABLE_ENTRY_MIGRATION.read_text(encoding="utf-8"))
+                cursor.execute(DURABLE_ENTRY_MIGRATION.read_text(encoding="utf-8"))
+                graph = self._create_order_graph(cursor)
+                sequence = 0
+
+                def insert_specification(action, execution=None, *, close_all=False, cancel_kind=None,
+                                         cancel_target_id=None, command_id=None, idempotency_key=None,
+                                         write=True, **overrides):
+                    nonlocal sequence
+                    sequence += 1
+                    is_cancel = action == "CANCEL"
+                    is_reducing = action in {"REDUCE", "CLOSE", "EMERGENCY_CLOSE", "PROTECTION"}
+                    is_stop = execution in {"STOP_MARKET", "STOP_LIMIT"}
+                    is_limit = execution in {"LIMIT", "STOP_LIMIT"}
+                    token = f"{sequence:064x}"
+                    values = {
+                        "command_id": command_id or str(uuid.uuid4()),
+                        "contract_version": "canonical-entry-v2",
+                        "tenant_id": graph["user_id"],
+                        "credential_id": graph["credential_id"],
+                        "account_scope": "account-a",
+                        "instrument_id": "BTC-USDT",
+                        "market_type": "spot",
+                        "action": action,
+                        "risk_effect": "NEUTRAL" if is_cancel else "REDUCE_RISK" if is_reducing else "INCREASE_RISK",
+                        "side": None if is_cancel else "SELL" if is_reducing else "BUY",
+                        "quantity": "1" if not is_cancel and not is_reducing else None,
+                        "quantity_semantics": "ABSOLUTE" if not is_cancel and not is_reducing else None,
+                        "execution_kind": execution,
+                        "limit_price": "100" if is_limit else None,
+                        "trigger_price": "99" if is_stop else None,
+                        "trigger_direction": "AT_OR_BELOW" if is_stop else None,
+                        "trigger_price_type": "MARK" if is_stop else None,
+                        "reduce_only": False if not is_reducing else True,
+                        "position_side": "NET",
+                        "cancel_target_kind": cancel_kind if is_cancel else None,
+                        "cancel_target_id": cancel_target_id if is_cancel else None,
+                        "target_position_id": "position-a" if is_reducing else None,
+                        "close_quantity": None if not is_reducing or close_all else "1",
+                        "close_all": close_all if is_reducing else False,
+                        "economic_order_id": None if is_cancel else str(uuid.uuid4()),
+                        "economic_fingerprint": token,
+                        "request_fingerprint": token,
+                        "actor_type": "PROTECTION" if action == "PROTECTION" else "HUMAN",
+                        "actor_id": "protection-a" if action == "PROTECTION" else "human-a",
+                        "source": "PROTECTION" if action == "PROTECTION" else "REST",
+                        "mode": "PAPER",
+                        "idempotency_key": idempotency_key or f"durable-entry-{sequence}",
+                        "correlation_id": f"correlation-{sequence}",
+                        "occurred_at": "2026-07-29T00:00:00+00:00",
+                    }
+                    values.update(overrides)
+                    if write:
+                        cursor.execute(statement, tuple(values[column] for column in columns))
+                    return values
+
+                for action in ("OPEN", "INCREASE"):
+                    for execution in ("MARKET", "LIMIT", "STOP_MARKET", "STOP_LIMIT"):
+                        insert_specification(action, execution)
+                for action in ("REDUCE", "CLOSE", "EMERGENCY_CLOSE", "PROTECTION"):
+                    for close_all in (False, True):
+                        for execution in ("MARKET", "LIMIT", "STOP_MARKET", "STOP_LIMIT"):
+                            insert_specification(action, execution, close_all=close_all)
+                for kind, target in (
+                    ("ECONOMIC_ORDER_ID", str(uuid.uuid4())),
+                    ("CLIENT_ORDER_ID", "client-order-a"),
+                    ("VENUE_ORDER_ID", "venue-order-a"),
+                ):
+                    insert_specification("CANCEL", cancel_kind=kind, cancel_target_id=target)
+
+                invalid_cancel = insert_specification(
+                    "CANCEL", cancel_kind="CLIENT_ORDER_ID", cancel_target_id="cancel-invalid",
+                    economic_order_id=str(uuid.uuid4()), write=False,
+                )
+                self._assert_rejected(cursor, statement, tuple(invalid_cancel[column] for column in columns))
+                invalid_close_all = insert_specification(
+                    "CLOSE", "MARKET", close_all=True, quantity="1", write=False,
+                )
+                self._assert_rejected(cursor, statement, tuple(invalid_close_all[column] for column in columns))
+                invalid_stop = insert_specification(
+                    "OPEN", "STOP_MARKET", trigger_direction=None, write=False,
+                )
+                self._assert_rejected(cursor, statement, tuple(invalid_stop[column] for column in columns))
+                invalid_risk = insert_specification("OPEN", "MARKET", risk_effect="REDUCE_RISK", write=False)
+                self._assert_rejected(cursor, statement, tuple(invalid_risk[column] for column in columns))
+                invalid_subject = insert_specification(
+                    "CANCEL", cancel_kind="ECONOMIC_ORDER_ID", cancel_target_id="not-a-uuid", write=False,
+                )
+                self._assert_rejected(cursor, statement, tuple(invalid_subject[column] for column in columns))
+
+                replay = insert_specification("OPEN", "MARKET")
+                duplicate = dict(replay)
+                duplicate["command_id"] = str(uuid.uuid4())
+                self._assert_rejected(cursor, statement, tuple(duplicate[column] for column in columns))
+                conflict = dict(replay)
+                conflict["command_id"] = str(uuid.uuid4())
+                conflict["correlation_id"] = "different-audit-fact"
+                self._assert_rejected(cursor, statement, tuple(conflict[column] for column in columns))
+
+                self._assert_rejected(
+                    cursor,
+                    "UPDATE qd_durable_entry_specifications SET actor_id = 'changed' WHERE command_id = %s",
+                    (replay["command_id"],),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "DELETE FROM qd_durable_entry_specifications WHERE command_id = %s",
+                    (replay["command_id"],),
+                )
+
+                rollback_key = f"rollback-{uuid.uuid4().hex}"
+                rolled_back = insert_specification("OPEN", "MARKET", idempotency_key=rollback_key)
+                connection.rollback()
+                with connection.cursor() as reuse_cursor:
+                    reuse_cursor.execute(
+                        "SELECT COUNT(*) FROM qd_durable_entry_specifications WHERE idempotency_key = %s",
+                        (rollback_key,),
+                    )
+                    self.assertEqual(reuse_cursor.fetchone()[0], 0)
+                    # The same connection remains usable after caller-owned rollback.
+                    reuse_cursor.execute("SELECT 1")
+                    self.assertEqual(reuse_cursor.fetchone()[0], 1)
+                self.assertIsNotNone(rolled_back["command_id"])
         finally:
             connection.rollback()
             connection.close()
