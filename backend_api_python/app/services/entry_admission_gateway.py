@@ -1,82 +1,256 @@
-"""Typed, caller-owned, non-executing canonical entry admission boundary."""
+"""Caller-owned Canonical Entry V2 admission orchestration.
+
+The gateway composes already-typed durable entry, durable-risk V2, and outbox
+ports on one caller-provided connection.  It is deliberately not a runtime
+entry point and never owns a database transaction or an execution client.
+"""
+
 from __future__ import annotations
-from dataclasses import dataclass
-from enum import Enum
+
 from typing import Protocol
-from app.domain.canonical_entry_contracts import CanonicalCommandDraft, EntryDisposition, EntryMode, EntryRejection
-from app.domain.command_intent_contracts import CommandGraph, CommandGraphDisposition, CommandGraphResult
-from app.domain.order_contracts import RiskEffect
 
-class EntryAdmissionError(RuntimeError): pass
-class EntryAdmissionConflict(EntryAdmissionError): pass
+from app.domain.canonical_entry_contracts import EntryMode
+from app.domain.canonical_entry_v2_contracts import (
+    CancelTargetSubject,
+    DurableEntryGraphV2,
+    EconomicOrderSubject,
+)
+from app.domain.durable_entry_persistence_contracts import (
+    DurableEntryPersistDisposition,
+    DurableEntryPersistResult,
+)
+from app.domain.durable_risk_enforcement_v2_contracts import (
+    DurableRiskPersistDisposition,
+    DurableRiskPersistResultV2,
+)
+from app.domain.entry_admission_v2_contracts import (
+    EntryAdmissionConflict,
+    EntryAdmissionDisposition,
+    EntryAdmissionError,
+    EntryAdmissionResultV2,
+    deterministic_admission_outbox_event,
+    require_durable_entry_receipt,
+    require_durable_risk_receipt,
+)
+from app.domain.order_contracts import OrderAction, RiskEffect
+from app.services.outbox_projection_repository import (
+    OutboxPersistDisposition,
+    OutboxPersistResult,
+    outbox_event_fingerprint,
+)
 
-class EntryAdmissionDisposition(str, Enum):
-    DISABLED="DISABLED"; REJECTED="REJECTED"; RISK_REJECTED="RISK_REJECTED"; CREATED="CREATED"; REPLAYED="REPLAYED"
-class ReservationDisposition(str, Enum): CREATED="CREATED"; REPLAYED="REPLAYED"
-class HardRiskDisposition(str, Enum): CREATED="CREATED"; REPLAYED="REPLAYED"
-class OutboxDisposition(str, Enum): CREATED="CREATED"; REPLAYED="REPLAYED"
 
-@dataclass(frozen=True, slots=True)
-class ReservationPersistResult:
-    reservation_id: str
-    disposition: ReservationDisposition
-@dataclass(frozen=True, slots=True)
-class HardRiskPersistResult:
-    allowed: bool
-    reservation: ReservationPersistResult | None
-    disposition: HardRiskDisposition
-@dataclass(frozen=True, slots=True)
-class OutboxPersistResult:
-    event_id: str
-    disposition: OutboxDisposition
-@dataclass(frozen=True, slots=True)
-class EntryAdmissionResult:
-    disposition: EntryAdmissionDisposition; mode: EntryMode
-    command_id: str | None=None; intent_id: str | None=None; economic_order_id: str | None=None
-    rejection: EntryRejection | None=None
+class DurableEntryPort(Protocol):
+    def persist_durable_entry(
+        self,
+        connection: object,
+        graph: DurableEntryGraphV2,
+    ) -> DurableEntryPersistResult: ...
 
-class CanonicalCommandMapper(Protocol):
-    def map(self, draft: CanonicalCommandDraft) -> CommandGraph: ...
-class CommandGraphPort(Protocol):
-    def persist_command_graph(self, connection: object, graph: CommandGraph) -> CommandGraphResult: ...
-class HardRiskPort(Protocol):
-    def persist_for_admission(self, connection: object, draft: CanonicalCommandDraft, graph: CommandGraph) -> HardRiskPersistResult: ...
-class OutboxPort(Protocol):
-    def persist_admission(self, connection: object, draft: CanonicalCommandDraft, graph: CommandGraph) -> OutboxPersistResult: ...
+
+class DurableRiskPortV2(Protocol):
+    def evaluate_and_persist(
+        self,
+        connection: object,
+        graph: DurableEntryGraphV2,
+    ) -> DurableRiskPersistResultV2: ...
+
+
+class AdmissionOutboxPort(Protocol):
+    def persist_admission(
+        self,
+        connection: object,
+        graph: DurableEntryGraphV2,
+        durable_result: DurableEntryPersistResult,
+        risk_result: DurableRiskPersistResultV2 | None,
+    ) -> OutboxPersistResult: ...
+
 
 class CanonicalEntryAdmissionGateway:
-    def __init__(self, *, mapper: CanonicalCommandMapper, command_graphs: CommandGraphPort, hard_risk: HardRiskPort, outbox: OutboxPort) -> None:
-        self._mapper, self._command_graphs, self._hard_risk, self._outbox = mapper, command_graphs, hard_risk, outbox
-    def admit(self, connection: object, draft: CanonicalCommandDraft) -> EntryAdmissionResult:
-        if not isinstance(draft, CanonicalCommandDraft): raise EntryAdmissionError("gateway accepts CanonicalCommandDraft only")
-        if draft.disposition is EntryDisposition.REJECTED:
-            return EntryAdmissionResult(EntryAdmissionDisposition.REJECTED, draft.request.mode, rejection=draft.rejection)
-        if draft.request.mode is EntryMode.DISABLED:
-            return EntryAdmissionResult(EntryAdmissionDisposition.DISABLED, draft.request.mode)
-        graph=self._mapper.map(draft); self._validate_graph(draft, graph)
-        command=self._command_graphs.persist_command_graph(connection, graph)
-        risk=self._hard_risk.persist_for_admission(connection,draft,graph)
-        if not isinstance(risk, HardRiskPersistResult):
-            raise EntryAdmissionConflict("hard risk port returned an untyped result")
-        if not risk.allowed:
-            if risk.reservation is not None: raise EntryAdmissionConflict("denied risk result cannot reserve")
-            return EntryAdmissionResult(EntryAdmissionDisposition.RISK_REJECTED,draft.request.mode,command.command_id,command.intent_id,command.economic_order_id)
-        increase=draft.request.risk_effect is RiskEffect.INCREASE_RISK
-        if increase and risk.reservation is None: raise EntryAdmissionConflict("allowed increase requires authoritative reservation")
-        if not increase and risk.reservation is not None: raise EntryAdmissionConflict("non-increase cannot reserve")
-        outbox=self._outbox.persist_admission(connection,draft,graph)
-        if not isinstance(outbox, OutboxPersistResult):
-            raise EntryAdmissionConflict("outbox port returned an untyped result")
-        replayed=(command.disposition is CommandGraphDisposition.REPLAYED and risk.disposition is HardRiskDisposition.REPLAYED and outbox.disposition is OutboxDisposition.REPLAYED)
-        return EntryAdmissionResult(EntryAdmissionDisposition.REPLAYED if replayed else EntryAdmissionDisposition.CREATED,draft.request.mode,command.command_id,command.intent_id,command.economic_order_id)
-    def _validate_graph(self,draft:CanonicalCommandDraft,graph:CommandGraph)->None:
-        if not isinstance(graph, CommandGraph):
-            raise EntryAdmissionConflict("mapper must return CommandGraph")
-        r=draft.request; c,i=graph.command,graph.intent
-        if (c.tenant_id,c.credential_id,c.account_scope,c.action,c.actor_type,c.actor_id,c.source,c.idempotency_key,c.correlation_id,i.instrument_id,i.market_type)!=(r.tenant_id,r.credential_id,r.account_scope,r.action,r.actor.actor_type,r.actor.actor_id,r.actor.entry_source.value.lower(),r.idempotency_key,r.correlation_id,r.instrument_id,r.market_type):
-            raise EntryAdmissionConflict("mapper graph does not match canonical draft")
-        if (c.request_payload.get("canonical_request_fingerprint")!=r.request_fingerprint
-            or c.request_payload.get("economic_fingerprint")!=r.economic_fingerprint
-            or c.request_payload.get("intent_payload_hash")!=i.payload_hash
-            or c.request_payload.get("risk_effect")!=r.risk_effect.value):
-            raise EntryAdmissionConflict("mapper fingerprint does not match canonical draft")
+    """Admit one typed V2 graph without committing, rolling back, or executing."""
+
+    def __init__(
+        self,
+        *,
+        durable_entries: DurableEntryPort,
+        durable_risk: DurableRiskPortV2,
+        outbox: AdmissionOutboxPort,
+    ) -> None:
+        self._durable_entries = durable_entries
+        self._durable_risk = durable_risk
+        self._outbox = outbox
+
+    def admit(self, connection: object, graph: DurableEntryGraphV2) -> EntryAdmissionResultV2:
+        self._validate_graph(graph)
+        specification = graph.specification
+        if specification.mode is EntryMode.DISABLED:
+            return self._result(
+                graph,
+                EntryAdmissionDisposition.DISABLED,
+                risk_result=None,
+                outbox_result=None,
+            )
+
+        durable_result = self._persist_durable_entry(connection, graph)
+        if specification.action is OrderAction.CANCEL:
+            outbox_result = self._persist_outbox(connection, graph, durable_result, None)
+            return self._result(
+                graph,
+                self._combined_disposition(durable_result.disposition, outbox_result.disposition),
+                risk_result=None,
+                outbox_result=outbox_result,
+            )
+
+        risk_result = self._persist_durable_risk(connection, graph)
+        if not risk_result.allowed:
+            if risk_result.decision_status not in {"DENY", "RECONCILIATION_REQUIRED"}:
+                raise EntryAdmissionConflict("denied durable risk receipt has an invalid status")
+            if risk_result.reservation_id is not None:
+                raise EntryAdmissionConflict("denied durable risk receipt cannot reserve capacity")
+            return self._result(
+                graph,
+                EntryAdmissionDisposition.RISK_REJECTED,
+                risk_result=risk_result,
+                outbox_result=None,
+            )
+
+        if risk_result.decision_status != "ALLOW":
+            raise EntryAdmissionConflict("allowed durable risk receipt must use ALLOW status")
+        if specification.risk_effect is RiskEffect.INCREASE_RISK:
+            if not risk_result.reservation_id:
+                raise EntryAdmissionConflict("allowed OPEN/INCREASE requires a durable reservation")
+        elif specification.risk_effect is RiskEffect.REDUCE_RISK:
+            if risk_result.reservation_id is not None:
+                raise EntryAdmissionConflict("reducing action cannot reserve capacity")
+        else:
+            raise EntryAdmissionConflict("non-CANCEL admission has an unsupported risk effect")
+
+        outbox_result = self._persist_outbox(connection, graph, durable_result, risk_result)
+        return self._result(
+            graph,
+            self._combined_disposition(
+                durable_result.disposition,
+                risk_result.disposition,
+                outbox_result.disposition,
+            ),
+            risk_result=risk_result,
+            outbox_result=outbox_result,
+        )
+
+    @staticmethod
+    def _validate_graph(graph: DurableEntryGraphV2) -> None:
+        if not isinstance(graph, DurableEntryGraphV2):
+            raise EntryAdmissionError("gateway requires DurableEntryGraphV2")
+        specification = graph.specification
+        if specification.action is OrderAction.CANCEL:
+            if not isinstance(graph.subject, CancelTargetSubject):
+                raise EntryAdmissionConflict("CANCEL requires a typed cancel subject")
+            if specification.risk_effect is not RiskEffect.NEUTRAL:
+                raise EntryAdmissionConflict("CANCEL must be neutral risk")
+            return
+        if not isinstance(graph.subject, EconomicOrderSubject):
+            raise EntryAdmissionConflict("non-CANCEL admission requires an economic-order subject")
+        if specification.risk_effect not in {
+            RiskEffect.INCREASE_RISK,
+            RiskEffect.REDUCE_RISK,
+        }:
+            raise EntryAdmissionConflict("non-CANCEL admission must have a non-neutral risk effect")
+
+    def _persist_durable_entry(
+        self,
+        connection: object,
+        graph: DurableEntryGraphV2,
+    ) -> DurableEntryPersistResult:
+        result = self._durable_entries.persist_durable_entry(connection, graph)
+        result = require_durable_entry_receipt(result, graph)
+        if result.disposition not in {
+            DurableEntryPersistDisposition.CREATED,
+            DurableEntryPersistDisposition.REPLAYED,
+        }:
+            raise EntryAdmissionConflict("durable entry receipt has an unsupported disposition")
+        return result
+
+    def _persist_durable_risk(
+        self,
+        connection: object,
+        graph: DurableEntryGraphV2,
+    ) -> DurableRiskPersistResultV2:
+        result = self._durable_risk.evaluate_and_persist(connection, graph)
+        result = require_durable_risk_receipt(result, graph)
+        if result.disposition not in {
+            DurableRiskPersistDisposition.CREATED,
+            DurableRiskPersistDisposition.REPLAYED,
+        }:
+            raise EntryAdmissionConflict("durable risk receipt has an unsupported disposition")
+        return result
+
+    def _persist_outbox(
+        self,
+        connection: object,
+        graph: DurableEntryGraphV2,
+        durable_result: DurableEntryPersistResult,
+        risk_result: DurableRiskPersistResultV2 | None,
+    ) -> OutboxPersistResult:
+        result = self._outbox.persist_admission(
+            connection,
+            graph,
+            durable_result,
+            risk_result,
+        )
+        expected_event = deterministic_admission_outbox_event(graph, risk_result=risk_result)
+        if not isinstance(result, OutboxPersistResult):
+            raise EntryAdmissionConflict("admission outbox port returned an untyped receipt")
+        if result.disposition not in {
+            OutboxPersistDisposition.CREATED,
+            OutboxPersistDisposition.REPLAYED,
+        }:
+            raise EntryAdmissionConflict("admission outbox receipt has an unsupported disposition")
+        if result.event != expected_event:
+            raise EntryAdmissionConflict("admission outbox receipt conflicts with immutable event facts")
+        if outbox_event_fingerprint(result.event) != outbox_event_fingerprint(expected_event):
+            raise EntryAdmissionConflict("admission outbox fingerprint conflicts with immutable event facts")
+        return result
+
+    @staticmethod
+    def _combined_disposition(*dispositions: object) -> EntryAdmissionDisposition:
+        replayed = {
+            DurableEntryPersistDisposition.REPLAYED,
+            DurableRiskPersistDisposition.REPLAYED,
+            OutboxPersistDisposition.REPLAYED,
+        }
+        if all(disposition in replayed for disposition in dispositions):
+            return EntryAdmissionDisposition.REPLAYED
+        return EntryAdmissionDisposition.CREATED
+
+    @staticmethod
+    def _result(
+        graph: DurableEntryGraphV2,
+        disposition: EntryAdmissionDisposition,
+        *,
+        risk_result: DurableRiskPersistResultV2 | None,
+        outbox_result: OutboxPersistResult | None,
+    ) -> EntryAdmissionResultV2:
+        specification = graph.specification
+        economic_order_id = (
+            graph.subject.economic_order_id
+            if isinstance(graph.subject, EconomicOrderSubject)
+            else None
+        )
+        return EntryAdmissionResultV2(
+            disposition=disposition,
+            mode=specification.mode,
+            command_id=graph.command_id,
+            action=specification.action,
+            subject=graph.subject,
+            economic_order_id=economic_order_id,
+            economic_fingerprint=specification.economic_fingerprint,
+            request_fingerprint=specification.request_fingerprint,
+            risk_decision_id=None if risk_result is None else risk_result.decision_id,
+            risk_decision_status=None if risk_result is None else risk_result.decision_status,
+            reservation_id=None if risk_result is None else risk_result.reservation_id,
+            outbox_event_id=None if outbox_result is None else outbox_result.event.event_id,
+            outbox_payload_hash=None if outbox_result is None else outbox_result.event.payload_hash,
+            outbox_event_fingerprint=(
+                None if outbox_result is None else outbox_event_fingerprint(outbox_result.event)
+            ),
+        )

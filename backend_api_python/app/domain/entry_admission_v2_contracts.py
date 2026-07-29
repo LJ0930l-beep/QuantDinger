@@ -17,6 +17,7 @@ from app.domain.canonical_entry_v2_contracts import (
     EconomicOrderSubject,
 )
 from app.domain.durable_entry_persistence_contracts import DurableEntryPersistResult
+from app.domain.durable_entry_persistence_contracts import DURABLE_ENTRY_CONTRACT_VERSION
 from app.domain.durable_risk_enforcement_v2_contracts import DurableRiskPersistResultV2
 from app.domain.hard_risk_contracts import (
     HardRiskRequest,
@@ -164,6 +165,7 @@ def require_durable_risk_receipt(
     expected = (
         graph.command_id,
         graph.subject.economic_order_id,
+        DURABLE_ENTRY_CONTRACT_VERSION,
         specification.economic_fingerprint,
         specification.request_fingerprint,
         specification.tenant_id,
@@ -183,6 +185,7 @@ def require_durable_risk_receipt(
     actual = (
         receipt.command_id,
         receipt.economic_order_id,
+        receipt.durable_entry_contract_version,
         receipt.economic_fingerprint,
         receipt.request_fingerprint,
         receipt.tenant_id,
