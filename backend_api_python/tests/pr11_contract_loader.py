@@ -29,7 +29,11 @@ def load_pr11_contracts() -> SimpleNamespace:
         "app.domain.decimal_values",
         "app.domain.order_contracts",
         "app.domain.canonical_entry_contracts",
+        "app.domain.canonical_entry_v2_contracts",
+        "app.domain.durable_entry_persistence_contracts",
         "app.domain.canonical_entry_adapters",
+        "app.services",
+        "app.services.durable_entry_repository",
     )
     original = {name: sys.modules.get(name, _MISSING) for name in names}
     try:
@@ -37,18 +41,29 @@ def load_pr11_contracts() -> SimpleNamespace:
         app.__path__ = [str(app_dir)]
         domain = ModuleType("app.domain")
         domain.__path__ = [str(app_dir / "domain")]
-        sys.modules.update({"app": app, "app.domain": domain})
+        services = ModuleType("app.services")
+        services.__path__ = [str(app_dir / "services")]
+        sys.modules.update({"app": app, "app.domain": domain, "app.services": services})
         order = _load("app.domain.order_contracts", app_dir / "domain" / "order_contracts.py")
         decimals = _load("app.domain.decimal_values", app_dir / "domain" / "decimal_values.py")
         entry = _load(
             "app.domain.canonical_entry_contracts",
             app_dir / "domain" / "canonical_entry_contracts.py",
         )
+        entry_v2 = _load("app.domain.canonical_entry_v2_contracts", app_dir / "domain" / "canonical_entry_v2_contracts.py")
+        durable_entry = _load(
+            "app.domain.durable_entry_persistence_contracts",
+            app_dir / "domain" / "durable_entry_persistence_contracts.py",
+        )
         adapters = _load(
             "app.domain.canonical_entry_adapters",
             app_dir / "domain" / "canonical_entry_adapters.py",
         )
-        return SimpleNamespace(order=order, decimals=decimals, entry=entry, adapters=adapters)
+        durable_entry_repository = _load(
+            "app.services.durable_entry_repository",
+            app_dir / "services" / "durable_entry_repository.py",
+        )
+        return SimpleNamespace(order=order, decimals=decimals, entry=entry, entry_v2=entry_v2, durable_entry=durable_entry, adapters=adapters, durable_entry_repository=durable_entry_repository)
     finally:
         for name in reversed(names):
             previous = original[name]
