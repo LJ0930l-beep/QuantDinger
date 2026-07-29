@@ -6,6 +6,7 @@ import os
 import re
 import unittest
 import uuid
+import json
 from pathlib import Path
 
 
@@ -17,7 +18,8 @@ WAVE2_MIGRATION = MIGRATIONS / "20260725_wave2_persistence_schema.sql"
 SHADOW_DIFF_MIGRATION = MIGRATIONS / "20260726_shadow_diff_schema.sql"
 RECONCILIATION_MIGRATION = MIGRATIONS / "20260728_reconciliation_health_schema.sql"
 DURABLE_ENTRY_MIGRATION = MIGRATIONS / "20260729_durable_entry_specifications.sql"
-INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION)
+DURABLE_RISK_V2_MIGRATION = MIGRATIONS / "20260730_durable_risk_enforcement_v2.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION, DURABLE_RISK_V2_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -56,6 +58,10 @@ EXPECTED_TABLES = {
     "qd_reconciliation_runs",
     "qd_reconciliation_discrepancies",
     "qd_durable_entry_specifications",
+    "qd_durable_risk_policy_snapshots",
+    "qd_durable_risk_input_snapshots",
+    "qd_durable_risk_decisions",
+    "qd_durable_risk_reservations",
 }
 
 # These are representative pre-existing upstream tables whose availability is
@@ -253,6 +259,33 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             self.assertIn(execution, migration)
         self.assertNotIn("ON DELETE CASCADE", migration)
 
+    def test_durable_risk_v2_schema_is_independent_typed_and_append_only(self):
+        migration = DURABLE_RISK_V2_MIGRATION.read_text(encoding="utf-8")
+        for table in (
+            "qd_durable_risk_policy_snapshots",
+            "qd_durable_risk_input_snapshots",
+            "qd_durable_risk_decisions",
+            "qd_durable_risk_reservations",
+        ):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
+            self.assertIn(f"{table}_append_only", migration)
+        for column in (
+            "durable-risk-enforcement-v2", "command_id UUID NOT NULL",
+            "economic_order_id UUID NOT NULL", "economic_fingerprint VARCHAR(64) NOT NULL",
+            "request_fingerprint VARCHAR(64) NOT NULL", "scope_fingerprint VARCHAR(64) NOT NULL",
+            "audit_fingerprint VARCHAR(64) NOT NULL", "max_gross_notional NUMERIC(38,18) NOT NULL",
+            "gross_notional NUMERIC(38,18) NOT NULL", "projected_gross_notional NUMERIC(38,18) NOT NULL",
+            "reserved_gross_notional NUMERIC(38,18) NOT NULL", "global_kill_switch_version BIGINT NOT NULL",
+            "qd_reject_durable_risk_v2_mutation", "qd_assert_durable_risk_v2_reservation_allowed",
+            "trg_qd_durable_risk_reservations_allow_decision", "uq_qd_durable_risk_reservations_active_decision",
+        ):
+            self.assertIn(column, migration)
+        self.assertIn("REFERENCES qd_durable_entry_specifications(command_id) ON DELETE RESTRICT", migration)
+        self.assertNotIn("qd_order_commands", migration)
+        self.assertNotIn("qd_order_intents_v2", migration)
+        self.assertNotIn("qd_economic_orders", migration)
+        self.assertNotIn("ON DELETE CASCADE", migration)
+
     def test_init_sql_retains_representative_upstream_trading_tables(self):
         init_sql = INIT_SQL.read_text(encoding="utf-8")
         for table in REQUIRED_UPSTREAM_TABLES:
@@ -342,6 +375,64 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                 status,
             ),
         )
+
+    def _create_durable_entry_scope(self, cursor):
+        """Create only a typed durable-entry row; V2 risk never needs legacy orders."""
+
+        suffix = uuid.uuid4().hex
+        cursor.execute(
+            "INSERT INTO qd_users(username, password_hash) VALUES (%s, %s) RETURNING id",
+            (f"durable_risk_v2_{suffix}", "schema-test"),
+        )
+        tenant_id = cursor.fetchone()[0]
+        cursor.execute(
+            "INSERT INTO qd_exchange_credentials(user_id, exchange_id, encrypted_config) "
+            "VALUES (%s, %s, %s) RETURNING id",
+            (tenant_id, "durable-risk-v2", "{}"),
+        )
+        credential_id = cursor.fetchone()[0]
+        command_id = str(uuid.uuid4())
+        economic_order_id = str(uuid.uuid4())
+        economic_fingerprint = "a" * 64
+        request_fingerprint = "b" * 64
+        cursor.execute(
+            "INSERT INTO qd_durable_entry_specifications ("
+            "command_id, contract_version, tenant_id, credential_id, account_scope, instrument_id, "
+            "market_type, action, risk_effect, side, quantity, quantity_semantics, execution_kind, "
+            "limit_price, trigger_price, trigger_direction, trigger_price_type, reduce_only, position_side, "
+            "cancel_target_kind, cancel_target_id, target_position_id, close_quantity, close_all, "
+            "economic_order_id, economic_fingerprint, request_fingerprint, actor_type, actor_id, source, "
+            "mode, idempotency_key, correlation_id, occurred_at) VALUES ("
+            "%s, 'canonical-entry-v2', %s, %s, 'account-a', 'BTC-USDT', 'spot', 'OPEN', 'INCREASE_RISK', "
+            "'BUY', '1', 'ABSOLUTE', 'MARKET', NULL, NULL, NULL, NULL, FALSE, 'NET', NULL, NULL, NULL, "
+            "NULL, FALSE, %s, %s, %s, 'HUMAN', 'human-a', 'REST', 'PAPER', %s, 'correlation-a', "
+            "'2026-07-30T00:00:00+00:00')",
+            (command_id, tenant_id, credential_id, economic_order_id, economic_fingerprint,
+             request_fingerprint, f"durable-risk-key-{suffix}"),
+        )
+        return {
+            "contract_version": "durable-risk-enforcement-v2",
+            "command_id": command_id,
+            "economic_order_id": economic_order_id,
+            "durable_entry_contract_version": "canonical-entry-v2",
+            "economic_fingerprint": economic_fingerprint,
+            "request_fingerprint": request_fingerprint,
+            "tenant_id": tenant_id,
+            "credential_id": credential_id,
+            "account_scope": "account-a",
+            "instrument_id": "BTC-USDT",
+            "market_type": "spot",
+            "action": "OPEN",
+            "risk_effect": "INCREASE_RISK",
+            "actor_type": "HUMAN",
+            "actor_id": "human-a",
+            "source": "REST",
+            "mode": "PAPER",
+            "correlation_id": "correlation-a",
+            "entry_occurred_at": "2026-07-30T00:00:00+00:00",
+            "scope_fingerprint": "c" * 64,
+            "audit_fingerprint": "d" * 64,
+        }
 
     def test_init_and_incremental_schema_enforce_database_contracts(self):
         import psycopg2
@@ -979,6 +1070,135 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     reuse_cursor.execute("SELECT 1")
                     self.assertEqual(reuse_cursor.fetchone()[0], 1)
                 self.assertIsNotNone(rolled_back["command_id"])
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_durable_risk_v2_is_independent_scoped_and_append_only(self):
+        import psycopg2
+
+        scope_columns = (
+            "contract_version", "command_id", "economic_order_id", "durable_entry_contract_version",
+            "economic_fingerprint", "request_fingerprint", "tenant_id", "credential_id",
+            "account_scope", "instrument_id", "market_type", "action", "risk_effect",
+            "actor_type", "actor_id", "source", "mode", "correlation_id",
+            "entry_occurred_at", "scope_fingerprint", "audit_fingerprint",
+        )
+
+        def statement(table, columns):
+            return (
+                f"INSERT INTO {table} (" + ", ".join(columns) + ") VALUES ("
+                + ", ".join(["%s"] * len(columns)) + ")"
+            )
+
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            connection.autocommit = False
+            with connection.cursor() as cursor:
+                cursor.execute(INIT_SQL.read_text(encoding="utf-8"))
+                cursor.execute(DURABLE_RISK_V2_MIGRATION.read_text(encoding="utf-8"))
+                cursor.execute(DURABLE_RISK_V2_MIGRATION.read_text(encoding="utf-8"))
+                scope = self._create_durable_entry_scope(cursor)
+
+                policy_columns = (*scope_columns, "id", "policy_hash", "policy_version", "valuation_currency",
+                                  "max_gross_notional", "max_net_notional", "max_instrument_notional",
+                                  "max_leverage", "minimum_available_margin", "max_daily_loss",
+                                  "max_drawdown_ratio", "policy_payload_json")
+                input_columns = (*scope_columns, "id", "input_hash", "input_version", "valuation_currency",
+                                 "gross_notional", "net_notional", "instrument_notional", "available_margin",
+                                 "equity", "peak_equity", "daily_realized_pnl", "reconciliation_health",
+                                 "market_data_health", "account_facts_verified", "global_kill_switch_version",
+                                 "global_kill_switch_enabled", "global_kill_switch_mode",
+                                 "account_kill_switch_version", "account_kill_switch_enabled", "account_kill_switch_mode",
+                                 "strategy_kill_switch_version", "strategy_kill_switch_enabled", "strategy_kill_switch_mode",
+                                 "exposure_payload_json", "kill_switch_payload_json", "observed_at")
+                decision_columns = (*scope_columns, "id", "policy_snapshot_id", "input_snapshot_id",
+                                    "policy_hash", "input_hash", "decision_fingerprint", "allowed",
+                                    "decision_status", "rejection_codes_json", "projected_gross_notional",
+                                    "projected_net_notional", "projected_instrument_notional",
+                                    "projected_available_margin", "projected_leverage", "projected_daily_loss",
+                                    "projected_drawdown_ratio", "projected_risk_payload_json")
+                reservation_columns = (*scope_columns, "id", "decision_id", "reservation_hash",
+                                       "valuation_currency", "reserved_gross_notional", "reserved_net_notional",
+                                       "reserved_instrument_notional", "reserved_margin", "state", "expires_at")
+
+                policy = {
+                    **scope, "id": str(uuid.uuid4()), "policy_hash": "e" * 64, "policy_version": "policy-v1",
+                    "valuation_currency": "USDT", "max_gross_notional": "100", "max_net_notional": "100",
+                    "max_instrument_notional": "100", "max_leverage": "2", "minimum_available_margin": "1",
+                    "max_daily_loss": "50", "max_drawdown_ratio": "0.5", "policy_payload_json": json.dumps({"audit": True}),
+                }
+                input_snapshot = {
+                    **scope, "id": str(uuid.uuid4()), "input_hash": "f" * 64, "input_version": "input-v1",
+                    "valuation_currency": "USDT", "gross_notional": "1", "net_notional": "1",
+                    "instrument_notional": "1", "available_margin": "99", "equity": "100",
+                    "peak_equity": "100", "daily_realized_pnl": "0", "reconciliation_health": "HEALTHY",
+                    "market_data_health": "FRESH", "account_facts_verified": True,
+                    "global_kill_switch_version": 0, "global_kill_switch_enabled": False, "global_kill_switch_mode": None,
+                    "account_kill_switch_version": 0, "account_kill_switch_enabled": False, "account_kill_switch_mode": None,
+                    "strategy_kill_switch_version": 0, "strategy_kill_switch_enabled": False, "strategy_kill_switch_mode": None,
+                    "exposure_payload_json": json.dumps({"audit": True}), "kill_switch_payload_json": json.dumps({"audit": True}),
+                    "observed_at": "2026-07-30T00:00:00+00:00",
+                }
+                cursor.execute(statement("qd_durable_risk_policy_snapshots", policy_columns), tuple(policy[name] for name in policy_columns))
+                cursor.execute(statement("qd_durable_risk_input_snapshots", input_columns), tuple(input_snapshot[name] for name in input_columns))
+                decision = {
+                    **scope, "id": str(uuid.uuid4()), "policy_snapshot_id": policy["id"],
+                    "input_snapshot_id": input_snapshot["id"], "policy_hash": policy["policy_hash"],
+                    "input_hash": input_snapshot["input_hash"], "decision_fingerprint": "1" * 64,
+                    "allowed": True, "decision_status": "ALLOW", "rejection_codes_json": json.dumps([]),
+                    "projected_gross_notional": "1", "projected_net_notional": "1",
+                    "projected_instrument_notional": "1", "projected_available_margin": "99",
+                    "projected_leverage": "0.01", "projected_daily_loss": "0",
+                    "projected_drawdown_ratio": "0", "projected_risk_payload_json": json.dumps({"audit": True}),
+                }
+                cursor.execute(statement("qd_durable_risk_decisions", decision_columns), tuple(decision[name] for name in decision_columns))
+                reservation = {
+                    **scope, "id": str(uuid.uuid4()), "decision_id": decision["id"], "reservation_hash": "2" * 64,
+                    "valuation_currency": "USDT", "reserved_gross_notional": "1", "reserved_net_notional": "1",
+                    "reserved_instrument_notional": "1", "reserved_margin": "1", "state": "ACTIVE", "expires_at": None,
+                }
+                cursor.execute(statement("qd_durable_risk_reservations", reservation_columns), tuple(reservation[name] for name in reservation_columns))
+
+                invalid_cancel = dict(policy)
+                invalid_cancel["id"] = str(uuid.uuid4())
+                invalid_cancel["action"] = "CANCEL"
+                invalid_cancel["risk_effect"] = "NEUTRAL"
+                self._assert_rejected(cursor, statement("qd_durable_risk_policy_snapshots", policy_columns), tuple(invalid_cancel[name] for name in policy_columns))
+                invalid_scope = dict(decision)
+                invalid_scope["id"] = str(uuid.uuid4())
+                invalid_scope["account_scope"] = "other-account"
+                self._assert_rejected(cursor, statement("qd_durable_risk_decisions", decision_columns), tuple(invalid_scope[name] for name in decision_columns))
+                invalid_reservation = dict(reservation)
+                invalid_reservation["id"] = str(uuid.uuid4())
+                invalid_reservation["action"] = "REDUCE"
+                invalid_reservation["risk_effect"] = "REDUCE_RISK"
+                self._assert_rejected(cursor, statement("qd_durable_risk_reservations", reservation_columns), tuple(invalid_reservation[name] for name in reservation_columns))
+                denied_decision = dict(decision)
+                denied_decision["id"] = str(uuid.uuid4())
+                denied_decision["decision_fingerprint"] = "3" * 64
+                denied_decision["allowed"] = False
+                denied_decision["decision_status"] = "DENY"
+                denied_decision["rejection_codes_json"] = json.dumps(["KILL_SWITCH"])
+                cursor.execute(statement("qd_durable_risk_decisions", decision_columns), tuple(denied_decision[name] for name in decision_columns))
+                denied_reservation = dict(reservation)
+                denied_reservation["id"] = str(uuid.uuid4())
+                denied_reservation["decision_id"] = denied_decision["id"]
+                denied_reservation["reservation_hash"] = "4" * 64
+                self._assert_rejected(cursor, statement("qd_durable_risk_reservations", reservation_columns), tuple(denied_reservation[name] for name in reservation_columns))
+                duplicate_reservation = dict(reservation)
+                duplicate_reservation["id"] = str(uuid.uuid4())
+                self._assert_rejected(cursor, statement("qd_durable_risk_reservations", reservation_columns), tuple(duplicate_reservation[name] for name in reservation_columns))
+                self._assert_rejected(cursor, "UPDATE qd_durable_risk_policy_snapshots SET policy_version = 'changed' WHERE id = %s", (policy["id"],))
+                self._assert_rejected(cursor, "UPDATE qd_durable_risk_input_snapshots SET input_version = 'changed' WHERE id = %s", (input_snapshot["id"],))
+                self._assert_rejected(cursor, "UPDATE qd_durable_risk_decisions SET allowed = FALSE WHERE id = %s", (decision["id"],))
+                self._assert_rejected(cursor, "UPDATE qd_durable_risk_reservations SET state = 'RELEASED' WHERE id = %s", (reservation["id"],))
+                self._assert_rejected(cursor, "DELETE FROM qd_durable_risk_decisions WHERE id = %s", (decision["id"],))
+                self._assert_rejected(cursor, "DELETE FROM qd_durable_risk_reservations WHERE id = %s", (reservation["id"],))
+                missing_command = dict(policy)
+                missing_command["id"] = str(uuid.uuid4())
+                missing_command["command_id"] = str(uuid.uuid4())
+                self._assert_rejected(cursor, statement("qd_durable_risk_policy_snapshots", policy_columns), tuple(missing_command[name] for name in policy_columns))
         finally:
             connection.rollback()
             connection.close()
