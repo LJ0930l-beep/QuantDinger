@@ -31,9 +31,12 @@ def load_pr11_contracts() -> SimpleNamespace:
         "app.domain.canonical_entry_contracts",
         "app.domain.canonical_entry_v2_contracts",
         "app.domain.durable_entry_persistence_contracts",
+        "app.domain.hard_risk_contracts",
+        "app.domain.durable_risk_enforcement_v2_contracts",
         "app.domain.canonical_entry_adapters",
         "app.services",
         "app.services.durable_entry_repository",
+        "app.services.durable_risk_enforcement_v2_repository",
     )
     original = {name: sys.modules.get(name, _MISSING) for name in names}
     try:
@@ -55,6 +58,11 @@ def load_pr11_contracts() -> SimpleNamespace:
             "app.domain.durable_entry_persistence_contracts",
             app_dir / "domain" / "durable_entry_persistence_contracts.py",
         )
+        hard_risk = _load("app.domain.hard_risk_contracts", app_dir / "domain" / "hard_risk_contracts.py")
+        durable_risk_v2 = _load(
+            "app.domain.durable_risk_enforcement_v2_contracts",
+            app_dir / "domain" / "durable_risk_enforcement_v2_contracts.py",
+        )
         adapters = _load(
             "app.domain.canonical_entry_adapters",
             app_dir / "domain" / "canonical_entry_adapters.py",
@@ -63,7 +71,11 @@ def load_pr11_contracts() -> SimpleNamespace:
             "app.services.durable_entry_repository",
             app_dir / "services" / "durable_entry_repository.py",
         )
-        return SimpleNamespace(order=order, decimals=decimals, entry=entry, entry_v2=entry_v2, durable_entry=durable_entry, adapters=adapters, durable_entry_repository=durable_entry_repository)
+        durable_risk_repository = _load(
+            "app.services.durable_risk_enforcement_v2_repository",
+            app_dir / "services" / "durable_risk_enforcement_v2_repository.py",
+        )
+        return SimpleNamespace(order=order, decimals=decimals, entry=entry, entry_v2=entry_v2, durable_entry=durable_entry, hard_risk=hard_risk, durable_risk_v2=durable_risk_v2, adapters=adapters, durable_entry_repository=durable_entry_repository, durable_risk_repository=durable_risk_repository)
     finally:
         for name in reversed(names):
             previous = original[name]
