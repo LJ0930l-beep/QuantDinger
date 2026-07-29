@@ -67,6 +67,23 @@ class DurableRiskEnforcementV2ContractTests(unittest.TestCase):
             self.assertIn("economic_order_id", columns)
             self.assertIn("scope_fingerprint", columns)
             self.assertIn("audit_fingerprint", columns)
+        for column in (
+            "max_gross_notional", "max_net_notional", "max_instrument_notional",
+            "minimum_available_margin", "max_daily_loss", "max_drawdown_ratio",
+        ):
+            self.assertIn(column, risk.DURABLE_RISK_POLICY_SNAPSHOT_SQL_COLUMNS)
+        for column in (
+            "gross_notional", "net_notional", "instrument_notional", "available_margin",
+            "equity", "peak_equity", "daily_realized_pnl", "reconciliation_health",
+            "market_data_health", "account_facts_verified", "global_kill_switch_version",
+        ):
+            self.assertIn(column, risk.DURABLE_RISK_INPUT_SNAPSHOT_SQL_COLUMNS)
+        for column in (
+            "projected_gross_notional", "projected_net_notional",
+            "projected_instrument_notional", "projected_available_margin",
+            "projected_leverage", "projected_daily_loss", "projected_drawdown_ratio",
+        ):
+            self.assertIn(column, risk.DURABLE_RISK_DECISION_SQL_COLUMNS)
 
     def test_scope_fingerprint_is_economic_and_audit_is_separate(self):
         first = risk.build_durable_risk_scope_v2(graph(correlation="corr-1"))

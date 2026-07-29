@@ -47,17 +47,27 @@ DURABLE_RISK_SCOPE_SQL_COLUMNS = (
 )
 DURABLE_RISK_POLICY_SNAPSHOT_SQL_COLUMNS = (
     "id", *DURABLE_RISK_SCOPE_SQL_COLUMNS, "policy_hash", "policy_version",
-    "valuation_currency", "policy_payload_json", "created_at",
+    "valuation_currency", "max_gross_notional", "max_net_notional",
+    "max_instrument_notional", "max_leverage", "minimum_available_margin",
+    "max_daily_loss", "max_drawdown_ratio", "policy_payload_json", "created_at",
 )
 DURABLE_RISK_INPUT_SNAPSHOT_SQL_COLUMNS = (
     "id", *DURABLE_RISK_SCOPE_SQL_COLUMNS, "input_hash", "input_version",
-    "valuation_currency", "exposure_payload_json", "kill_switch_payload_json",
-    "observed_at", "created_at",
+    "valuation_currency", "gross_notional", "net_notional", "instrument_notional",
+    "available_margin", "equity", "peak_equity", "daily_realized_pnl",
+    "reconciliation_health", "market_data_health", "account_facts_verified",
+    "global_kill_switch_version", "global_kill_switch_enabled", "global_kill_switch_mode",
+    "account_kill_switch_version", "account_kill_switch_enabled", "account_kill_switch_mode",
+    "strategy_kill_switch_version", "strategy_kill_switch_enabled", "strategy_kill_switch_mode",
+    "exposure_payload_json", "kill_switch_payload_json", "observed_at", "created_at",
 )
 DURABLE_RISK_DECISION_SQL_COLUMNS = (
     "id", *DURABLE_RISK_SCOPE_SQL_COLUMNS, "policy_snapshot_id",
     "input_snapshot_id", "policy_hash", "input_hash", "decision_fingerprint",
     "allowed", "decision_status", "rejection_codes_json",
+    "projected_gross_notional", "projected_net_notional",
+    "projected_instrument_notional", "projected_available_margin",
+    "projected_leverage", "projected_daily_loss", "projected_drawdown_ratio",
     "projected_risk_payload_json", "created_at",
 )
 DURABLE_RISK_RESERVATION_SQL_COLUMNS = (
