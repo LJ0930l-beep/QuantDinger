@@ -7,6 +7,7 @@ one caller-owned transaction.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -116,7 +117,7 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
         )
         return m.entry_v2.DurableEntryGraphV2(uuid4(), specification, subject)
 
-    def _inputs(self, value, *, denied=False):
+    def _inputs(self, value, *, denied=False, reconciliation_unhealthy=False):
         increasing = value.specification.action in {
             m.order.OrderAction.OPEN, m.order.OrderAction.INCREASE,
         }
@@ -137,7 +138,13 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
             m.hard_risk.RiskExposureSnapshot(
                 value.specification.account_scope, value.specification.instrument_id, "USDT",
                 "100", "100", "100", "800", "500", "500", "0",
-                m.order.ReconciliationHealth.HEALTHY, m.hard_risk.MarketDataHealth.FRESH, True,
+                (
+                    m.order.ReconciliationHealth.UNHEALTHY
+                    if reconciliation_unhealthy
+                    else m.order.ReconciliationHealth.HEALTHY
+                ),
+                m.hard_risk.MarketDataHealth.FRESH,
+                True,
             ),
             m.hard_risk.KillSwitchSnapshot(*(
                 m.hard_risk.KillSwitchState(
@@ -157,11 +164,11 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
             datetime(2026, 7, 29, tzinfo=timezone.utc), reservation_demand=demand,
         )
 
-    def _gateway(self, value, *, denied=False, durable_entries=None, durable_risk=None, outbox=None):
+    def _gateway(self, value, *, denied=False, reconciliation_unhealthy=False, durable_entries=None, durable_risk=None, outbox=None):
         return m.gateway.CanonicalEntryAdmissionGateway(
             durable_entries=durable_entries or m.durable_entry_repository.DurableEntryRepository(),
             durable_risk=durable_risk or m.adapters.DurableRiskAdmissionAdapter(
-                provider=_Provider(self._inputs(value, denied=denied)),
+                provider=_Provider(self._inputs(value, denied=denied, reconciliation_unhealthy=reconciliation_unhealthy)),
             ),
             outbox=outbox or m.adapters.AdmissionOutboxAdapter(),
         )
@@ -170,6 +177,21 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
         with self.connection.cursor() as cursor:
             cursor.execute(f"SELECT count(*) FROM {table} WHERE {column} = %s", (identifier,))
             return cursor.fetchone()[0]
+
+    def _outbox_event(self, event_id):
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT aggregate_type, aggregate_id, aggregate_version,
+                       event_type, schema_version, payload_json
+                  FROM qd_transactional_outbox
+                 WHERE event_id = %s
+                """,
+                (event_id,),
+            )
+            row = cursor.fetchone()
+        self.assertIsNotNone(row)
+        return m.outbox.OutboxEvent(*row)
 
     def test_outer_rollback_erases_all_admission_facts_and_connection_remains_usable(self):
         value = self._graph()
@@ -194,12 +216,58 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
         self.assertEqual(m.admission.EntryAdmissionDisposition.REPLAYED, replayed.disposition)
         self.assertEqual(result.risk_decision_id, replayed.risk_decision_id)
         self.assertEqual(result.outbox_event_id, replayed.outbox_event_id)
+        self.assertEqual(
+            m.admission.parse_admission_outbox_event(self._outbox_event(result.outbox_event_id)),
+            m.admission.parse_admission_outbox_event(self._outbox_event(replayed.outbox_event_id)),
+        )
         self.connection.rollback()
+
+    def test_crash_recovery_completes_only_missing_facts(self):
+        entry_only = self._graph()
+        m.durable_entry_repository.DurableEntryRepository().persist_durable_entry(self.connection, entry_only)
+        self.connection.commit()
+        resumed = self._gateway(entry_only).admit(self.connection, entry_only)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.CREATED, resumed.disposition)
+        self.assertIsNotNone(resumed.risk_decision_id)
+        self.assertIsNotNone(resumed.outbox_event_id)
+        self.connection.commit()
+
+        entry_and_risk = self._graph()
+        durable = m.durable_entry_repository.DurableEntryRepository().persist_durable_entry(
+            self.connection, entry_and_risk,
+        )
+        risk = m.adapters.DurableRiskAdmissionAdapter(
+            provider=_Provider(self._inputs(entry_and_risk)),
+        ).evaluate_and_persist(self.connection, entry_and_risk)
+        self.assertEqual(m.durable_entry.DurableEntryPersistDisposition.CREATED, durable.disposition)
+        self.assertEqual(m.durable_risk.DurableRiskPersistDisposition.CREATED, risk.disposition)
+        self.connection.commit()
+        resumed = self._gateway(entry_and_risk).admit(self.connection, entry_and_risk)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.CREATED, resumed.disposition)
+        self.assertIsNotNone(resumed.outbox_event_id)
+        self.connection.commit()
+        replayed = self._gateway(entry_and_risk).admit(self.connection, entry_and_risk)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.REPLAYED, replayed.disposition)
+        self.assertEqual(
+            m.admission.parse_admission_outbox_event(self._outbox_event(resumed.outbox_event_id)),
+            m.admission.parse_admission_outbox_event(self._outbox_event(replayed.outbox_event_id)),
+        )
 
     def test_denied_risk_persists_no_reservation_and_no_outbox(self):
         value = self._graph()
         result = self._gateway(value, denied=True).admit(self.connection, value)
         self.assertEqual(m.admission.EntryAdmissionDisposition.RISK_REJECTED, result.disposition)
+        self.assertIsNone(result.reservation_id)
+        self.assertIsNone(result.outbox_event_id)
+        self.connection.commit()
+        self.assertEqual(0, self._count("qd_durable_risk_reservations", result.risk_decision_id, "decision_id"))
+        self.assertEqual(0, self._count("qd_transactional_outbox", value.command_id, "aggregate_id"))
+
+    def test_reconciliation_required_persists_decision_without_reservation_or_outbox(self):
+        value = self._graph()
+        result = self._gateway(value, reconciliation_unhealthy=True).admit(self.connection, value)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.RISK_REJECTED, result.disposition)
+        self.assertEqual("RECONCILIATION_REQUIRED", result.risk_decision_status)
         self.assertIsNone(result.reservation_id)
         self.assertIsNone(result.outbox_event_id)
         self.connection.commit()
@@ -226,6 +294,10 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
         with self.connection.cursor() as cursor:
             cursor.execute("SELECT count(*) FROM qd_order_intents_v2")
             intents_before = cursor.fetchone()[0]
+            cursor.execute("SELECT count(*) FROM qd_economic_orders")
+            economic_orders_before = cursor.fetchone()[0]
+            cursor.execute("SELECT count(*) FROM qd_order_commands")
+            legacy_commands_before = cursor.fetchone()[0]
         result = self._gateway(value, durable_risk=NeverRisk()).admit(self.connection, value)
         self.assertEqual(m.admission.EntryAdmissionDisposition.CREATED, result.disposition)
         self.assertIsNone(result.economic_order_id)
@@ -240,11 +312,43 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
             self.assertEqual(("CANCEL", None), cursor.fetchone())
             cursor.execute("SELECT count(*) FROM qd_order_intents_v2")
             self.assertEqual(intents_before, cursor.fetchone()[0])
+            cursor.execute("SELECT count(*) FROM qd_economic_orders")
+            self.assertEqual(economic_orders_before, cursor.fetchone()[0])
+            cursor.execute("SELECT count(*) FROM qd_order_commands")
+            self.assertEqual(legacy_commands_before, cursor.fetchone()[0])
             cursor.execute(
                 "SELECT aggregate_type FROM qd_transactional_outbox WHERE event_id = %s",
                 (result.outbox_event_id,),
             )
             self.assertEqual(("DURABLE_ENTRY_COMMAND",), cursor.fetchone())
+        parsed = m.admission.parse_admission_outbox_event(self._outbox_event(result.outbox_event_id))
+        self.assertIsInstance(parsed.subject, m.entry_v2.CancelTargetSubject)
+        self.assertIsNone(parsed.risk_decision_id)
+
+    def test_g4a_admitted_action_matrix_persists_and_parses_typed_events(self):
+        actions = (
+            m.order.OrderAction.OPEN,
+            m.order.OrderAction.INCREASE,
+            m.order.OrderAction.REDUCE,
+            m.order.OrderAction.CLOSE,
+            m.order.OrderAction.EMERGENCY_CLOSE,
+            m.order.OrderAction.PROTECTION,
+        )
+        for action in actions:
+            with self.subTest(action=action):
+                value = self._graph(action)
+                result = self._gateway(value).admit(self.connection, value)
+                self.assertEqual(m.admission.EntryAdmissionDisposition.CREATED, result.disposition)
+                self.assertIsNotNone(result.outbox_event_id)
+                parsed = m.admission.parse_admission_outbox_event(self._outbox_event(result.outbox_event_id))
+                self.assertIs(parsed.action, action)
+                self.assertEqual(parsed.command_id, value.command_id)
+                self.assertIsNotNone(parsed.risk_decision_id)
+                if action in {m.order.OrderAction.OPEN, m.order.OrderAction.INCREASE}:
+                    self.assertIsNotNone(parsed.reservation_id)
+                else:
+                    self.assertIsNone(parsed.reservation_id)
+                self.connection.commit()
 
     def test_typed_risk_or_outbox_failure_rolls_back_the_partial_chain(self):
         value = self._graph()
@@ -310,6 +414,21 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
             outcomes,
             [m.admission.EntryAdmissionDisposition.CREATED, m.admission.EntryAdmissionDisposition.REPLAYED],
         )
+        self.assertEqual(1, self._count("qd_durable_entry_specifications", value.command_id, "command_id"))
+
+    def test_conflicting_durable_entry_facts_are_typed_and_leave_no_second_graph(self):
+        value = self._graph()
+        self._gateway(value).admit(self.connection, value)
+        self.connection.commit()
+        conflicting_specification = replace(value.specification, correlation_id="corr-conflict")
+        conflicting = m.entry_v2.DurableEntryGraphV2(
+            value.command_id,
+            conflicting_specification,
+            value.subject,
+        )
+        with self.assertRaises(m.durable_entry.DurableEntryConflict):
+            self._gateway(conflicting).admit(self.connection, conflicting)
+        self.connection.rollback()
         self.assertEqual(1, self._count("qd_durable_entry_specifications", value.command_id, "command_id"))
 
 

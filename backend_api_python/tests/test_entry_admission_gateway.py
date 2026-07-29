@@ -20,6 +20,7 @@ durable_entry = modules.durable_entry
 durable_risk = modules.durable_risk
 order = modules.order
 outbox_repository = modules.outbox_repository
+outbox = modules.outbox
 gateway_module = modules.gateway
 
 
@@ -364,6 +365,85 @@ class EntryAdmissionGatewayTests(unittest.TestCase):
         self.assertIs(durable_port.calls[0][0], connection)
         self.assertIs(risk_port.calls[0][0], connection)
         self.assertIs(outbox_port.calls[0][0], connection)
+
+    def test_admission_outbox_schema_and_parser_cover_every_action(self) -> None:
+        self.assertEqual(
+            admission.ENTRY_ADMISSION_SUPPORTED_SCHEMAS,
+            frozenset({
+                (admission.ENTRY_ADMISSION_EVENT_TYPE, admission.ENTRY_ADMISSION_OUTBOX_SCHEMA_VERSION),
+                (admission.ENTRY_ADMISSION_CANCEL_EVENT_TYPE, admission.ENTRY_ADMISSION_OUTBOX_SCHEMA_VERSION),
+            }),
+        )
+        actions = (
+            order.OrderAction.OPEN,
+            order.OrderAction.INCREASE,
+            order.OrderAction.REDUCE,
+            order.OrderAction.CLOSE,
+            order.OrderAction.EMERGENCY_CLOSE,
+            order.OrderAction.PROTECTION,
+            order.OrderAction.CANCEL,
+        )
+        for action in actions:
+            with self.subTest(action=action):
+                value = graph(action=action)
+                risk = (
+                    None
+                    if action is order.OrderAction.CANCEL
+                    else risk_receipt(
+                        value,
+                        reservation_id=(
+                            None
+                            if action in {
+                                order.OrderAction.REDUCE,
+                                order.OrderAction.CLOSE,
+                                order.OrderAction.EMERGENCY_CLOSE,
+                                order.OrderAction.PROTECTION,
+                            }
+                            else "00000000-0000-0000-0000-000000000003"
+                        ),
+                    )
+                )
+                event = admission.deterministic_admission_outbox_event(value, risk_result=risk)
+                parsed = admission.parse_admission_outbox_event(event)
+                self.assertIs(parsed.action, action)
+                self.assertEqual(parsed.command_id, value.command_id)
+                self.assertEqual(parsed.economic_order_id, None if action is order.OrderAction.CANCEL else value.subject.economic_order_id)
+                if action is order.OrderAction.CANCEL:
+                    self.assertIsInstance(parsed.subject, entry_v2.CancelTargetSubject)
+                    self.assertIsNone(parsed.risk_decision_id)
+                else:
+                    self.assertIsInstance(parsed.subject, entry_v2.EconomicOrderSubject)
+                    self.assertEqual(parsed.risk_decision_status, "ALLOW")
+
+    def test_admission_parser_rejects_mutated_payload_or_identity(self) -> None:
+        value = graph()
+        risk = risk_receipt(value)
+        event = admission.deterministic_admission_outbox_event(value, risk_result=risk)
+        invalid_payload = dict(event.payload)
+        invalid_payload["reservation_id"] = None
+        missing_reservation = outbox.OutboxEvent(
+            event.aggregate_type,
+            event.aggregate_id,
+            event.aggregate_version,
+            event.event_type,
+            event.schema_version,
+            invalid_payload,
+        )
+        with self.assertRaises(admission.EntryAdmissionError):
+            admission.parse_admission_outbox_event(missing_reservation)
+        invalid_schema = outbox.OutboxEvent(
+            event.aggregate_type,
+            event.aggregate_id,
+            event.aggregate_version,
+            event.event_type,
+            "unregistered-v1",
+            dict(event.payload),
+        )
+        with self.assertRaises(admission.EntryAdmissionError):
+            admission.parse_admission_outbox_event(invalid_schema)
+        object.__setattr__(event, "payload_hash", "0" * 64)
+        with self.assertRaises(admission.EntryAdmissionError):
+            admission.parse_admission_outbox_event(event)
 
     def test_gateway_never_owns_a_transaction_or_legacy_graph(self) -> None:
         source = inspect.getsource(gateway_module).lower()
