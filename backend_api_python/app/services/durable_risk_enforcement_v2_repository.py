@@ -17,6 +17,7 @@ from app.domain.durable_entry_persistence_contracts import (
     DURABLE_ENTRY_CONTRACT_VERSION,
     DURABLE_ENTRY_SPECIFICATION_TABLE,
 )
+from app.domain.order_contracts import OrderAction
 from app.domain.durable_risk_enforcement_v2_contracts import (
     DURABLE_RISK_DECISION_TABLE,
     DURABLE_RISK_INPUT_SNAPSHOT_TABLE,
@@ -124,6 +125,8 @@ class DurableRiskEnforcementRepositoryV2:
                 raise DurableRiskConflict("reservation must bind exact V2 decision")
             if not decision.decision.allowed:
                 raise DurableRiskConflict("denied durable risk decision cannot reserve capacity")
+        elif decision.decision.allowed and decision.scope.graph.specification.action in {OrderAction.OPEN, OrderAction.INCREASE}:
+            raise DurableRiskConflict("allowed OPEN/INCREASE durable risk decision requires a reservation")
 
     def _scope(self, decision: DurableRiskDecisionFactV2) -> dict[str, Any]:
         spec = decision.scope.graph.specification

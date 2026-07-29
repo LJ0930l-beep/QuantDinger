@@ -35,9 +35,14 @@ def graph(action=OrderAction.OPEN):
         target_position_id="position-1" if reducing else None,
         close_quantity=Quantity("1") if reducing else None,
     )
+    actor = entry.EntryActorContext(
+        Actor.PROTECTION if action is OrderAction.PROTECTION else Actor.HUMAN,
+        "protection-1" if action is OrderAction.PROTECTION else "human-1",
+        entry.EntrySource.PROTECTION if action is OrderAction.PROTECTION else entry.EntrySource.REST,
+    )
     specification = entry_v2.CanonicalEntryRequestV2(
         1, 2, "account-1", "BTCUSDT", "swap", action, intent,
-        entry.EntryActorContext(Actor.HUMAN, "human-1", entry.EntrySource.REST),
+        actor,
         RiskEffect.REDUCE_RISK if reducing else RiskEffect.INCREASE_RISK,
         "case-1", "corr-1", datetime(2026, 7, 29, tzinfo=timezone.utc), entry.EntryMode.PAPER,
     )
@@ -62,7 +67,9 @@ def switches():
 
 def request(action=OrderAction.OPEN):
     increasing = action in (OrderAction.OPEN, OrderAction.INCREASE)
-    return risk.HardRiskRequest(action, Actor.HUMAN, None, "100" if increasing else "0", "100" if increasing else "0", "100" if increasing else "0", "25" if increasing else "0")
+    actor = Actor.PROTECTION if action is OrderAction.PROTECTION else Actor.HUMAN
+    effect = RiskEffect.REDUCE_RISK if action is OrderAction.PROTECTION else None
+    return risk.HardRiskRequest(action, actor, effect, "100" if increasing else "0", "100" if increasing else "0", "100" if increasing else "0", "25" if increasing else "0")
 
 
 def facts(action=OrderAction.OPEN, with_reservation=True):
@@ -172,6 +179,49 @@ class DurableRiskV2RepositoryTests(unittest.TestCase):
         policy_fact, input_fact, decision, reservation = facts(OrderAction.CLOSE, with_reservation=False)
         self.assertTrue(decision.decision.allowed)
         self.assertIsNone(reservation)
+
+    def test_complete_action_matrix_keeps_reservation_authority_fail_closed(self):
+        for action in (OrderAction.OPEN, OrderAction.INCREASE):
+            _, _, decision, reservation = facts(action)
+            self.assertTrue(decision.decision.allowed)
+            self.assertIsNotNone(reservation)
+        for action in (
+            OrderAction.REDUCE, OrderAction.CLOSE,
+            OrderAction.EMERGENCY_CLOSE, OrderAction.PROTECTION,
+        ):
+            _, _, decision, reservation = facts(action, with_reservation=False)
+            self.assertTrue(decision.decision.allowed)
+            self.assertIsNone(reservation)
+
+    def test_allowed_increase_without_reservation_is_typed_conflict(self):
+        policy_fact, input_fact, decision, no_reservation = facts(OrderAction.OPEN, with_reservation=False)
+        connection = FakeConnection(FakeCursor(self._entry_row(decision)))
+        with self.assertRaises(contracts.DurableRiskConflict):
+            repository_module.DurableRiskEnforcementRepositoryV2().persist_durable_risk(
+                connection,
+                policy_snapshot=policy_fact,
+                input_snapshot=input_fact,
+                decision=decision,
+                reservation=no_reservation,
+            )
+        self.assertEqual((0, 0), (connection.commits, connection.rollbacks))
+
+    def test_cancel_fails_before_any_connection_or_sql(self):
+        cancel_intent = entry_v2.CanonicalEconomicIntentV2(
+            cancel_target_kind=entry_v2.CancelTargetKind.CLIENT_ORDER_ID,
+            cancel_target_id="client-order-1",
+        )
+        specification = entry_v2.CanonicalEntryRequestV2(
+            1, 2, "account-1", "BTCUSDT", "swap", OrderAction.CANCEL, cancel_intent,
+            entry.EntryActorContext(Actor.HUMAN, "human-1", entry.EntrySource.REST),
+            RiskEffect.NEUTRAL, "case-1", "corr-1", datetime(2026, 7, 29, tzinfo=timezone.utc), entry.EntryMode.PAPER,
+        )
+        cancelled = entry_v2.DurableEntryGraphV2(
+            "11111111-1111-1111-1111-111111111111", specification,
+            entry_v2.CancelTargetSubject(entry_v2.CancelTargetKind.CLIENT_ORDER_ID, "client-order-1"),
+        )
+        with self.assertRaises(contracts.DurableRiskUnsupportedAction):
+            contracts.build_durable_risk_scope_v2(cancelled)
 
     def test_denied_decision_cannot_create_reservation(self):
         policy_fact, input_fact, decision, _ = facts(with_reservation=False)
