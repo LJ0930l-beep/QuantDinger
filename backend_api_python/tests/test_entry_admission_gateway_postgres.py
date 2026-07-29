@@ -10,23 +10,24 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import threading
 import unittest
 from uuid import uuid4
 
 from tests.pr12c_admission_loader import load_pr12c_admission
-from tests.test_entry_admission_v2_adapters import (
-    _Provider,
-    exposure,
-    graph,
-    policy,
-    request,
-    switches,
-)
 
 
 m = load_pr12c_admission()
 MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
 INIT_SQL = MIGRATIONS / "init.sql"
+
+
+class _Provider:
+    def __init__(self, outcome):
+        self.outcome = outcome
+
+    def prepare(self, _graph):
+        return self.outcome
 
 
 @unittest.skipUnless(os.getenv("DATABASE_URL"), "requires CI PostgreSQL DATABASE_URL")
@@ -73,36 +74,97 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
         self.connection.rollback()
         self.connection.close()
 
-    def _graph(self):
-        value = graph()
+    def _graph(self, action=None):
+        action = action or m.order.OrderAction.OPEN
+        reducing = action in {
+            m.order.OrderAction.REDUCE, m.order.OrderAction.CLOSE,
+            m.order.OrderAction.EMERGENCY_CLOSE, m.order.OrderAction.PROTECTION,
+        }
+        if action is m.order.OrderAction.CANCEL:
+            intent = m.entry_v2.CanonicalEconomicIntentV2(
+                cancel_target_kind=m.entry_v2.CancelTargetKind.CLIENT_ORDER_ID,
+                cancel_target_id="venue-client-1",
+            )
+            actor = m.entry.EntryActorContext(m.order.Actor.HUMAN, "human-1", m.entry.EntrySource.REST)
+            effect = m.order.RiskEffect.NEUTRAL
+            subject = m.entry_v2.CancelTargetSubject(
+                m.entry_v2.CancelTargetKind.CLIENT_ORDER_ID, "venue-client-1",
+            )
+        else:
+            intent = m.entry_v2.CanonicalEconomicIntentV2(
+                side=m.entry.OrderSide.BUY,
+                quantity=None if reducing else m.decimal.Quantity("1"),
+                quantity_semantics=None if reducing else m.entry_v2.QuantitySemantics.ABSOLUTE,
+                execution_kind=m.entry.ExecutionKind.MARKET,
+                reduce_only=reducing,
+                target_position_id="position-1" if reducing else None,
+                close_quantity=m.decimal.Quantity("1") if reducing else None,
+                position_side=m.entry.PositionSide.NET,
+            )
+            protection = action is m.order.OrderAction.PROTECTION
+            actor = m.entry.EntryActorContext(
+                m.order.Actor.PROTECTION if protection else m.order.Actor.HUMAN,
+                "protection-1" if protection else "human-1",
+                m.entry.EntrySource.PROTECTION if protection else m.entry.EntrySource.REST,
+            )
+            effect = m.order.RiskEffect.REDUCE_RISK if reducing else m.order.RiskEffect.INCREASE_RISK
+            subject = m.entry_v2.EconomicOrderSubject(uuid4())
         specification = m.entry_v2.CanonicalEntryRequestV2(
-            self.tenant_id, self.credential_id, value.specification.account_scope,
-            value.specification.instrument_id, value.specification.market_type,
-            value.specification.action, value.specification.economic_intent,
-            value.specification.actor, value.specification.risk_effect,
-            f"entry-admission-{uuid4().hex}", value.specification.correlation_id,
-            value.specification.occurred_at, value.specification.mode,
+            self.tenant_id, self.credential_id, "account-1", "BTCUSDT", "swap",
+            action, intent, actor, effect, f"entry-admission-{uuid4().hex}",
+            "corr-1", datetime(2026, 7, 29, tzinfo=timezone.utc), m.entry.EntryMode.PAPER,
         )
-        return m.entry_v2.DurableEntryGraphV2(uuid4(), specification, m.entry_v2.EconomicOrderSubject(uuid4()))
+        return m.entry_v2.DurableEntryGraphV2(uuid4(), specification, subject)
 
     def _inputs(self, value, *, denied=False):
-        demand = m.hard_risk.RiskReservationDemand(
-            "provider-demand", value.specification.account_scope,
-            value.specification.instrument_id, "USDT", "100", "100", "100", "25",
+        increasing = value.specification.action in {
+            m.order.OrderAction.OPEN, m.order.OrderAction.INCREASE,
+        }
+        demand = (
+            m.hard_risk.RiskReservationDemand(
+                "provider-demand", value.specification.account_scope,
+                value.specification.instrument_id, "USDT", "100", "100", "100", "25",
+            )
+            if increasing
+            else None
         )
         return m.admission.DurableRiskAdmissionInputs(
-            policy(), exposure(), switches(enabled=denied), request(value.specification.action),
+            m.hard_risk.RiskLimitPolicy(
+                "policy-1", "USDT", m.decimal.QuoteAmount("1000"), m.decimal.QuoteAmount("700"),
+                m.decimal.QuoteAmount("600"), "4", m.decimal.QuoteAmount("100"),
+                m.decimal.QuoteAmount("100"), "0.20",
+            ),
+            m.hard_risk.RiskExposureSnapshot(
+                value.specification.account_scope, value.specification.instrument_id, "USDT",
+                "100", "100", "100", "800", "500", "500", "0",
+                m.order.ReconciliationHealth.HEALTHY, m.hard_risk.MarketDataHealth.FRESH, True,
+            ),
+            m.hard_risk.KillSwitchSnapshot(*(
+                m.hard_risk.KillSwitchState(
+                    1,
+                    denied,
+                    m.hard_risk.KillSwitchMode.OPEN_BLOCKED if denied else None,
+                )
+                for _ in range(3)
+            )),
+            m.hard_risk.HardRiskRequest(
+                value.specification.action,
+                value.specification.actor.actor_type,
+                m.order.RiskEffect.REDUCE_RISK if value.specification.action is m.order.OrderAction.PROTECTION else None,
+                "100" if increasing else "0", "100" if increasing else "0",
+                "100" if increasing else "0", "25" if increasing else "0",
+            ),
             datetime(2026, 7, 29, tzinfo=timezone.utc), reservation_demand=demand,
         )
 
-    def _persist_chain(self, value, *, denied=False):
-        durable = m.durable_entry_repository.DurableEntryRepository().persist_durable_entry(self.connection, value)
-        risk = m.adapters.DurableRiskAdmissionAdapter(provider=_Provider(self._inputs(value, denied=denied))).evaluate_and_persist(self.connection, value)
-        if risk.allowed:
-            outbox = m.adapters.AdmissionOutboxAdapter().persist_admission(self.connection, value, durable, risk)
-        else:
-            outbox = None
-        return durable, risk, outbox
+    def _gateway(self, value, *, denied=False, durable_entries=None, durable_risk=None, outbox=None):
+        return m.gateway.CanonicalEntryAdmissionGateway(
+            durable_entries=durable_entries or m.durable_entry_repository.DurableEntryRepository(),
+            durable_risk=durable_risk or m.adapters.DurableRiskAdmissionAdapter(
+                provider=_Provider(self._inputs(value, denied=denied)),
+            ),
+            outbox=outbox or m.adapters.AdmissionOutboxAdapter(),
+        )
 
     def _count(self, table, identifier, column):
         with self.connection.cursor() as cursor:
@@ -111,41 +173,144 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
 
     def test_outer_rollback_erases_all_admission_facts_and_connection_remains_usable(self):
         value = self._graph()
-        _, risk, outbox = self._persist_chain(value)
-        self.assertTrue(risk.allowed)
-        self.assertIsNotNone(risk.reservation_id)
-        self.assertIsNotNone(outbox)
+        result = self._gateway(value).admit(self.connection, value)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.CREATED, result.disposition)
+        self.assertIsNotNone(result.reservation_id)
+        self.assertIsNotNone(result.outbox_event_id)
         self.connection.rollback()
         self.assertEqual(0, self._count("qd_durable_entry_specifications", value.command_id, "command_id"))
-        self.assertEqual(0, self._count("qd_durable_risk_decisions", risk.decision_id, "id"))
-        self.assertEqual(0, self._count("qd_transactional_outbox", outbox.event.event_id, "event_id"))
+        self.assertEqual(0, self._count("qd_durable_risk_decisions", result.risk_decision_id, "id"))
+        self.assertEqual(0, self._count("qd_transactional_outbox", result.outbox_event_id, "event_id"))
         with self.connection.cursor() as cursor:
             cursor.execute("SELECT 1")
             self.assertEqual(1, cursor.fetchone()[0])
 
     def test_outer_commit_then_exact_replay_creates_no_duplicate_facts(self):
         value = self._graph()
-        durable, risk, outbox = self._persist_chain(value)
+        result = self._gateway(value).admit(self.connection, value)
         self.connection.commit()
-        self.assertEqual(m.durable_entry.DurableEntryPersistDisposition.CREATED, durable.disposition)
-        self.assertEqual(m.durable_risk.DurableRiskPersistDisposition.CREATED, risk.disposition)
-        self.assertEqual(m.outbox_repository.OutboxPersistDisposition.CREATED, outbox.disposition)
-        replayed = self._persist_chain(value)
-        self.assertEqual(m.durable_entry.DurableEntryPersistDisposition.REPLAYED, replayed[0].disposition)
-        self.assertEqual(m.durable_risk.DurableRiskPersistDisposition.REPLAYED, replayed[1].disposition)
-        self.assertEqual(m.outbox_repository.OutboxPersistDisposition.REPLAYED, replayed[2].disposition)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.CREATED, result.disposition)
+        replayed = self._gateway(value).admit(self.connection, value)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.REPLAYED, replayed.disposition)
+        self.assertEqual(result.risk_decision_id, replayed.risk_decision_id)
+        self.assertEqual(result.outbox_event_id, replayed.outbox_event_id)
         self.connection.rollback()
 
     def test_denied_risk_persists_no_reservation_and_no_outbox(self):
         value = self._graph()
-        durable, risk, outbox = self._persist_chain(value, denied=True)
-        self.assertEqual(m.durable_entry.DurableEntryPersistDisposition.CREATED, durable.disposition)
-        self.assertFalse(risk.allowed)
-        self.assertIsNone(risk.reservation_id)
-        self.assertIsNone(outbox)
+        result = self._gateway(value, denied=True).admit(self.connection, value)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.RISK_REJECTED, result.disposition)
+        self.assertIsNone(result.reservation_id)
+        self.assertIsNone(result.outbox_event_id)
         self.connection.commit()
-        self.assertEqual(0, self._count("qd_durable_risk_reservations", risk.decision_id, "decision_id"))
+        self.assertEqual(0, self._count("qd_durable_risk_reservations", result.risk_decision_id, "decision_id"))
         self.assertEqual(0, self._count("qd_transactional_outbox", value.command_id, "aggregate_id"))
+
+    def test_reducing_action_has_decision_and_outbox_but_never_reservation(self):
+        value = self._graph(m.order.OrderAction.CLOSE)
+        result = self._gateway(value).admit(self.connection, value)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.CREATED, result.disposition)
+        self.assertEqual("ALLOW", result.risk_decision_status)
+        self.assertIsNone(result.reservation_id)
+        self.assertIsNotNone(result.outbox_event_id)
+        self.connection.commit()
+        self.assertEqual(0, self._count("qd_durable_risk_reservations", result.risk_decision_id, "decision_id"))
+
+    def test_cancel_persists_only_typed_entry_and_command_outbox(self):
+        value = self._graph(m.order.OrderAction.CANCEL)
+
+        class NeverRisk:
+            def evaluate_and_persist(self, *_args, **_kwargs):
+                raise AssertionError("CANCEL must not call durable risk")
+
+        with self.connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM qd_order_intents_v2")
+            intents_before = cursor.fetchone()[0]
+        result = self._gateway(value, durable_risk=NeverRisk()).admit(self.connection, value)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.CREATED, result.disposition)
+        self.assertIsNone(result.economic_order_id)
+        self.assertIsNone(result.risk_decision_id)
+        self.assertIsNone(result.reservation_id)
+        self.assertIsNotNone(result.outbox_event_id)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT action, economic_order_id FROM qd_durable_entry_specifications WHERE command_id = %s",
+                (value.command_id,),
+            )
+            self.assertEqual(("CANCEL", None), cursor.fetchone())
+            cursor.execute("SELECT count(*) FROM qd_order_intents_v2")
+            self.assertEqual(intents_before, cursor.fetchone()[0])
+            cursor.execute(
+                "SELECT aggregate_type FROM qd_transactional_outbox WHERE event_id = %s",
+                (result.outbox_event_id,),
+            )
+            self.assertEqual(("DURABLE_ENTRY_COMMAND",), cursor.fetchone())
+
+    def test_typed_risk_or_outbox_failure_rolls_back_the_partial_chain(self):
+        value = self._graph()
+
+        class FailingEntry:
+            def persist_durable_entry(self, *_args, **_kwargs):
+                raise m.admission.EntryAdmissionConflict("injected entry conflict")
+
+        with self.assertRaises(m.admission.EntryAdmissionConflict):
+            self._gateway(value, durable_entries=FailingEntry()).admit(self.connection, value)
+        self.connection.rollback()
+        self.assertEqual(0, self._count("qd_durable_entry_specifications", value.command_id, "command_id"))
+
+        class FailingRisk:
+            def evaluate_and_persist(self, *_args, **_kwargs):
+                raise m.admission.EntryAdmissionConflict("injected risk conflict")
+
+        with self.assertRaises(m.admission.EntryAdmissionConflict):
+            self._gateway(value, durable_risk=FailingRisk()).admit(self.connection, value)
+        self.connection.rollback()
+        self.assertEqual(0, self._count("qd_durable_entry_specifications", value.command_id, "command_id"))
+
+        class FailingOutbox:
+            def persist_admission(self, *_args, **_kwargs):
+                raise m.admission.EntryAdmissionConflict("injected outbox conflict")
+
+        with self.assertRaises(m.admission.EntryAdmissionConflict):
+            self._gateway(value, outbox=FailingOutbox()).admit(self.connection, value)
+        self.connection.rollback()
+        self.assertEqual(0, self._count("qd_durable_entry_specifications", value.command_id, "command_id"))
+        with self.connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            self.assertEqual((1,), cursor.fetchone())
+
+    def test_two_connections_create_once_then_replay_without_raw_database_error(self):
+        value = self._graph()
+        outcomes = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(2)
+
+        def admit_once():
+            connection = self._connection()
+            try:
+                barrier.wait(timeout=10)
+                result = self._gateway(value).admit(connection, value)
+                connection.commit()
+                outcome = result.disposition
+            except Exception as exc:
+                connection.rollback()
+                outcome = exc
+            finally:
+                connection.close()
+            with lock:
+                outcomes.append(outcome)
+
+        threads = [threading.Thread(target=admit_once, daemon=True) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+            self.assertFalse(thread.is_alive(), "gateway concurrency test timed out")
+        self.assertCountEqual(
+            outcomes,
+            [m.admission.EntryAdmissionDisposition.CREATED, m.admission.EntryAdmissionDisposition.REPLAYED],
+        )
+        self.assertEqual(1, self._count("qd_durable_entry_specifications", value.command_id, "command_id"))
 
 
 if __name__ == "__main__":
