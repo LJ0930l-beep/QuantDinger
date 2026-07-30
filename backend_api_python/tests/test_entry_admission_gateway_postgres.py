@@ -278,6 +278,45 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
         self.assertEqual(m.admission.EntryAdmissionDisposition.REPLAYED, replay.disposition)
         self.assertEqual(1, provider.calls)
 
+    def test_authoritative_provider_serializes_account_capacity_across_two_connections(self):
+        seed = self._graph()
+        self._seed_authoritative_risk_facts(seed)
+        self.connection.commit()
+        barrier = threading.Barrier(2, timeout=10)
+        results, failures = [], []
+        result_lock = threading.Lock()
+
+        def worker():
+            connection = self._connection()
+            try:
+                value = self._graph()
+                gateway = self._gateway(
+                    value,
+                    durable_risk=m.adapters.DurableRiskAdmissionAdapter(
+                        provider=m.authoritative_risk_provider.AuthoritativeRiskFactsProvider(),
+                    ),
+                )
+                barrier.wait()
+                result = gateway.admit(connection, value)
+                connection.commit()
+                with result_lock:
+                    results.append(result)
+            except Exception as exc:  # test captures raw errors explicitly
+                connection.rollback()
+                with result_lock:
+                    failures.append(exc)
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join(timeout=15)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual([], failures)
+        self.assertEqual(2, len(results))
+        self.assertEqual(1, sum(item.risk_decision_status == "ALLOW" for item in results))
+        self.assertEqual(1, sum(item.risk_decision_status in {"DENY", "RECONCILIATION_REQUIRED"} for item in results))
+
     def _count(self, table, identifier, column):
         with self.connection.cursor() as cursor:
             cursor.execute(f"SELECT count(*) FROM {table} WHERE {column} = %s", (identifier,))
