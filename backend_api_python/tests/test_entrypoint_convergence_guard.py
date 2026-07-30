@@ -47,6 +47,7 @@ class EntrypointConvergenceGuardTests(unittest.TestCase):
         comparison = compare_with_baseline(current, load_baseline(self.manifest))
         self.assertTrue(comparison.passed, comparison.new_violations)
         self.assertEqual(len(current), len(self.manifest["legacy_bypass_baseline"]))
+        self.assertEqual(len(current), 31)
         for item in self.manifest["legacy_bypass_baseline"]:
             self.assertNotIn("*", item["path"])
             self.assertNotIn("*", item["symbol"])
@@ -94,6 +95,36 @@ class EntrypointConvergenceGuardTests(unittest.TestCase):
             self.assertFalse(compare_with_baseline(renamed, original).passed)
             target.write_text("def retired():\n    return None\n", encoding="utf-8")
             self.assertTrue(compare_with_baseline(scan_entrypoint_bypasses(root, ["surface.py"]), original).passed)
+
+    def test_terminal_retirement_excludes_unreachable_bypass_but_reactivation_is_detected(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            target = root / "surface.py"
+            target.write_text(
+                "def retired(client):\n    return None\n    client.place_order('x')\n",
+                encoding="utf-8",
+            )
+            retired = scan_entrypoint_bypasses(root, ["surface.py"])
+            self.assertEqual(retired, ())
+            target.write_text("def reactivated(client):\n    return client.place_order('x')\n", encoding="utf-8")
+            comparison = compare_with_baseline(scan_entrypoint_bypasses(root, ["surface.py"]), retired)
+            self.assertFalse(comparison.passed)
+            self.assertEqual(comparison.new_violations[0].symbol, "reactivated")
+
+    def test_restricted_agent_and_mcp_quick_trade_entrypoints_are_terminally_disabled(self):
+        surfaces = {
+            ROOT / "backend_api_python/app/routes/agent_v1/quick_trade.py": {"place_order", "kill_switch"},
+            ROOT / "mcp_server/src/quantdinger_mcp/server.py": {"place_quick_order", "cancel_open_paper_orders"},
+        }
+        for path, expected in surfaces.items():
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            found = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in expected}
+            self.assertEqual(set(found), expected)
+            for function in found.values():
+                body = function.body
+                if isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+                    body = body[1:]
+                self.assertIsInstance(body[0], ast.Return)
 
     def test_restricted_sources_default_disabled_and_no_live_entry_mode_exists(self):
         contracts = load_pr11_contracts().entry

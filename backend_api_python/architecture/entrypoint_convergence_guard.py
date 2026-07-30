@@ -142,13 +142,22 @@ class _Visitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self.scope.append(node.name)
+        body = node.body
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+            body = body[1:]
+        # A handler whose first executable statement unconditionally terminates
+        # cannot reach its historical body.  Excluding that body lets a retired
+        # bypass leave the baseline; removing the terminal statement makes the
+        # historical direct call visible as a new violation again.
+        if body and isinstance(body[0], (ast.Return, ast.Raise)):
+            self.visit(body[0])
+            self.scope.pop()
+            return
         self.generic_visit(node)
         self.scope.pop()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self.scope.append(node.name)
-        self.generic_visit(node)
-        self.scope.pop()
+        self.visit_FunctionDef(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         name = _call_name(node.func)
@@ -262,7 +271,7 @@ def baseline_json(violations: Sequence[EntryPointViolation]) -> str:
 
 
 def _default_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[2]
 
 
 def main(argv: Sequence[str] | None = None) -> int:

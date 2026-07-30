@@ -126,6 +126,8 @@ def _record_paper_order(*, body: dict, fill_price: float | None, status: str, no
 
 
 def _place_live_order(*, body: dict, user_id: int) -> dict:
+    raise RuntimeError("Agent quick-trade execution is permanently disabled")
+
     credential_id = int(body.get("credential_id") or body.get("credentialId") or 0)
     market = (body.get("market") or "").strip()
     symbol = (body.get("symbol") or "").strip()
@@ -320,6 +322,12 @@ def _place_live_order(*, body: dict, user_id: int) -> dict:
 @agent_required(SCOPE_T)
 def place_order():
     """Place an order. Paper-only unless explicitly unlocked (see module doc)."""
+    return error(
+        410,
+        "Agent quick-trade is permanently disabled; use deterministic non-agent workflows.",
+        http=410,
+    )
+
     body, err = get_json_or_400()
     if err:
         return err
@@ -417,6 +425,8 @@ def kill_switch():
     This intentionally limits scope to the agent's own surface; revoking live
     exchange orders requires the human admin path (separate, audited).
     """
+    return error(410, "Agent quick-trade is permanently disabled.", http=410)
+
     with get_db_connection() as db:
         cur = db.cursor()
         cur.execute(
