@@ -151,12 +151,13 @@ class _Provider:
 
 
 class _RiskRepository:
-    def __init__(self, disposition=None):
+    def __init__(self, disposition=None, replay=None):
         self.calls = []
         self.disposition = disposition or m.durable_risk.DurableRiskPersistDisposition.CREATED
+        self.replay = replay
 
     def load_complete_replay(self, connection, value):
-        return None
+        return self.replay
 
     def persist_durable_risk(self, connection, *, policy_snapshot, input_snapshot, decision, reservation, provenance=()):
         self.calls.append((connection, policy_snapshot, input_snapshot, decision, reservation, provenance))
@@ -179,6 +180,25 @@ class _OutboxRepository:
 
 
 class EntryAdmissionV2AdapterTests(unittest.TestCase):
+    def test_exact_complete_replay_skips_authoritative_source_reads(self):
+        value = graph()
+        supplied = inputs(value, reservation=True)
+        policy_fact, input_fact, decision, reservation = m.durable_risk.build_durable_risk_facts_v2(
+            value, policy=supplied.policy, exposure=supplied.exposure,
+            kill_switches=supplied.kill_switches, request=supplied.request,
+            observed_at=supplied.observed_at, active_reservations=supplied.active_reservations,
+            reservation_demand=supplied.reservation_demand, expires_at=supplied.expires_at,
+        )
+        replay = m.risk_repository.DurableRiskEnforcementRepositoryV2()._result(
+            decision, reservation, m.durable_risk.DurableRiskPersistDisposition.REPLAYED,
+        )
+        provider = _Provider(object())
+        result = m.adapters.DurableRiskAdmissionAdapter(
+            provider=provider, repository=_RiskRepository(replay=replay),
+        ).evaluate_and_persist(object(), value)
+        self.assertEqual(m.durable_risk.DurableRiskPersistDisposition.REPLAYED, result.disposition)
+        self.assertEqual([], provider.calls)
+
     def test_allowed_increase_builds_single_reservation_and_never_controls_transaction(self):
         value = graph()
         provider = _Provider(inputs(value, reservation=True))
