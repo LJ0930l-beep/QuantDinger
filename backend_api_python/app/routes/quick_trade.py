@@ -320,6 +320,14 @@ def place_order(body):
       sl_price       (float)  - stop-loss price (optional, for record only)
       source         (str)    - "ai_radar" / "ai_analysis" / "indicator" / "manual"
     """
+    # The legacy body carries ambiguous amount/leverage semantics and has no
+    # authoritative scope, instrument, or position subject.  It must not be
+    # silently translated into Canonical Entry V2 or reach an exchange client.
+    return jsonify({
+        "code": "LEGACY_QUICK_TRADE_DISABLED",
+        "msg": "Legacy quick trade is disabled pending canonical entry migration.",
+    }), 410
+
     try:
         user_id = g.user_id
         credential_id = int(body.get("credential_id") or 0)
@@ -1417,6 +1425,13 @@ def close_position(body):
       position_side  (str)    - optional "long" / "short"; required when both directions exist for the same symbol
       source         (str)    - "ai_radar" / "ai_analysis" / "indicator" / "manual"
     """
+    # Closing must also wait for a persisted target-position authority; the
+    # legacy body cannot prove it and must fail closed before any venue call.
+    return jsonify({
+        "code": "LEGACY_QUICK_TRADE_DISABLED",
+        "msg": "Legacy quick trade is disabled pending canonical entry migration.",
+    }), 410
+
     try:
         user_id = g.user_id
         credential_id = int(body.get("credential_id") or 0)
