@@ -16,20 +16,44 @@ HASH = "a" * 64
 
 def graph(action=None):
     action = action or m.order.OrderAction.OPEN
-    intent = m.entry_v2.CanonicalEconomicIntentV2(
-        side=m.entry.OrderSide.BUY,
-        quantity=m.decimal.Quantity("2"),
-        quantity_semantics=m.entry_v2.QuantitySemantics.ABSOLUTE,
-        execution_kind=m.entry.ExecutionKind.MARKET,
-        reduce_only=False,
-        position_side=m.entry.PositionSide.NET,
-    )
-    actor = m.entry.EntryActorContext(m.order.Actor.HUMAN, "human-1", m.entry.EntrySource.REST)
+    reducing = action in {
+        m.order.OrderAction.REDUCE, m.order.OrderAction.CLOSE,
+        m.order.OrderAction.EMERGENCY_CLOSE, m.order.OrderAction.PROTECTION,
+    }
+    if action is m.order.OrderAction.CANCEL:
+        intent = m.entry_v2.CanonicalEconomicIntentV2(
+            cancel_target_kind=m.entry_v2.CancelTargetKind.CLIENT_ORDER_ID,
+            cancel_target_id="venue-client-1",
+        )
+        actor = m.entry.EntryActorContext(m.order.Actor.HUMAN, "human-1", m.entry.EntrySource.REST)
+        subject = m.entry_v2.CancelTargetSubject(
+            m.entry_v2.CancelTargetKind.CLIENT_ORDER_ID, "venue-client-1",
+        )
+        effect = m.order.RiskEffect.NEUTRAL
+    else:
+        intent = m.entry_v2.CanonicalEconomicIntentV2(
+            side=m.entry.OrderSide.BUY,
+            quantity=None if reducing else m.decimal.Quantity("2"),
+            quantity_semantics=None if reducing else m.entry_v2.QuantitySemantics.ABSOLUTE,
+            execution_kind=m.entry.ExecutionKind.MARKET,
+            reduce_only=reducing,
+            target_position_id="position-1" if reducing else None,
+            close_quantity=m.decimal.Quantity("2") if reducing else None,
+            position_side=m.entry.PositionSide.NET,
+        )
+        protection = action is m.order.OrderAction.PROTECTION
+        actor = m.entry.EntryActorContext(
+            m.order.Actor.PROTECTION if protection else m.order.Actor.HUMAN,
+            "protection-1" if protection else "human-1",
+            m.entry.EntrySource.PROTECTION if protection else m.entry.EntrySource.REST,
+        )
+        subject = m.entry_v2.EconomicOrderSubject("22222222-2222-2222-2222-222222222222")
+        effect = m.order.RiskEffect.REDUCE_RISK if reducing else m.order.RiskEffect.INCREASE_RISK
     request = m.entry_v2.CanonicalEntryRequestV2(
         1, 2, "account-1", "BTCUSDT", "swap", action, intent, actor,
-        m.order.RiskEffect.INCREASE_RISK, "case-1", "corr-1", anchor, m.entry.EntryMode.PAPER,
+        effect, "case-1", "corr-1", anchor, m.entry.EntryMode.PAPER,
     )
-    return m.entry_v2.DurableEntryGraphV2("11111111-1111-1111-1111-111111111111", request, m.entry_v2.EconomicOrderSubject("22222222-2222-2222-2222-222222222222"))
+    return m.entry_v2.DurableEntryGraphV2("11111111-1111-1111-1111-111111111111", request, subject)
 
 
 class _Cursor:
@@ -59,6 +83,11 @@ def source_rows(*, market_health="FRESH"):
 
 
 class AuthoritativeRiskFactsProviderTests(unittest.TestCase):
+    def _prepare(self, rows, action=None):
+        return m.authoritative_risk_provider.AuthoritativeRiskFactsProvider().prepare(
+            _Connection(_Cursor(rows)), graph(action),
+        )
+
     def test_prepare_uses_one_connection_without_transaction_control_and_builds_demand(self):
         cursor = _Cursor(source_rows())
         result = m.authoritative_risk_provider.AuthoritativeRiskFactsProvider().prepare(_Connection(cursor), graph())
@@ -93,6 +122,38 @@ class AuthoritativeRiskFactsProviderTests(unittest.TestCase):
             m.authoritative_risk_provider.AuthoritativeRiskFactsProvider().prepare(_Connection(cursor), graph())
         self.assertTrue(cursor.closed)
 
+    def test_each_required_persisted_source_fails_closed_when_absent(self):
+        cases = {
+            "account": source_rows()[:2] + [[]],
+            "reconciliation": source_rows()[:3] + [[]],
+            "strategy kill switch": source_rows()[:6] + [[]],
+            "market": source_rows()[:7] + [[]],
+        }
+        for label, rows in cases.items():
+            with self.subTest(label=label):
+                with self.assertRaises(m.authoritative_risk_facts.RiskFactsUnavailable):
+                    self._prepare(rows)
+
+    def test_tied_or_future_or_wrong_valuation_source_is_rejected(self):
+        ambiguous = source_rows()
+        ambiguous[0] = ambiguous[0] * 2
+        with self.assertRaises(m.authoritative_risk_facts.RiskFactsAmbiguous):
+            self._prepare(ambiguous)
+
+        future = source_rows()
+        policy = list(future[0][0])
+        policy[3] = anchor + timedelta(seconds=1)
+        future[0] = [tuple(policy)]
+        with self.assertRaises(m.authoritative_risk_facts.RiskFactsVersionConflict):
+            self._prepare(future)
+
+        wrong_currency = source_rows()
+        rule = list(wrong_currency[1][0])
+        rule[5] = "USD"
+        wrong_currency[1] = [tuple(rule)]
+        with self.assertRaises(m.authoritative_risk_facts.RiskFactsScopeConflict):
+            self._prepare(wrong_currency)
+
     def test_expired_persisted_source_fails_closed_without_a_market_fallback(self):
         rows = source_rows()
         policy = list(rows[0][0])
@@ -102,6 +163,38 @@ class AuthoritativeRiskFactsProviderTests(unittest.TestCase):
         with self.assertRaises(m.authoritative_risk_facts.RiskFactsStale):
             m.authoritative_risk_provider.AuthoritativeRiskFactsProvider().prepare(_Connection(cursor), graph())
         self.assertTrue(cursor.closed)
+
+    def test_expired_market_observation_fails_closed_instead_of_using_an_order_price(self):
+        rows = source_rows()
+        market = list(rows[7][0])
+        market[3] = anchor - timedelta(seconds=61)
+        rows[7] = [tuple(market)]
+        with self.assertRaises(m.authoritative_risk_facts.RiskFactsStale):
+            self._prepare(rows)
+
+    def test_every_reducing_action_needs_no_market_and_never_requests_capacity(self):
+        for action in (
+            m.order.OrderAction.REDUCE, m.order.OrderAction.CLOSE,
+            m.order.OrderAction.EMERGENCY_CLOSE, m.order.OrderAction.PROTECTION,
+        ):
+            with self.subTest(action=action):
+                cursor = _Cursor(source_rows()[:7] + [[]])
+                result = m.authoritative_risk_provider.AuthoritativeRiskFactsProvider().prepare(
+                    _Connection(cursor), graph(action),
+                )
+                self.assertEqual(m.decimal.Decimal("0"), result.request.gross_notional)
+                self.assertIsNone(result.reservation_demand)
+                self.assertIsNone(result.expires_at)
+                self.assertEqual(8, len(result.provenance))
+                self.assertNotIn("pg_advisory_xact_lock", "\n".join(call[0] for call in cursor.calls))
+
+    def test_cancel_is_rejected_before_opening_a_provider_cursor(self):
+        class NeverConnection:
+            def cursor(self):
+                raise AssertionError("CANCEL must not enter the facts provider")
+
+        with self.assertRaises(m.admission.EntryAdmissionError):
+            m.authoritative_risk_provider.AuthoritativeRiskFactsProvider().prepare(NeverConnection(), graph(m.order.OrderAction.CANCEL))
 
     def test_unclassified_driver_error_is_wrapped_and_cursor_is_closed(self):
         class BrokenCursor(_Cursor):

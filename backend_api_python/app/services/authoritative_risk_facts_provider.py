@@ -162,7 +162,10 @@ class AuthoritativeRiskFactsProvider:
                AND valuation_currency=%s AND observed_at <= %s
              ORDER BY observed_at DESC, id DESC LIMIT 2
         """, (*self._scope_params(scope), valuation_currency, anchor), "instrument rule", 3)
-        return AuthoritativeInstrumentRiskRule(scope, self._provenance(RiskFactSourceKind.INSTRUMENT_RULES, row, 0, 1, 2, 3, 4, anchor), _value(row, 5, "valuation_currency"), _value(row, 6, "quantity_to_quote_multiplier"), _value(row, 7, "initial_margin_ratio"))
+        rule = AuthoritativeInstrumentRiskRule(scope, self._provenance(RiskFactSourceKind.INSTRUMENT_RULES, row, 0, 1, 2, 3, 4, anchor), _value(row, 5, "valuation_currency"), _value(row, 6, "quantity_to_quote_multiplier"), _value(row, 7, "initial_margin_ratio"))
+        if rule.valuation_currency != valuation_currency:
+            raise RiskFactsScopeConflict("persisted instrument rule valuation currency does not match policy")
+        return rule
 
     def _account(self, cursor: Cursor, scope: AuthoritativeRiskFactScope, anchor: datetime, valuation_currency: str) -> AuthoritativeAccountFactsRecord:
         row = self._latest(cursor, """
@@ -175,6 +178,8 @@ class AuthoritativeRiskFactsProvider:
              ORDER BY observed_at DESC, id DESC LIMIT 2
         """, (*self._scope_params(scope), valuation_currency, anchor), "account", 3)
         exposure = RiskExposureSnapshot(scope.account_scope, scope.instrument_id, _value(row, 5, "valuation_currency"), *(_value(row, index, name) for index, name in ((6, "gross_notional"), (7, "net_notional"), (8, "instrument_notional"), (9, "available_margin"), (10, "equity"), (11, "peak_equity"), (12, "daily_realized_pnl"))), reconciliation_health=derive_reconciliation_health(None), market_data_health=MarketDataHealth.UNKNOWN, account_facts_verified=_value(row, 13, "account_facts_verified"))
+        if exposure.valuation_currency != valuation_currency:
+            raise RiskFactsScopeConflict("persisted account facts valuation currency does not match policy")
         return AuthoritativeAccountFactsRecord(scope, self._provenance(RiskFactSourceKind.ACCOUNT, row, 0, 1, 2, 3, 4, anchor), exposure)
 
     def _reconciliation(self, cursor: Cursor, scope: AuthoritativeRiskFactScope, anchor: datetime):
@@ -221,7 +226,10 @@ class AuthoritativeRiskFactsProvider:
                AND valuation_currency=%s AND price_type=%s AND observed_at <= %s AND market_data_health IS NOT NULL
              ORDER BY observed_at DESC, id DESC LIMIT 2
         """, (*self._scope_params(scope), valuation_currency, expected.value, anchor), "market", 3)
-        return AuthoritativeMarketObservation(scope, self._provenance(RiskFactSourceKind.MARKET, row, 0, 1, 2, 3, 4, anchor), _value(row, 5, "valuation_currency"), MarketPriceType(_value(row, 6, "price_type")), Price(_value(row, 7, "price")), MarketDataHealth(_value(row, 8, "market_data_health")))
+        observation = AuthoritativeMarketObservation(scope, self._provenance(RiskFactSourceKind.MARKET, row, 0, 1, 2, 3, 4, anchor), _value(row, 5, "valuation_currency"), MarketPriceType(_value(row, 6, "price_type")), Price(_value(row, 7, "price")), MarketDataHealth(_value(row, 8, "market_data_health")))
+        if observation.valuation_currency != valuation_currency:
+            raise RiskFactsScopeConflict("persisted market valuation currency does not match policy")
+        return observation
 
     @staticmethod
     def _capacity_lock(cursor: Cursor, scope: AuthoritativeRiskFactScope, valuation_currency: str) -> None:
