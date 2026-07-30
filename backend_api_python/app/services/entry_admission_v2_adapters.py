@@ -37,9 +37,9 @@ from app.services.outbox_projection_repository import (
 
 
 class DurableRiskAdmissionProvider(Protocol):
-    """Supplies already-observed, immutable hard-risk inputs for one graph."""
+    """Reads immutable hard-risk facts using the caller-owned transaction."""
 
-    def prepare(self, graph: DurableEntryGraphV2) -> DurableRiskAdmissionInputs: ...
+    def prepare(self, connection: object, graph: DurableEntryGraphV2) -> DurableRiskAdmissionInputs: ...
 
 
 class DurableRiskAdmissionAdapter:
@@ -67,9 +67,20 @@ class DurableRiskAdmissionAdapter:
         if not isinstance(graph.subject, EconomicOrderSubject):
             raise EntryAdmissionConflict("non-CANCEL risk admission requires an economic order")
 
-        inputs = self._provider.prepare(graph)
+        try:
+            replay = self._repository.load_complete_replay(connection, graph)
+        except (DurableRiskEnforcementV2Error, DurableRiskRepositoryError):
+            raise
+        except Exception as exc:
+            raise EntryAdmissionError("durable risk replay lookup failed") from exc
+        if replay is not None:
+            return require_durable_risk_receipt(replay, graph)
+
+        inputs = self._provider.prepare(connection, graph)
         if not isinstance(inputs, DurableRiskAdmissionInputs):
             raise EntryAdmissionError("durable risk provider returned untyped admission inputs")
+        if not inputs.provenance:
+            raise EntryAdmissionConflict("durable risk provider must return authoritative provenance")
 
         increasing = specification.action in (OrderAction.OPEN, OrderAction.INCREASE)
         if not increasing and inputs.reservation_demand is not None:
@@ -110,6 +121,7 @@ class DurableRiskAdmissionAdapter:
                 input_snapshot=input_snapshot,
                 decision=decision,
                 reservation=reservation,
+                provenance=inputs.provenance,
             )
         except (DurableRiskEnforcementV2Error, DurableRiskRepositoryError):
             raise

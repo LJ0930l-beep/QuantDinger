@@ -30,6 +30,7 @@ from app.domain.hard_risk_contracts import (
     RiskReservationDemand,
 )
 from app.domain.canonical_entry_contracts import EntryMode, EntrySource
+from app.domain.authoritative_risk_facts_contracts import RiskFactProvenance
 from app.domain.order_contracts import Actor, OrderAction, RiskEffect
 from app.domain.outbox_projection_contracts import OutboxEvent, canonical_payload_json
 
@@ -202,6 +203,7 @@ class DurableRiskAdmissionInputs:
     active_reservations: tuple[RiskReservationDemand, ...] = ()
     reservation_demand: RiskReservationDemand | None = None
     expires_at: datetime | None = None
+    provenance: tuple[RiskFactProvenance, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.active_reservations, tuple) or not all(
@@ -212,6 +214,10 @@ class DurableRiskAdmissionInputs:
             self.reservation_demand, RiskReservationDemand
         ):
             raise EntryAdmissionError("reservation_demand must be a typed demand")
+        if not isinstance(self.provenance, tuple) or not all(
+            isinstance(item, RiskFactProvenance) for item in self.provenance
+        ):
+            raise EntryAdmissionError("provenance must use typed immutable source facts")
 
 
 @dataclass(frozen=True, slots=True)

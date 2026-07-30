@@ -106,9 +106,13 @@ def inputs(value, *, reservation=True, denied=False):
         demand = m.hard_risk.RiskReservationDemand(
             "provider-demand", "account-1", "BTCUSDT", "USDT", "100", "100", "100", "25",
         )
+    provenance = m.authoritative_risk_facts.RiskFactProvenance(
+        m.authoritative_risk_facts.RiskFactSourceKind.POLICY,
+        "test-policy", "v1", "a" * 64, datetime(2026, 7, 29, tzinfo=timezone.utc), 60,
+    )
     return m.admission.DurableRiskAdmissionInputs(
         policy(), exposure(), switches(enabled=denied), request(value.specification.action),
-        datetime(2026, 7, 29, tzinfo=timezone.utc), reservation_demand=demand,
+        datetime(2026, 7, 29, tzinfo=timezone.utc), reservation_demand=demand, provenance=(provenance,),
     )
 
 
@@ -126,8 +130,8 @@ class _Provider:
         self.outcome = outcome
         self.calls = []
 
-    def prepare(self, value):
-        self.calls.append(value)
+    def prepare(self, connection, value):
+        self.calls.append((connection, value))
         return self.outcome
 
 
@@ -136,8 +140,11 @@ class _RiskRepository:
         self.calls = []
         self.disposition = disposition or m.durable_risk.DurableRiskPersistDisposition.CREATED
 
-    def persist_durable_risk(self, connection, *, policy_snapshot, input_snapshot, decision, reservation):
-        self.calls.append((connection, policy_snapshot, input_snapshot, decision, reservation))
+    def load_complete_replay(self, connection, value):
+        return None
+
+    def persist_durable_risk(self, connection, *, policy_snapshot, input_snapshot, decision, reservation, provenance=()):
+        self.calls.append((connection, policy_snapshot, input_snapshot, decision, reservation, provenance))
         return m.risk_repository.DurableRiskEnforcementRepositoryV2()._result(
             decision, reservation, self.disposition,
         )
@@ -167,7 +174,7 @@ class EntryAdmissionV2AdapterTests(unittest.TestCase):
         self.assertIsNotNone(result.reservation_id)
         self.assertEqual(1, len(repository.calls))
         self.assertIsNotNone(repository.calls[0][-1])
-        self.assertEqual([value], provider.calls)
+        self.assertEqual([(connection, value)], provider.calls)
 
     def test_denied_increase_persists_decision_without_reservation(self):
         value = graph()
@@ -176,7 +183,7 @@ class EntryAdmissionV2AdapterTests(unittest.TestCase):
         result = m.adapters.DurableRiskAdmissionAdapter(provider=provider, repository=repository).evaluate_and_persist(object(), value)
         self.assertFalse(result.allowed)
         self.assertIsNone(result.reservation_id)
-        self.assertIsNone(repository.calls[0][-1])
+        self.assertIsNone(repository.calls[0][-2])
 
     def test_reducing_action_rejects_reservation_demand_before_repository(self):
         value = graph(OrderAction.CLOSE)
@@ -199,7 +206,7 @@ class EntryAdmissionV2AdapterTests(unittest.TestCase):
                 ).evaluate_and_persist(object(), value)
                 self.assertTrue(result.allowed)
                 self.assertIsNone(result.reservation_id)
-                self.assertIsNone(repository.calls[0][-1])
+                self.assertIsNone(repository.calls[0][-2])
 
     def test_allowed_increase_without_demand_fails_before_repository(self):
         value = graph()

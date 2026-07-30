@@ -35,6 +35,7 @@ def load_pr12c_admission() -> SimpleNamespace:
         "app.services.durable_entry_repository",
         "app.services.outbox_projection_repository",
         "app.services.entry_admission_v2_adapters",
+        "app.services.authoritative_risk_facts_provider",
         "app.services.entry_admission_gateway",
     )
     original = {name: sys.modules.get(name, _MISSING) for name in names}
@@ -62,6 +63,7 @@ def load_pr12c_admission() -> SimpleNamespace:
             ("app.services.durable_risk_enforcement_v2_repository", "services/durable_risk_enforcement_v2_repository.py"),
             ("app.services.outbox_projection_repository", "services/outbox_projection_repository.py"),
             ("app.services.entry_admission_v2_adapters", "services/entry_admission_v2_adapters.py"),
+            ("app.services.authoritative_risk_facts_provider", "services/authoritative_risk_facts_provider.py"),
             ("app.services.entry_admission_gateway", "services/entry_admission_gateway.py"),
         ):
             modules[name] = _load(name, app_dir / relative)
@@ -80,6 +82,7 @@ def load_pr12c_admission() -> SimpleNamespace:
             risk_repository=modules["app.services.durable_risk_enforcement_v2_repository"],
             outbox_repository=modules["app.services.outbox_projection_repository"],
             adapters=modules["app.services.entry_admission_v2_adapters"],
+            authoritative_risk_provider=modules["app.services.authoritative_risk_facts_provider"],
             gateway=modules["app.services.entry_admission_gateway"],
         )
     finally:
