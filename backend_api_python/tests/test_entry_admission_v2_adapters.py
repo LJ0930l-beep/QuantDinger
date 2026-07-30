@@ -106,9 +106,28 @@ def inputs(value, *, reservation=True, denied=False):
         demand = m.hard_risk.RiskReservationDemand(
             "provider-demand", "account-1", "BTCUSDT", "USDT", "100", "100", "100", "25",
         )
+    kinds = [
+        m.authoritative_risk_facts.RiskFactSourceKind.POLICY,
+        m.authoritative_risk_facts.RiskFactSourceKind.ACCOUNT,
+        m.authoritative_risk_facts.RiskFactSourceKind.INSTRUMENT_RULES,
+        m.authoritative_risk_facts.RiskFactSourceKind.RECONCILIATION,
+        m.authoritative_risk_facts.RiskFactSourceKind.KILL_SWITCH_GLOBAL,
+        m.authoritative_risk_facts.RiskFactSourceKind.KILL_SWITCH_ACCOUNT,
+        m.authoritative_risk_facts.RiskFactSourceKind.KILL_SWITCH_STRATEGY,
+        m.authoritative_risk_facts.RiskFactSourceKind.ACTIVE_RESERVATIONS,
+    ]
+    if value.specification.action in (OrderAction.OPEN, OrderAction.INCREASE):
+        kinds.append(m.authoritative_risk_facts.RiskFactSourceKind.MARKET)
+    provenance = tuple(
+        m.authoritative_risk_facts.RiskFactProvenance(
+            kind, f"test-{kind.value.lower()}", "v1", f"{index:x}" * 64,
+            datetime(2026, 7, 29, tzinfo=timezone.utc), 60,
+        )
+        for index, kind in enumerate(kinds)
+    )
     return m.admission.DurableRiskAdmissionInputs(
         policy(), exposure(), switches(enabled=denied), request(value.specification.action),
-        datetime(2026, 7, 29, tzinfo=timezone.utc), reservation_demand=demand,
+        datetime(2026, 7, 29, tzinfo=timezone.utc), reservation_demand=demand, provenance=provenance,
     )
 
 
@@ -126,18 +145,22 @@ class _Provider:
         self.outcome = outcome
         self.calls = []
 
-    def prepare(self, value):
-        self.calls.append(value)
+    def prepare(self, connection, value):
+        self.calls.append((connection, value))
         return self.outcome
 
 
 class _RiskRepository:
-    def __init__(self, disposition=None):
+    def __init__(self, disposition=None, replay=None):
         self.calls = []
         self.disposition = disposition or m.durable_risk.DurableRiskPersistDisposition.CREATED
+        self.replay = replay
 
-    def persist_durable_risk(self, connection, *, policy_snapshot, input_snapshot, decision, reservation):
-        self.calls.append((connection, policy_snapshot, input_snapshot, decision, reservation))
+    def load_complete_replay(self, connection, value):
+        return self.replay
+
+    def persist_durable_risk(self, connection, *, policy_snapshot, input_snapshot, decision, reservation, provenance=()):
+        self.calls.append((connection, policy_snapshot, input_snapshot, decision, reservation, provenance))
         return m.risk_repository.DurableRiskEnforcementRepositoryV2()._result(
             decision, reservation, self.disposition,
         )
@@ -157,6 +180,25 @@ class _OutboxRepository:
 
 
 class EntryAdmissionV2AdapterTests(unittest.TestCase):
+    def test_exact_complete_replay_skips_authoritative_source_reads(self):
+        value = graph()
+        supplied = inputs(value, reservation=True)
+        policy_fact, input_fact, decision, reservation = m.durable_risk.build_durable_risk_facts_v2(
+            value, policy=supplied.policy, exposure=supplied.exposure,
+            kill_switches=supplied.kill_switches, request=supplied.request,
+            observed_at=supplied.observed_at, active_reservations=supplied.active_reservations,
+            reservation_demand=supplied.reservation_demand, expires_at=supplied.expires_at,
+        )
+        replay = m.risk_repository.DurableRiskEnforcementRepositoryV2()._result(
+            decision, reservation, m.durable_risk.DurableRiskPersistDisposition.REPLAYED,
+        )
+        provider = _Provider(object())
+        result = m.adapters.DurableRiskAdmissionAdapter(
+            provider=provider, repository=_RiskRepository(replay=replay),
+        ).evaluate_and_persist(object(), value)
+        self.assertEqual(m.durable_risk.DurableRiskPersistDisposition.REPLAYED, result.disposition)
+        self.assertEqual([], provider.calls)
+
     def test_allowed_increase_builds_single_reservation_and_never_controls_transaction(self):
         value = graph()
         provider = _Provider(inputs(value, reservation=True))
@@ -167,7 +209,7 @@ class EntryAdmissionV2AdapterTests(unittest.TestCase):
         self.assertIsNotNone(result.reservation_id)
         self.assertEqual(1, len(repository.calls))
         self.assertIsNotNone(repository.calls[0][-1])
-        self.assertEqual([value], provider.calls)
+        self.assertEqual([(connection, value)], provider.calls)
 
     def test_denied_increase_persists_decision_without_reservation(self):
         value = graph()
@@ -176,7 +218,7 @@ class EntryAdmissionV2AdapterTests(unittest.TestCase):
         result = m.adapters.DurableRiskAdmissionAdapter(provider=provider, repository=repository).evaluate_and_persist(object(), value)
         self.assertFalse(result.allowed)
         self.assertIsNone(result.reservation_id)
-        self.assertIsNone(repository.calls[0][-1])
+        self.assertIsNone(repository.calls[0][-2])
 
     def test_reducing_action_rejects_reservation_demand_before_repository(self):
         value = graph(OrderAction.CLOSE)
@@ -199,7 +241,7 @@ class EntryAdmissionV2AdapterTests(unittest.TestCase):
                 ).evaluate_and_persist(object(), value)
                 self.assertTrue(result.allowed)
                 self.assertIsNone(result.reservation_id)
-                self.assertIsNone(repository.calls[0][-1])
+                self.assertIsNone(repository.calls[0][-2])
 
     def test_allowed_increase_without_demand_fails_before_repository(self):
         value = graph()

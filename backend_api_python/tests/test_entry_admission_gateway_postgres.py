@@ -36,7 +36,7 @@ class _Provider:
     def __init__(self, outcome):
         self.outcome = outcome
 
-    def prepare(self, _graph):
+    def prepare(self, _connection, _graph):
         return self.outcome
 
 
@@ -146,6 +146,25 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
             if increasing
             else None
         )
+        kinds = [
+            m.authoritative_risk_facts.RiskFactSourceKind.POLICY,
+            m.authoritative_risk_facts.RiskFactSourceKind.ACCOUNT,
+            m.authoritative_risk_facts.RiskFactSourceKind.INSTRUMENT_RULES,
+            m.authoritative_risk_facts.RiskFactSourceKind.RECONCILIATION,
+            m.authoritative_risk_facts.RiskFactSourceKind.KILL_SWITCH_GLOBAL,
+            m.authoritative_risk_facts.RiskFactSourceKind.KILL_SWITCH_ACCOUNT,
+            m.authoritative_risk_facts.RiskFactSourceKind.KILL_SWITCH_STRATEGY,
+            m.authoritative_risk_facts.RiskFactSourceKind.ACTIVE_RESERVATIONS,
+        ]
+        if increasing:
+            kinds.append(m.authoritative_risk_facts.RiskFactSourceKind.MARKET)
+        provenance = tuple(
+            m.authoritative_risk_facts.RiskFactProvenance(
+                kind, f"test-{kind.value.lower()}", "v1", f"{index:x}" * 64,
+                datetime(2026, 7, 29, tzinfo=timezone.utc), 60,
+            )
+            for index, kind in enumerate(kinds)
+        )
         return m.admission.DurableRiskAdmissionInputs(
             m.hard_risk.RiskLimitPolicy(
                 "policy-1", "USDT", m.decimal.QuoteAmount("1000"), m.decimal.QuoteAmount("700"),
@@ -178,7 +197,7 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
                 "100" if increasing else "0", "100" if increasing else "0",
                 "100" if increasing else "0", "25" if increasing else "0",
             ),
-            datetime(2026, 7, 29, tzinfo=timezone.utc), reservation_demand=demand,
+            datetime(2026, 7, 29, tzinfo=timezone.utc), reservation_demand=demand, provenance=provenance,
         )
 
     def _gateway(self, value, *, denied=False, reconciliation_unhealthy=False, durable_entries=None, durable_risk=None, outbox=None):
@@ -189,6 +208,114 @@ class EntryAdmissionV2PostgresTests(unittest.TestCase):
             ),
             outbox=outbox or m.adapters.AdmissionOutboxAdapter(),
         )
+
+    def _seed_authoritative_risk_facts(self, value):
+        """Seed only persisted RF-01 facts; no runtime or exchange fixture."""
+        at = value.specification.occurred_at
+        values = (self.tenant_id, self.credential_id, "account-1", "BTCUSDT", "swap")
+        with self.connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO qd_authoritative_risk_policies
+                (id,contract_version,tenant_id,credential_id,account_scope,instrument_id,market_type,strategy_scope,
+                 policy_identity,policy_version,policy_fingerprint,observed_at,max_age_seconds,reservation_ttl_seconds,
+                 valuation_currency,max_gross_notional,max_net_notional,max_instrument_notional,max_leverage,
+                 minimum_available_margin,max_daily_loss,max_drawdown_ratio)
+                VALUES (%s,'authoritative-risk-facts-v1',%s,%s,%s,%s,%s,'__NON_STRATEGY__','policy','v1',%s,%s,60,30,'USDT',160,700,600,4,100,100,0.2)
+            """, (uuid4(), *values, "a" * 64, at))
+            cursor.execute("""
+                INSERT INTO qd_authoritative_instrument_risk_rules
+                (id,contract_version,tenant_id,credential_id,account_scope,instrument_id,market_type,valuation_currency,
+                 source_identity,source_version,source_fingerprint,observed_at,max_age_seconds,quantity_to_quote_multiplier,initial_margin_ratio)
+                VALUES (%s,'authoritative-risk-facts-v1',%s,%s,%s,%s,%s,'USDT','rule','v1',%s,%s,60,1,0.25)
+            """, (uuid4(), *values, "b" * 64, at))
+            cursor.execute("""
+                INSERT INTO qd_authoritative_account_risk_facts
+                (id,contract_version,tenant_id,credential_id,account_scope,instrument_id,market_type,valuation_currency,
+                 source_identity,source_version,source_fingerprint,observed_at,max_age_seconds,gross_notional,net_notional,
+                 instrument_notional,available_margin,equity,peak_equity,daily_realized_pnl,account_facts_verified)
+                VALUES (%s,'authoritative-risk-facts-v1',%s,%s,%s,%s,%s,'USDT','account','v1',%s,%s,60,100,100,100,800,500,500,0,true)
+            """, (uuid4(), *values, "c" * 64, at))
+            cursor.execute("""
+                INSERT INTO qd_reconciliation_checkpoints
+                (id,tenant_id,credential_id,exchange,market_type,account_scope,instrument_id,status,evidence_hash,version,updated_at,risk_max_age_seconds)
+                VALUES (%s,%s,%s,'fixture','swap','account-1','BTCUSDT','HEALTHY',%s,1,%s,60)
+            """, (uuid4(), self.tenant_id, self.credential_id, "d" * 64, at))
+            for kind, letter in (("GLOBAL", "e"), ("ACCOUNT", "f"), ("STRATEGY", "0")):
+                cursor.execute("""
+                    INSERT INTO qd_authoritative_kill_switch_observations
+                    (id,contract_version,tenant_id,credential_id,account_scope,strategy_scope,scope_kind,source_identity,
+                     source_version,source_fingerprint,observed_at,max_age_seconds,switch_version,enabled,mode)
+                    VALUES (%s,'authoritative-risk-facts-v1',%s,%s,'account-1','__NON_STRATEGY__',%s,%s,'v1',%s,%s,60,1,false,NULL)
+                """, (uuid4(), self.tenant_id, self.credential_id, kind, f"switch-{kind.lower()}", letter * 64, at))
+            cursor.execute("""
+                INSERT INTO qd_authoritative_market_observations
+                (id,contract_version,tenant_id,credential_id,account_scope,instrument_id,market_type,valuation_currency,
+                 price_type,price,source_identity,source_version,source_fingerprint,observed_at,max_age_seconds,market_data_health)
+                VALUES (%s,'authoritative-risk-facts-v1',%s,%s,%s,%s,%s,'USDT','MARK',50,'market','v1',%s,%s,60,'FRESH')
+            """, (uuid4(), *values, "1" * 64, at))
+
+    def test_authoritative_provider_persists_provenance_and_replays_without_reselecting_facts(self):
+        value = self._graph()
+        self._seed_authoritative_risk_facts(value)
+        class CountingProvider(m.authoritative_risk_provider.AuthoritativeRiskFactsProvider):
+            calls = 0
+            def prepare(self, connection, graph):
+                self.calls += 1
+                return super().prepare(connection, graph)
+
+        provider = CountingProvider()
+        gateway = self._gateway(
+            value,
+            durable_risk=m.adapters.DurableRiskAdmissionAdapter(
+                provider=provider,
+            ),
+        )
+        first = gateway.admit(self.connection, value)
+        self.assertTrue(first.risk_decision_id)
+        self.connection.commit()
+        self.assertEqual(9, self._count("qd_durable_risk_fact_provenance", first.risk_decision_id, "risk_decision_id"))
+        replay = gateway.admit(self.connection, value)
+        self.assertEqual(m.admission.EntryAdmissionDisposition.REPLAYED, replay.disposition)
+        self.assertEqual(1, provider.calls)
+
+    def test_authoritative_provider_serializes_account_capacity_across_two_connections(self):
+        seed = self._graph()
+        self._seed_authoritative_risk_facts(seed)
+        self.connection.commit()
+        barrier = threading.Barrier(2, timeout=10)
+        results, failures = [], []
+        result_lock = threading.Lock()
+
+        def worker():
+            connection = self._connection()
+            try:
+                value = self._graph()
+                gateway = self._gateway(
+                    value,
+                    durable_risk=m.adapters.DurableRiskAdmissionAdapter(
+                        provider=m.authoritative_risk_provider.AuthoritativeRiskFactsProvider(),
+                    ),
+                )
+                barrier.wait()
+                result = gateway.admit(connection, value)
+                connection.commit()
+                with result_lock:
+                    results.append(result)
+            except Exception as exc:  # test captures raw errors explicitly
+                connection.rollback()
+                with result_lock:
+                    failures.append(exc)
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join(timeout=15)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual([], failures)
+        self.assertEqual(2, len(results))
+        self.assertEqual(1, sum(item.risk_decision_status == "ALLOW" for item in results))
+        self.assertEqual(1, sum(item.risk_decision_status in {"DENY", "RECONCILIATION_REQUIRED"} for item in results))
 
     def _count(self, table, identifier, column):
         with self.connection.cursor() as cursor:

@@ -11,12 +11,16 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import json
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid5
+
+from app.domain.authoritative_risk_facts_contracts import RiskFactProvenance
+from app.domain.durable_risk_enforcement_v2_contracts import DURABLE_RISK_UUID_NAMESPACE
 
 from app.domain.durable_entry_persistence_contracts import (
     DURABLE_ENTRY_CONTRACT_VERSION,
     DURABLE_ENTRY_SPECIFICATION_TABLE,
 )
+from app.domain.canonical_entry_v2_contracts import DurableEntryGraphV2, EconomicOrderSubject
 from app.domain.order_contracts import OrderAction
 from app.domain.durable_risk_enforcement_v2_contracts import (
     DURABLE_RISK_DECISION_TABLE,
@@ -90,8 +94,10 @@ class DurableRiskEnforcementRepositoryV2:
         input_snapshot: DurableRiskInputSnapshotFactV2,
         decision: DurableRiskDecisionFactV2,
         reservation: DurableRiskReservationFactV2 | None,
+        provenance: tuple[RiskFactProvenance, ...] = (),
     ) -> DurableRiskPersistResultV2:
         self._validate_chain(policy_snapshot, input_snapshot, decision, reservation)
+        self._validate_provenance(provenance)
         try:
             cursor = connection.cursor()
         except Exception as exc:
@@ -102,6 +108,7 @@ class DurableRiskEnforcementRepositoryV2:
             created |= self._insert_or_verify_policy(cursor, policy_snapshot)
             created |= self._insert_or_verify_input(cursor, input_snapshot)
             created |= self._insert_or_verify_decision(cursor, decision)
+            created |= self._insert_or_verify_provenance(cursor, input_snapshot, decision, provenance)
             if reservation is not None:
                 created |= self._insert_or_verify_reservation(cursor, reservation)
             return self._result(decision, reservation, DurableRiskPersistDisposition.CREATED if created else DurableRiskPersistDisposition.REPLAYED)
@@ -114,6 +121,110 @@ class DurableRiskEnforcementRepositoryV2:
                 cursor.close()
             except Exception as exc:
                 raise DurableRiskRepositoryError("durable risk database cursor could not be closed") from exc
+
+    def load_complete_replay(
+        self,
+        connection: Connection,
+        graph: DurableEntryGraphV2,
+    ) -> DurableRiskPersistResultV2 | None:
+        """Return an exact completed chain before any source facts are re-read."""
+
+        if not isinstance(graph, DurableEntryGraphV2) or not isinstance(graph.subject, EconomicOrderSubject):
+            raise DurableRiskConflict("durable risk replay requires a typed non-CANCEL durable graph")
+
+        try:
+            cursor = connection.cursor()
+        except Exception as exc:
+            raise DurableRiskRepositoryError("durable risk replay cursor could not be opened") from exc
+        try:
+            spec = graph.specification
+            cursor.execute(
+                f"""SELECT id, economic_order_id, durable_entry_contract_version, economic_fingerprint,
+                           request_fingerprint, tenant_id, credential_id, account_scope, instrument_id,
+                           market_type, action, risk_effect, actor_type, actor_id, source, mode,
+                           correlation_id, entry_occurred_at, scope_fingerprint, audit_fingerprint,
+                           allowed, decision_status, decision_fingerprint
+                      FROM {DURABLE_RISK_DECISION_TABLE}
+                     WHERE command_id = %s FOR UPDATE""",
+                (graph.command_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            expected = (
+                graph.subject.economic_order_id, DURABLE_ENTRY_CONTRACT_VERSION,
+                spec.economic_fingerprint, spec.request_fingerprint, spec.tenant_id,
+                spec.credential_id, spec.account_scope, spec.instrument_id, spec.market_type,
+                spec.action.value, spec.risk_effect.value, spec.actor.actor_type.value,
+                spec.actor.actor_id, spec.actor.entry_source.value, spec.mode.value,
+                spec.correlation_id, spec.occurred_at,
+            )
+            actual = tuple(_row(row, index, name) for index, name in enumerate((
+                "economic_order_id", "durable_entry_contract_version", "economic_fingerprint",
+                "request_fingerprint", "tenant_id", "credential_id", "account_scope", "instrument_id",
+                "market_type", "action", "risk_effect", "actor_type", "actor_id", "source", "mode",
+                "correlation_id", "entry_occurred_at",
+            ), start=1))
+            for index, (observed, wanted) in enumerate(zip(actual, expected)):
+                if index == 0:
+                    equal = _uuid(observed, "economic_order_id") == _uuid(wanted, "economic_order_id")
+                elif index == 16:
+                    equal = _timestamp(observed, "entry_occurred_at") == _timestamp(wanted, "entry_occurred_at")
+                else:
+                    equal = observed == wanted
+                if not equal:
+                    raise DurableRiskConflict("durable risk replay scope conflicts with graph")
+            decision_id = _uuid(_row(row, 0, "id"), "id")
+            cursor.execute("SELECT source_kind FROM qd_durable_risk_fact_provenance WHERE risk_decision_id = %s FOR UPDATE", (decision_id,))
+            source_kinds = { _row(item, 0, "source_kind") for item in cursor.fetchall() }
+            required = {"POLICY", "ACCOUNT", "INSTRUMENT_RULES", "RECONCILIATION", "KILL_SWITCH_GLOBAL", "KILL_SWITCH_ACCOUNT", "KILL_SWITCH_STRATEGY", "ACTIVE_RESERVATIONS"}
+            if spec.action in {OrderAction.OPEN, OrderAction.INCREASE}:
+                required.add("MARKET")
+            if source_kinds != required:
+                raise DurableRiskConflict("existing durable risk chain lacks exact authoritative provenance")
+            allowed = _row(row, 20, "allowed")
+            status = _row(row, 21, "decision_status")
+            cursor.execute(f"SELECT id FROM {DURABLE_RISK_RESERVATION_TABLE} WHERE decision_id = %s AND state = 'ACTIVE' FOR UPDATE", (decision_id,))
+            reservations = cursor.fetchall()
+            if allowed and spec.action in {OrderAction.OPEN, OrderAction.INCREASE}:
+                if len(reservations) != 1:
+                    raise DurableRiskConflict("existing allowed increasing risk chain lacks exactly one reservation")
+                reservation_id = _uuid(_row(reservations[0], 0, "id"), "reservation_id")
+            elif reservations:
+                raise DurableRiskConflict("non-reserving durable risk replay has an active reservation")
+            else:
+                reservation_id = None
+            return DurableRiskPersistResultV2(
+                command_id=graph.command_id, economic_order_id=graph.subject.economic_order_id,
+                durable_entry_contract_version=_row(row, 2, "durable_entry_contract_version"),
+                economic_fingerprint=spec.economic_fingerprint, request_fingerprint=spec.request_fingerprint,
+                tenant_id=spec.tenant_id, credential_id=spec.credential_id, account_scope=spec.account_scope,
+                instrument_id=spec.instrument_id, market_type=spec.market_type, action=spec.action,
+                risk_effect=spec.risk_effect, actor_type=spec.actor.actor_type.value, actor_id=spec.actor.actor_id,
+                source=spec.actor.entry_source.value, mode=spec.mode.value, correlation_id=spec.correlation_id,
+                entry_occurred_at=spec.occurred_at, scope_fingerprint=_row(row, 18, "scope_fingerprint"),
+                audit_fingerprint=_row(row, 19, "audit_fingerprint"), decision_id=decision_id,
+                reservation_id=reservation_id, allowed=allowed, decision_status=status,
+                decision_fingerprint=_row(row, 22, "decision_fingerprint"),
+                disposition=DurableRiskPersistDisposition.REPLAYED,
+            )
+        except (DurableRiskConflict, DurableRiskRepositoryError):
+            raise
+        except Exception as exc:
+            raise DurableRiskRepositoryError("durable risk replay database operation failed") from exc
+        finally:
+            try:
+                cursor.close()
+            except Exception as exc:
+                raise DurableRiskRepositoryError("durable risk replay cursor could not be closed") from exc
+
+    @staticmethod
+    def _validate_provenance(provenance: tuple[RiskFactProvenance, ...]) -> None:
+        if not isinstance(provenance, tuple) or not all(isinstance(item, RiskFactProvenance) for item in provenance):
+            raise DurableRiskRepositoryError("durable risk provenance must use typed immutable facts")
+        kinds = [item.source_kind for item in provenance]
+        if len(kinds) != len(set(kinds)):
+            raise DurableRiskConflict("durable risk provenance cannot repeat a source kind")
 
     def _validate_chain(self, policy: DurableRiskPolicySnapshotFactV2, inputs: DurableRiskInputSnapshotFactV2, decision: DurableRiskDecisionFactV2, reservation: DurableRiskReservationFactV2 | None) -> None:
         if not all(isinstance(value, expected) for value, expected in ((policy, DurableRiskPolicySnapshotFactV2), (inputs, DurableRiskInputSnapshotFactV2), (decision, DurableRiskDecisionFactV2))):
@@ -195,6 +306,38 @@ class DurableRiskEnforcementRepositoryV2:
         values = {**scope, "id": fact.decision_id, "policy_snapshot_id": fact.policy_snapshot.snapshot_id, "input_snapshot_id": fact.input_snapshot.snapshot_id, "policy_hash": fact.policy_snapshot.policy_hash, "input_hash": fact.input_snapshot.input_hash, "decision_fingerprint": fact.decision_fingerprint, "allowed": fact.decision.allowed, "decision_status": fact.decision_status, "rejection_codes_json": json.dumps([item.value for item in fact.decision.rejections], separators=(",", ":")), "projected_gross_notional": projected.gross_notional, "projected_net_notional": projected.net_notional, "projected_instrument_notional": projected.instrument_notional, "projected_available_margin": projected.available_margin, "projected_leverage": projected.leverage, "projected_daily_loss": projected.daily_loss, "projected_drawdown_ratio": projected.drawdown_ratio, "projected_risk_payload_json": json.dumps(self._projected_payload(fact), sort_keys=True, separators=(",", ":"))}
         return self._insert_or_verify(cursor, DURABLE_RISK_DECISION_TABLE, values, "id")
 
+    def _insert_or_verify_provenance(
+        self,
+        cursor: Cursor,
+        input_snapshot: DurableRiskInputSnapshotFactV2,
+        decision: DurableRiskDecisionFactV2,
+        provenance: tuple[RiskFactProvenance, ...],
+    ) -> bool:
+        """Append source evidence after both immutable target facts exist."""
+
+        created = False
+        anchor = decision.scope.graph.specification.occurred_at
+        for item in provenance:
+            identifier = str(uuid5(
+                DURABLE_RISK_UUID_NAMESPACE,
+                f"risk-fact-provenance:{decision.decision_id}:{item.source_kind.value}:{item.source_fingerprint}",
+            ))
+            values = {
+                "id": identifier,
+                "contract_version": "authoritative-risk-facts-v1",
+                "command_id": decision.scope.command_id,
+                "risk_input_snapshot_id": input_snapshot.snapshot_id,
+                "risk_decision_id": decision.decision_id,
+                "source_kind": item.source_kind.value,
+                "source_identity": item.source_identity,
+                "source_version": item.source_version,
+                "source_fingerprint": item.source_fingerprint,
+                "source_observed_at": item.observed_at,
+                "selection_anchor": anchor,
+            }
+            created |= self._insert_or_verify(cursor, "qd_durable_risk_fact_provenance", values, "id")
+        return created
+
     def _insert_or_verify_reservation(self, cursor: Cursor, fact: DurableRiskReservationFactV2) -> bool:
         scope = self._scope(fact.decision)
         demand = fact.demand
@@ -219,9 +362,9 @@ class DurableRiskEnforcementRepositoryV2:
         return False
 
     def _equal(self, field: str, actual: Any, wanted: Any) -> bool:
-        if field in {"id", "command_id", "economic_order_id", "policy_snapshot_id", "input_snapshot_id", "decision_id"}:
+        if field in {"id", "command_id", "economic_order_id", "policy_snapshot_id", "input_snapshot_id", "decision_id", "risk_input_snapshot_id", "risk_decision_id"}:
             return _uuid(actual, field) == _uuid(wanted, field)
-        if field in {"entry_occurred_at", "observed_at", "expires_at"}:
+        if field in {"entry_occurred_at", "observed_at", "expires_at", "source_observed_at", "selection_anchor"}:
             return _timestamp(actual, field) == _timestamp(wanted, field)
         if field.startswith("reserved_") or field.startswith("max_") or field.startswith("minimum_") or field in {"gross_notional", "net_notional", "instrument_notional", "available_margin", "equity", "peak_equity", "daily_realized_pnl", "projected_gross_notional", "projected_net_notional", "projected_instrument_notional", "projected_available_margin", "projected_leverage", "projected_daily_loss", "projected_drawdown_ratio"}:
             return _decimal(actual, field) == _decimal(wanted, field)

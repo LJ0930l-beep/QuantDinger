@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from enum import Enum
 
 from app.domain.canonical_entry_contracts import EntrySource
 from app.domain.canonical_entry_v2_contracts import DurableEntryGraphV2, EconomicOrderSubject
-from app.domain.decimal_values import Price
-from app.domain.hard_risk_contracts import KillSwitchState, RiskExposureSnapshot, RiskLimitPolicy
+from app.domain.decimal_values import DecimalValueError, DecimalInput, Price, validate_numeric_38_18
+from app.domain.hard_risk_contracts import KillSwitchState, MarketDataHealth, RiskExposureSnapshot, RiskLimitPolicy
 from app.domain.order_contracts import OrderAction, RiskEffect
 
 
@@ -64,6 +65,7 @@ class RiskFactSourceKind(str, Enum):
     KILL_SWITCH_STRATEGY = "KILL_SWITCH_STRATEGY"
     RECONCILIATION = "RECONCILIATION"
     ACTIVE_RESERVATIONS = "ACTIVE_RESERVATIONS"
+    INSTRUMENT_RULES = "INSTRUMENT_RULES"
 
 
 class MarketPriceType(str, Enum):
@@ -195,11 +197,52 @@ class AuthoritativeMarketObservation:
     valuation_currency: str
     price_type: MarketPriceType
     price: Price
+    health: MarketDataHealth
 
     def __post_init__(self) -> None:
-        if self.provenance.source_kind is not RiskFactSourceKind.MARKET or not isinstance(self.price_type, MarketPriceType) or not isinstance(self.price, Price):
+        if self.provenance.source_kind is not RiskFactSourceKind.MARKET or not isinstance(self.price_type, MarketPriceType) or not isinstance(self.price, Price) or not isinstance(self.health, MarketDataHealth):
             raise RiskFactsError("market observation must use typed source and price")
         object.__setattr__(self, "valuation_currency", _text(self.valuation_currency, "valuation_currency", uppercase=True))
+
+
+def _positive_decimal(value: DecimalInput, name: str) -> Decimal:
+    try:
+        parsed = validate_numeric_38_18(value)
+    except (DecimalValueError, TypeError) as exc:
+        raise RiskFactsError(f"{name} must be a Decimal NUMERIC(38,18) value") from exc
+    if parsed <= 0:
+        raise RiskFactsError(f"{name} must be positive")
+    return parsed
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoritativeInstrumentRiskRule:
+    """Persisted conversion rule used for request and reservation demand.
+
+    RF-01 deliberately supports only an explicit linear quote conversion.  A
+    venue-specific inverse or contract calculation must receive its own typed
+    rule rather than being guessed from quantity or price.
+    """
+
+    scope: AuthoritativeRiskFactScope
+    provenance: RiskFactProvenance
+    valuation_currency: str
+    quantity_to_quote_multiplier: DecimalInput
+    initial_margin_ratio: DecimalInput
+
+    def __post_init__(self) -> None:
+        if self.provenance.source_kind is not RiskFactSourceKind.INSTRUMENT_RULES:
+            raise RiskFactsError("instrument rule must use an instrument-rule provenance")
+        object.__setattr__(self, "valuation_currency", _text(
+            self.valuation_currency, "valuation_currency", uppercase=True,
+        ))
+        object.__setattr__(self, "quantity_to_quote_multiplier", _positive_decimal(
+            self.quantity_to_quote_multiplier, "quantity_to_quote_multiplier",
+        ))
+        margin = _positive_decimal(self.initial_margin_ratio, "initial_margin_ratio")
+        if margin > Decimal("1"):
+            raise RiskFactsError("initial_margin_ratio cannot exceed one")
+        object.__setattr__(self, "initial_margin_ratio", margin)
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +290,7 @@ class AuthoritativeRiskFactsSelection:
     strategy_kill_switch: AuthoritativeKillSwitchRecord
     reconciliation_checkpoint_id: str
     reconciliation_checkpoint_version: int
+    instrument_rule: AuthoritativeInstrumentRiskRule
     market: AuthoritativeMarketObservation | None
     active_reservation_set_fingerprint: str
 
@@ -257,6 +301,13 @@ class AuthoritativeRiskFactsSelection:
             raise RiskFactsScopeConflict("authoritative source scope mismatch")
         for record in records:
             record.provenance.validate_selection_anchor(self.selection_anchor)
+        if not isinstance(self.instrument_rule, AuthoritativeInstrumentRiskRule):
+            raise RiskFactsError("instrument_rule must be typed")
+        if self.instrument_rule.scope != self.scope:
+            raise RiskFactsScopeConflict("instrument rule scope mismatch")
+        self.instrument_rule.provenance.validate_selection_anchor(self.selection_anchor)
+        if self.instrument_rule.valuation_currency != self.policy.policy.valuation_currency:
+            raise RiskFactsScopeConflict("instrument rule valuation currency does not match policy")
         if self.market is not None:
             if self.market.scope != self.scope:
                 raise RiskFactsScopeConflict("market observation scope mismatch")
