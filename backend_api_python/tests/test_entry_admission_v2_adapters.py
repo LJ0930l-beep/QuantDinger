@@ -106,13 +106,28 @@ def inputs(value, *, reservation=True, denied=False):
         demand = m.hard_risk.RiskReservationDemand(
             "provider-demand", "account-1", "BTCUSDT", "USDT", "100", "100", "100", "25",
         )
-    provenance = m.authoritative_risk_facts.RiskFactProvenance(
+    kinds = [
         m.authoritative_risk_facts.RiskFactSourceKind.POLICY,
-        "test-policy", "v1", "a" * 64, datetime(2026, 7, 29, tzinfo=timezone.utc), 60,
+        m.authoritative_risk_facts.RiskFactSourceKind.ACCOUNT,
+        m.authoritative_risk_facts.RiskFactSourceKind.INSTRUMENT_RULES,
+        m.authoritative_risk_facts.RiskFactSourceKind.RECONCILIATION,
+        m.authoritative_risk_facts.RiskFactSourceKind.KILL_SWITCH_GLOBAL,
+        m.authoritative_risk_facts.RiskFactSourceKind.KILL_SWITCH_ACCOUNT,
+        m.authoritative_risk_facts.RiskFactSourceKind.KILL_SWITCH_STRATEGY,
+        m.authoritative_risk_facts.RiskFactSourceKind.ACTIVE_RESERVATIONS,
+    ]
+    if value.specification.action in (OrderAction.OPEN, OrderAction.INCREASE):
+        kinds.append(m.authoritative_risk_facts.RiskFactSourceKind.MARKET)
+    provenance = tuple(
+        m.authoritative_risk_facts.RiskFactProvenance(
+            kind, f"test-{kind.value.lower()}", "v1", f"{index:x}" * 64,
+            datetime(2026, 7, 29, tzinfo=timezone.utc), 60,
+        )
+        for index, kind in enumerate(kinds)
     )
     return m.admission.DurableRiskAdmissionInputs(
         policy(), exposure(), switches(enabled=denied), request(value.specification.action),
-        datetime(2026, 7, 29, tzinfo=timezone.utc), reservation_demand=demand, provenance=(provenance,),
+        datetime(2026, 7, 29, tzinfo=timezone.utc), reservation_demand=demand, provenance=provenance,
     )
 
 

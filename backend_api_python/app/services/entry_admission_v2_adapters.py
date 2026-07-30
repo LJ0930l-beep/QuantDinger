@@ -81,6 +81,15 @@ class DurableRiskAdmissionAdapter:
             raise EntryAdmissionError("durable risk provider returned untyped admission inputs")
         if not inputs.provenance:
             raise EntryAdmissionConflict("durable risk provider must return authoritative provenance")
+        required_sources = {
+            "POLICY", "ACCOUNT", "INSTRUMENT_RULES", "RECONCILIATION",
+            "KILL_SWITCH_GLOBAL", "KILL_SWITCH_ACCOUNT", "KILL_SWITCH_STRATEGY",
+            "ACTIVE_RESERVATIONS",
+        }
+        if specification.action in (OrderAction.OPEN, OrderAction.INCREASE):
+            required_sources.add("MARKET")
+        if {item.source_kind.value for item in inputs.provenance} != required_sources:
+            raise EntryAdmissionConflict("durable risk provider provenance is incomplete or ambiguous")
 
         increasing = specification.action in (OrderAction.OPEN, OrderAction.INCREASE)
         if not increasing and inputs.reservation_demand is not None:
