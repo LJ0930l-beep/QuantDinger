@@ -1,44 +1,20 @@
 # 发布就绪检查表
 
-本表定义四个不同层级。勾选必须附精确 Head、PR、日期和可复核证据；没有证据则保持未勾选。
+## Safety Core Complete（16 / 16，仍为 Live OFF）
 
-## 1. Safety Core Complete
+- [ ] SC-13：REST、MANUAL、STRATEGY、PROTECTION 已全部经 Admission；AGENT、MCP、GRID 已禁用或退役。
+- [ ] SC-14：Admission Outbox → Consumer → Candidate Projection → Shadow → Reconciliation → Derived Health → 只读 API 完成，且可重建。
+- [ ] SC-15：旧交易真相/旁路退役，重启、回滚、重复、网络、数据库、孤儿事实与未知身份演练通过。
+- [ ] Architecture / Entry-Point / AI Boundary baseline 均未增加，Live 仍为 OFF。
 
-- [ ] PR-13 入口收口完成，REST / MANUAL / STRATEGY / PROTECTION / AGENT / MCP / GRID 全部通过 Admission。
-- [ ] Entry-Point legacy baseline 仅减少并达到批准目标；Architecture Guard 未增加。
-- [ ] PR-14 G4-B 完成：Admission Outbox → Registered Projection Consumer → Candidate Projection → Shadow Diff → Reconciliation → Derived Health。
-- [ ] Projection 可从事实重建，generation / watermark / replay / conflict 合同通过。
-- [ ] PR-15 清除遗留权威读写和已迁移旁路；无孤儿 Reservation、Outbox 或未知身份。
-- [ ] 升级、重启、回滚、重复事件、网络故障、数据库故障演练通过。
-- [ ] 16 / 16 完成记录存在；Live 仍为 OFF。
+## 产品就绪链
 
-## 2. Paper / Shadow Ready
+- [ ] DATA-01、BT-01、PS-01、STRAT-01、SMC-01、PORT-01、FE-01 均有独立 Gate 证据。
+- [ ] Paper / Shadow 复用相同的确定性策略、Hard Risk 和 Admission 语义。
+- [ ] Dashboard 为鉴权只读界面，明确显示 stale / unavailable / unauthorized。
 
-- [ ] 真实只读市场输入已定义新鲜度、缺失和异常语义。
-- [ ] Paper Account、Fill、Fee、Slippage、Position 与 PnL 可重放。
-- [ ] Shadow Strategy Run 与策略计划/市场结果对比可解释。
-- [ ] 长期运行、重启恢复、监控和告警通过批准观察周期。
-- [ ] 无身份漂移、无未解释对账异常。
+## Controlled Live Ready（不是 Live 启用）
 
-## 3. Controlled Live Ready
-
-- [ ] 所有入口都经过 Admission；Hard Risk fail-closed。
-- [ ] Reservation 无泄漏；Outbox 无积压；Projection 可重建；Shadow Diff 可解释。
-- [ ] Reconciliation 健康、Submission Unknown 恢复、Kill Switch 演练通过。
-- [ ] 数据库重启、网络超时、重复事件、时钟漂移检查通过。
-- [ ] 凭证隔离、备份恢复、监控告警、审计日志和人工紧急停止均通过。
-- [ ] 单交易所、单账户、单策略、最小额度、独立凭证和人工审批已明确。
-- [ ] Live 默认 OFF，并有单独正式启用决定；本清单本身不构成启用授权。
-
-## 4. Product Release Ready
-
-- [ ] Paper / Shadow Runtime、Strategy Platform、SMC/ICT 规则和 AI Analysis Layer 分别通过产品闸门。
-- [ ] Dashboard API 合同、鉴权、陈旧/不可用状态和事件流语义可验证。
-- [ ] 用户体验不将任何按钮点击表示为真实交易成功。
-- [ ] 运营、支持、告警、审计、风险解释和复盘流程具备明确责任人。
-
-## 证据记录模板
-
-| 日期 | 层级 | 项目 | 状态 | Head | PR | 验证证据 | 审批结论 |
-|---|---|---|---|---|---|---|---|
-| TBD | TBD | TBD | NOT_STARTED | TBD | TBD | TBD | TBD |
+- [ ] 单交易所、单账户、单确定性策略、隔离凭证和最小额度已审计。
+- [ ] Kill Switch、Hard Risk、Admission、Submission Unknown、对账、紧急平仓、数据库/网络恢复、监控、告警、人审与故障演练均通过。
+- [ ] 明确记录 `CONTROLLED LIVE READY / LIVE OFF`；本清单不构成任何 Live 启用授权。

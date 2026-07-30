@@ -1,0 +1,48 @@
+{
+  "manifest_version": "ai-boundary-v1",
+  "guarded_paths": [
+    "backend_api_python/app/domain/canonical_entry_contracts.py",
+    "backend_api_python/app/domain/canonical_entry_v2_contracts.py",
+    "backend_api_python/app/domain/runtime_entry_ingress_contracts.py",
+    "backend_api_python/app/domain/durable_risk_enforcement_v2_contracts.py",
+    "backend_api_python/app/services/authoritative_risk_facts_provider.py",
+    "backend_api_python/app/services/command_intent_repository.py",
+    "backend_api_python/app/services/durable_entry_repository.py",
+    "backend_api_python/app/services/durable_risk_enforcement_v2_repository.py",
+    "backend_api_python/app/services/entry_admission_gateway.py",
+    "backend_api_python/app/services/entry_admission_v2_adapters.py",
+    "backend_api_python/app/services/outbox_projection_repository.py",
+    "backend_api_python/app/services/risk_enforcement_repository.py",
+    "backend_api_python/app/services/strategy.py",
+    "backend_api_python/app/services/strategy_assets.py",
+    "backend_api_python/app/services/strategy_authoring.py",
+    "backend_api_python/app/services/strategy_command_client.py",
+    "backend_api_python/app/services/strategy_command_repository.py",
+    "backend_api_python/app/services/strategy_direction.py",
+    "backend_api_python/app/services/strategy_lifecycle.py",
+    "backend_api_python/app/services/strategy_live_guard.py",
+    "backend_api_python/app/services/strategy_review.py"
+  ],
+  "legacy_ai_baseline": [
+    {
+      "path": "backend_api_python/app/services/strategy_authoring.py",
+      "symbol": "<module>",
+      "category": "ai_provider_import",
+      "pattern": "from:app.services.ai_generation_contracts:SCRIPT_STRATEGY_SYSTEM_PROMPT",
+      "fingerprint": "025379a4f581fca93a74efba",
+      "line": 7,
+      "count": 1,
+      "legacy_reason": "Legacy AI-assisted strategy authoring is inventory-only and must not enter deterministic strategy or admission code."
+    },
+    {
+      "path": "backend_api_python/app/services/strategy_review.py",
+      "symbol": "<module>",
+      "category": "ai_provider_import",
+      "pattern": "from:app.services.llm:LLMService",
+      "fingerprint": "1d09b5350d312941e464e109",
+      "line": 11,
+      "count": 1,
+      "legacy_reason": "Legacy LLM strategy review remains outside the deterministic trading decision chain and is scheduled for retirement review."
+    }
+  ]
+}

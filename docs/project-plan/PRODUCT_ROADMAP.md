@@ -1,33 +1,39 @@
 # 产品路线图
 
-本路线图开始于 Safety Core Complete 之后。所有阶段的状态不替代独立授权；不承诺发布日期或上线时间。
-
-## 依赖顺序
-
 ```text
 Safety Core Complete
-  -> P1 Paper / Shadow Runtime
-  -> P2 Strategy Platform
-  -> P3 SMC / ICT Strategy
-  -> P4 AI Analysis Layer
-  -> P5 Controlled Live Readiness
-  -> 单独正式 Live 启用决定
+  -> DATA-01 Market Data Foundation
+  -> BT-01 Backtest and Research
+  -> PS-01 Paper / Shadow Runtime
+  -> STRAT-01 Deterministic Strategy Platform
+  -> SMC-01 Deterministic SMC / ICT
+  -> PORT-01 Portfolio and Risk Allocation
+  -> FE-01 Frontend Read Integration
+  -> LIVE-R01 Controlled Live Ready / Live OFF
 ```
 
-## 阶段任务卡
+## 当前安全核心路线
 
-| Task ID | 状态 | 目标 | 依赖 | 允许范围 | 禁止范围 | 交付物 | 验证证据 | 闸门 | 停止条件 | 仓库 | 分支 / PR | 最后批准 Head |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| P1-RUNTIME | BLOCKED | 建立长期可运行的 Paper / Shadow Runtime：只读行情、Paper Account/Fill、Fee/Slippage、Paper Position、Shadow Strategy Run、恢复和监控 | Safety Core Complete | Paper/Shadow、受控模拟、只读市场数据 | Live、真实下单、绕过 Admission | Paper / Shadow 运行闭环 | 批准观察周期内无身份漂移、无对账异常、重启恢复通过 | Paper / Shadow Runtime Gate | 市场输入不可信、账本或对账不健康 | 后端 + 前端 | TBD | TBD |
-| P2-STRATEGY | BLOCKED | 建立策略版本、参数/数据快照、回测/Forward Test、生命周期、风险预算、Kill Switch 与归因 | P1-RUNTIME DONE | 策略平台、模拟执行、版本化数据 | 直接绕过风险、未审计的 Live | Strategy Platform | 数据/参数/策略版本可重放，Forward 与 Paper 一致性证据 | Strategy Platform Gate | 策略结果不可重放或无风险预算 | 后端 + 前端 | TBD | TBD |
-| P3-SMCICT | BLOCKED | 将 SMC / ICT 编码为确定性可解释规则：Structure、BOS/CHoCH、OB、FVG、Sweep、PD、Session/Killzone、多周期一致性、Entry/Invalidation/Target | P2-STRATEGY DONE | 规则引擎、研究、Paper/Shadow 验证 | AI 直接产生订单、不可解释规则 | SMC / ICT Rule Engine | 单元、回测、Forward、反例与解释输出 | SMC / ICT Gate | 规则依赖未验证 AI 推断或无法解释 | 后端 + 前端 | TBD | TBD |
-| P4-AI | BLOCKED | 建立 AI 分析层：市场摘要、策略/风险解释、异常诊断、复盘、参数建议、自然语言查询 | P2-STRATEGY DONE；P3 可并行研究但不放行交易 | 建议、解释、结构化 Candidate Plan、成本与权限控制 | 调用 Exchange、绕过 Admission、修改 Risk Facts、开启 Live | AI Analysis Layer | 输入/输出审计、预算、权限、失败降级与安全测试 | AI Analysis Gate | AI 获得交易或风险权威 | 后端 + 前端 | TBD | TBD |
-| P5-LIVE | BLOCKED | 建立受控小额 Live 就绪能力：单交易所/账户/策略、独立凭证、限额、Kill Switch、恢复、对账、人审、紧急平仓和审计 | P1 至 P4 完成；独立审批 | 演练、隔离环境、受控发布设计 | 默认开启、无人审、扩大账户/策略 | Controlled Live Readiness 证据包 | 下列发布检查表全部通过，且单独正式批准 | Controlled Live Readiness Gate | 任一恢复、对账、凭证、告警或演练缺失 | 后端 + 前端 + 运维 | TBD | TBD |
+| 阶段 | 状态 | 交付边界 |
+| --- | --- | --- |
+| REF-01 Runtime Entry Facts | IN_PROGRESS | 入口身份、权威 scope/position、同事务 Admission；无 Exchange 写入 |
+| SC-13 Entry-Point Convergence | BLOCKED | 等待 REF-01；收口 REST、MANUAL、STRATEGY、PROTECTION，并退役/禁用 AGENT、MCP、GRID |
+| SC-14 Read Cutover | DEFERRED | 只读投影、Shadow、对账和健康；永不做交易决定 |
+| SC-15 Legacy Retirement | NOT_STARTED | 清理已迁移旁路并完成故障演练 |
 
-## AI 的永久边界
+## 后续确定性产品能力
 
-AI 只能输出建议、解释和结构化 Candidate Plan。AI 不得直接调用 Exchange，不得绕过 Admission，不得修改 Risk Facts，不得开启 Live，也不得把模型输出视为确定性规则的替代品。
+| ID | 目标 | 不可突破的边界 |
+| --- | --- | --- |
+| DATA-01 | Point-in-Time 市场数据、标的规则版本、数据新鲜度与确定性 K 线 | 不使用未来数据、隐式 forward fill、未记录来源或 float 权威事实 |
+| BT-01 | 可重放回测：next-open、费用、滑点、Funding、部分成交、清算、walk-forward | 禁止 look-ahead、未版本化参数和未来账户/市场事实 |
+| PS-01 | Paper / Shadow 订单、成交、仓位、PnL、恢复、对账与监控 | 与实盘无关；必须复用策略、风险与 Admission 语义 |
+| STRAT-01 | 策略定义/版本/参数/数据依赖/信号/规模/生命周期/归因 | Candidate Trade Plan 只能是确定性策略输出 |
+| SMC-01 | 可解释 SMC / ICT 规则引擎 | 每个信号带数据、规则、参数版本和命中/拒绝理由 |
+| PORT-01 | 风险预算、暴露、相关性、回撤和确定性配置 | 禁止 online learning、RL 与自动改实盘参数 |
+| FE-01 | Quant Trading Dashboard 的鉴权只读集成 | 无下单、撤单、调仓或前端自行推断权威事实 |
+| LIVE-R01 | Controlled Live Ready 的技术准备 | 仍为 Live OFF，启用另需独立正式批准 |
 
-## Controlled Live 的最终决定
+## 已移出核心路线的历史范围
 
-即使 P5-LIVE 的所有工程和演练证据达到门槛，Live 仍保持 OFF。任何启用必须有单独的正式决策、受限账户与额度、人审、可逆发布计划及持续监控。
+AI Analysis Layer、AI Candidate Plan、AI 市场判断、AI 参数建议、LLM / Agent 交易和 Full AI Quant Product 已因产品决定移出。它们不再是任何 Gate 或 Controlled Live 的前置条件。

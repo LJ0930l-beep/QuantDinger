@@ -1,45 +1,23 @@
 # 闸门与停止条件
 
-## 工作模式
+## 自动合并前提
 
-| 模式 | 使用时机 | 必须输出 |
-|---|---|---|
-| 记录模式 | 正常、已获批的单项实现 | Base、Head、提交、变更文件、测试、CI、Guard、Live、阻塞项 |
-| 故障模式 | CI、并发、数据库、静态架构或安全扫描失败 | 精确 Head、失败 Job/测试、异常类型、关键 traceback、最小修复边界 |
-| 闸门模式 | 合并前或阶段切换前 | 范围、Head、CI、tree parity、Guard、Live、结论 PASS / NEEDS CHANGES |
+每个 PR 必须证明精确 Head 的 Backend CI、Security CI、适用的 PostgreSQL 测试、`git diff --check`、编译/构建、Architecture Guard、Entry-Point Guard 和 AI Boundary Guard 均通过；Guard baseline 不增加；Live OFF；无 Exchange/Executor 旁路；无随机业务身份；无未版本化数据/参数；且累计 diff 自审通过。
 
-## 全项目停止条件
+## 立即停止条件
 
-出现任何一项时，停止当前实现，保留现场并报告；不得用测试桩、宽泛 allowlist 或重跑掩盖问题。
+出现以下任一项即停止并报告：
 
-1. 需要 fake legacy fact，或需要随机 UUID 作为业务幂等身份。
-2. `correlation_id` 进入经济 fingerprint。
-3. Gateway / Repository 的 caller-owned 方法自行 commit 或 rollback。
-4. CANCEL 被迫进入 Hard Risk；DENY 创建 Reservation 或 Outbox；降低风险动作创建 Reservation。
-5. Projection、Shadow Diff 或 Reconciliation 产生交易决策。
-6. 新增 direct Executor / Exchange bypass，或 Guard / Entry-Point baseline 增加。
-7. Live 被启用，或出现未获批的真实账户、凭证或交易调用。
-8. 需要 destructive migration，或 Schema 前置不足却试图用测试替代权威合同。
-9. raw driver exception 泄漏、死锁未类型化、连接在 rollback 后不可复用。
-10. 需要修改或提交 `docs/codex/`。
-11. CI 结果不属于批准 Head、PR base 变化、tree parity 不成立，或发现未获批的文件范围。
+1. 需要接入或依赖 LLM / AI 模型，或模型输出影响交易决定、Canonical Entry、Risk Facts、Position Sizing、策略参数或风险预算。
+2. 需要在线学习、强化学习、真实 API Key、Live、真实交易所写操作，或跳过 Admission / Hard Risk。
+3. 需要伪造账户、仓位、行情、策略事实，使用破坏性 migration，或用随机 UUID/当前时间作为业务身份。
+4. correlation_id 进入 Economic Fingerprint、任一 Guard baseline 增加、数据可能未来泄漏、策略不可重放，或连续两次无法修复 P0。
+5. 需要修改 `docs/codex/`，或 Controlled Live Ready 已完成。
 
-## 精确 Head 与 PR 闸门
+## AI Boundary Guard
 
-每个 Draft PR 在 Ready 前必须证明：
+`backend_api_python/architecture/ai_boundary_guard.py` 静态检查确定性交易核心与策略服务。它禁止新的 AI/LLM provider import，也禁止直接将模型输出送入 Canonical Entry、Risk Facts 或 Position Sizing。`ai_boundary_manifest.json` 的逐项遗留基线只允许减少；该 Guard 是静态边界，不替代遗留代码的可达性审计。
 
-- PR 为 Open / Draft，base 与批准基线一致，Head 精确一致且 mergeable/CLEAN。
-- Backend、PostgreSQL（适用时）、CodeQL、依赖/源码审计和 Secret Scan 均针对精确 Head 成功。
-- `git diff --check`、相关定向测试、完整相关回归、Architecture Guard 和 Live OFF 检查成功。
-- 合并后验证 local main = origin/main；Squash PR 需验证 main 与原 PR 分支 tree parity。
-- 仅在上述全部成立后清理远程分支、本地分支和 worktree。
+## 读模型边界
 
-## 当前与未来闸门
-
-| Gate | 状态 | 必要证据 | 禁止推断 |
-|---|---|---|---|
-| G4-A Admission Write Chain | DONE | PR #21、`b111fae`、精确 Head CI、Guard 46、baseline 44、Live OFF | 不把它写成 Projection Consumer 已完成 |
-| G4-B Read Cutover | DEFERRED | PR-14 的 Consumer、Candidate Projection、Shadow、Reconciliation、Derived Health 和故障演练 | 不因 Outbox 已存在而默认通过 |
-| Entry-Point Convergence Gate | NOT_STARTED | 七类入口收口、baseline 只减不增、无直接执行调用 | 不因 Adapter 存在而默认完成迁移 |
-| Read Cutover / G4-B Gate | DEFERRED | generation/watermark/replay、Shadow、Reconciliation、Derived Health、只读 API | 不让读模型参与交易决策 |
-| Legacy Retirement and Failure Drill Gate | NOT_STARTED | 无遗留权威事实、无孤儿、升级/重启/重复/网络/DB 故障演练 | 不把 16/16 解释为自动 Live |
+Projection、Shadow Diff、Reconciliation 与 Derived Health 只能解释、比较或暴露事实；它们永不得产生交易决定。G4-B 留待 SC-14。
