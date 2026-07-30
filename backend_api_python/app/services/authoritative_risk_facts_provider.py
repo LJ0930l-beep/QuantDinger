@@ -134,7 +134,10 @@ class AuthoritativeRiskFactsProvider:
 
     @staticmethod
     def _provenance(kind: RiskFactSourceKind, row: Any, identity_i: int, version_i: int, fingerprint_i: int, observed_i: int, max_age_i: int, anchor: datetime) -> RiskFactProvenance:
-        provenance = RiskFactProvenance(kind, _value(row, identity_i, "source_identity"), str(_value(row, version_i, "source_version")), _value(row, fingerprint_i, "source_fingerprint"), _utc(_value(row, observed_i, "observed_at"), "observed_at"), _value(row, max_age_i, "max_age_seconds"))
+        # PostgreSQL returns UUID primary keys as UUID instances.  Provenance
+        # canonically carries their text form; do not reject an otherwise
+        # authoritative checkpoint merely because its durable identifier is typed.
+        provenance = RiskFactProvenance(kind, str(_value(row, identity_i, "source_identity")), str(_value(row, version_i, "source_version")), _value(row, fingerprint_i, "source_fingerprint"), _utc(_value(row, observed_i, "observed_at"), "observed_at"), _value(row, max_age_i, "max_age_seconds"))
         provenance.validate_selection_anchor(anchor)
         return provenance
 

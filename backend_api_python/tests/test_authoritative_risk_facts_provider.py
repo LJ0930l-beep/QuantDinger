@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import unittest
+from uuid import UUID
 
 from tests.pr12c_admission_loader import load_pr12c_admission
 
@@ -68,13 +69,13 @@ class _Connection:
     def cursor(self): return self.cursor_value
 
 
-def source_rows(*, market_health="FRESH"):
+def source_rows(*, market_health="FRESH", reconciliation_identity="33333333-3333-3333-3333-333333333333"):
     switch = ("switch-source", "v1", HASH, anchor, 60, 1, False, None)
     return [
         [("policy-source", "policy-v1", HASH, anchor, 60, 30, "USDT", "1000", "700", "600", "4", "100", "100", "0.2")],
         [("rule-source", "rule-v1", HASH, anchor, 60, "USDT", "1", "0.25")],
         [("account-source", "facts-v1", HASH, anchor, 60, "USDT", "100", "100", "100", "800", "500", "500", "0", True)],
-        [("33333333-3333-3333-3333-333333333333", "HEALTHY", 1, HASH, anchor, 60, None)],
+        [(reconciliation_identity, "HEALTHY", 1, HASH, anchor, 60, None)],
         [switch], [switch], [switch],
         [("market-source", "market-v1", HASH, anchor, 60, "USDT", "MARK", "50", market_health)],
         [],  # advisory lock has no row result
@@ -115,6 +116,15 @@ class AuthoritativeRiskFactsProviderTests(unittest.TestCase):
         )
         self.assertFalse(decision.decision.allowed)
         self.assertIn("MARKET_DATA_NOT_FRESH", {item.value for item in decision.decision.rejections})
+
+    def test_postgres_style_uuid_checkpoint_identity_is_canonicalized_for_provenance(self):
+        checkpoint_id = UUID("33333333-3333-3333-3333-333333333333")
+        result = self._prepare(source_rows(reconciliation_identity=checkpoint_id))
+        reconciliation = next(
+            item for item in result.provenance
+            if item.source_kind is m.authoritative_risk_facts.RiskFactSourceKind.RECONCILIATION
+        )
+        self.assertEqual(str(checkpoint_id), reconciliation.source_identity)
 
     def test_missing_policy_fails_closed_and_closes_cursor(self):
         cursor = _Cursor([[]])

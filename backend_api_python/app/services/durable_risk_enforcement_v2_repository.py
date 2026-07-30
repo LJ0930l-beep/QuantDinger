@@ -182,8 +182,8 @@ class DurableRiskEnforcementRepositoryV2:
                 required.add("MARKET")
             if source_kinds != required:
                 raise DurableRiskConflict("existing durable risk chain lacks exact authoritative provenance")
-            allowed = _row(row, 21, "allowed")
-            status = _row(row, 22, "decision_status")
+            allowed = _row(row, 20, "allowed")
+            status = _row(row, 21, "decision_status")
             cursor.execute(f"SELECT id FROM {DURABLE_RISK_RESERVATION_TABLE} WHERE decision_id = %s AND state = 'ACTIVE' FOR UPDATE", (decision_id,))
             reservations = cursor.fetchall()
             if allowed and spec.action in {OrderAction.OPEN, OrderAction.INCREASE}:
@@ -205,7 +205,7 @@ class DurableRiskEnforcementRepositoryV2:
                 entry_occurred_at=spec.occurred_at, scope_fingerprint=_row(row, 18, "scope_fingerprint"),
                 audit_fingerprint=_row(row, 19, "audit_fingerprint"), decision_id=decision_id,
                 reservation_id=reservation_id, allowed=allowed, decision_status=status,
-                decision_fingerprint=_row(row, 23, "decision_fingerprint"),
+                decision_fingerprint=_row(row, 22, "decision_fingerprint"),
                 disposition=DurableRiskPersistDisposition.REPLAYED,
             )
         except (DurableRiskConflict, DurableRiskRepositoryError):
