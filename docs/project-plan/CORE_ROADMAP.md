@@ -14,11 +14,11 @@
 
 ## PR-13：Entry-Point Convergence
 
-**目标状态：NOT_STARTED。** 完成后预期正式路线为 **14 / 16 = 87.5%**。
+**目标状态：BLOCKED。** 前置阻塞为 RF-01 Runtime Authoritative Hard Risk Facts Provider；完成后预期正式路线为 **14 / 16 = 87.5%**。
 
 | Task ID | 状态 | 目标 | 依赖 | 允许范围 | 禁止范围 | 交付物 | 验证证据 | 闸门 | 停止条件 | 仓库 | 分支 / PR | 最后批准 Head |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| C13-01 | NOT_STARTED | 重新确认 REST、MANUAL、STRATEGY、PROTECTION、AGENT、MCP、GRID 与 44 条 legacy bypass 的实际库存 | `b111fae` | 只读 inventory 与 Guard 证据 | 运行时改动、baseline 扩大 | 入口—旁路映射 | 路径、符号、调用证据 | PR-13 设计闸门 | 发现未知入口或 baseline 增加 | 后端 | TBD / TBD | `b111fae` |
+| C13-01 | BLOCKED | 重新确认 REST、MANUAL、STRATEGY、PROTECTION、AGENT、MCP、GRID 与 44 条 legacy bypass 的实际库存 | RF-01 完成并验证生产权威 Risk Facts Provider | 只读 inventory 与 Guard 证据 | 运行时改动、baseline 扩大 | 入口—旁路映射 | 路径、符号、调用证据 | PR-13 设计闸门 | 发现未知入口或 baseline 增加 | 后端 | TBD / TBD | `c211c6a` |
 | C13-02 | NOT_STARTED | 为每类入口定义到 `DurableEntryGraphV2` 的无损 Adapter 合同 | C13-01 | 纯合同、适配器测试 | Schema、Executor、Exchange | 七类 Adapter 合同 | action/actor/scope/idempotency/correlation/fingerprint 测试 | Adapter Contract Gate | 缺少权威事实或需 fake legacy fact | 后端 | `phase0/pr-13-*` / TBD | TBD |
 | C13-03 | NOT_STARTED | 迁移 REST / MANUAL 入口 | C13-02 | 已批准入口收口与回归测试 | 直接交易执行、Live | 两类入口经 Admission 的证据 | caller-owned 原子链、CI、Guard 下降 | Entry-Point Convergence Gate | 绕过 Hard Risk 或产生 legacy 订单图 | 后端 | `phase0/pr-13-*` / TBD | TBD |
 | C13-04 | NOT_STARTED | 迁移 STRATEGY 入口 | C13-02 | Strategy Adapter 与测试 | Strategy Runtime 业务重构、Exchange | Strategy 收口证据 | 仅通过 Admission；精确 Head CI | Entry-Point Convergence Gate | 直接 Executor/Exchange 调用 | 后端 | `phase0/pr-13-*` / TBD | TBD |
