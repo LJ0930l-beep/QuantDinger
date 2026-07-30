@@ -302,24 +302,15 @@ def _record_quick_trade(
 @login_required
 @quick_trade_blp.arguments(QuickTradeOrderRequestSchema, location="json")
 def place_order(body):
-    """
-    Place a quick market or limit order.
+    """Reject the retired legacy quick-trade order mutation endpoint."""
+    # The legacy body carries ambiguous amount/leverage semantics and has no
+    # authoritative scope, instrument, or position subject.  It must not be
+    # silently translated into Canonical Entry V2 or reach an exchange client.
+    return jsonify({
+        "code": "LEGACY_QUICK_TRADE_DISABLED",
+        "msg": "Legacy quick trade is disabled pending canonical entry migration.",
+    }), 410
 
-    Body JSON:
-      credential_id  (int)    - saved exchange credential ID
-      symbol         (str)    - e.g. "BTC/USDT"
-      side           (str)    - "buy" or "sell"
-      order_type     (str)    - "market" or "limit"  (default: market)
-      amount         (float)  - spot quote amount or swap margin amount in USDT
-      price          (float)  - limit price (required for limit orders)
-      leverage       (int)    - leverage multiplier (default: 1)
-                                - leverage = 1: spot market
-                                - leverage > 1: swap (perpetual futures) market
-      market_type    (str)    - "swap" / "spot" (optional, auto-determined by leverage if not provided)
-      tp_price       (float)  - take-profit price (optional, for record only)
-      sl_price       (float)  - stop-loss price (optional, for record only)
-      source         (str)    - "ai_radar" / "ai_analysis" / "indicator" / "manual"
-    """
     try:
         user_id = g.user_id
         credential_id = int(body.get("credential_id") or 0)
@@ -1405,18 +1396,14 @@ def _quick_trade_net_base_qty(
 @login_required
 @quick_trade_blp.arguments(QuickTradeCloseRequestSchema, location="json")
 def close_position(body):
-    """
-    Close an existing position.
-    
-    Body JSON:
-      credential_id  (int)    - saved exchange credential ID
-      symbol         (str)    - e.g. "BTC/USDT"
-      market_type    (str)    - "swap" / "spot" (default: swap)
-      size           (float)  - position size to close (optional, defaults to full position)
-      close_scope    (str)    - "full" (default) or "system_tracked" (swap only: min(position, net from qd_quick_trades))
-      position_side  (str)    - optional "long" / "short"; required when both directions exist for the same symbol
-      source         (str)    - "ai_radar" / "ai_analysis" / "indicator" / "manual"
-    """
+    """Reject the retired legacy quick-trade position mutation endpoint."""
+    # Closing must also wait for a persisted target-position authority; the
+    # legacy body cannot prove it and must fail closed before any venue call.
+    return jsonify({
+        "code": "LEGACY_QUICK_TRADE_DISABLED",
+        "msg": "Legacy quick trade is disabled pending canonical entry migration.",
+    }), 410
+
     try:
         user_id = g.user_id
         credential_id = int(body.get("credential_id") or 0)

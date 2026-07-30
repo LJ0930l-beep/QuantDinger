@@ -20,7 +20,9 @@ RECONCILIATION_MIGRATION = MIGRATIONS / "20260728_reconciliation_health_schema.s
 DURABLE_ENTRY_MIGRATION = MIGRATIONS / "20260729_durable_entry_specifications.sql"
 DURABLE_RISK_V2_MIGRATION = MIGRATIONS / "20260730_durable_risk_enforcement_v2.sql"
 AUTHORITATIVE_RISK_FACTS_MIGRATION = MIGRATIONS / "20260731_authoritative_risk_fact_sources.sql"
-INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION, DURABLE_RISK_V2_MIGRATION, AUTHORITATIVE_RISK_FACTS_MIGRATION)
+INSTRUMENT_RISK_RULES_MIGRATION = MIGRATIONS / "20260801_authoritative_instrument_risk_rules.sql"
+RUNTIME_ENTRY_AUTHORITY_MIGRATION = MIGRATIONS / "20260802_runtime_entry_authority.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION, DURABLE_RISK_V2_MIGRATION, AUTHORITATIVE_RISK_FACTS_MIGRATION, INSTRUMENT_RISK_RULES_MIGRATION, RUNTIME_ENTRY_AUTHORITY_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -68,6 +70,11 @@ EXPECTED_TABLES = {
     "qd_authoritative_market_observations",
     "qd_authoritative_kill_switch_observations",
     "qd_durable_risk_fact_provenance",
+    "qd_authoritative_instrument_risk_rules",
+    "qd_runtime_entry_scope_bindings",
+    "qd_runtime_entry_instrument_authorities",
+    "qd_runtime_entry_position_subjects",
+    "qd_runtime_entry_ingresses",
 }
 
 # These are representative pre-existing upstream tables whose availability is
@@ -316,6 +323,32 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "source_observed_at <= selection_anchor",
             "NUMERIC(38,18)",
             "ON DELETE RESTRICT",
+        ):
+            self.assertIn(fragment, migration)
+        self.assertNotIn("ON DELETE CASCADE", migration)
+
+    def test_runtime_entry_authority_schema_is_typed_scoped_and_append_only(self):
+        migration = RUNTIME_ENTRY_AUTHORITY_MIGRATION.read_text(encoding="utf-8")
+        for table in (
+            "qd_runtime_entry_scope_bindings",
+            "qd_runtime_entry_instrument_authorities",
+            "qd_runtime_entry_position_subjects",
+            "qd_runtime_entry_ingresses",
+        ):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
+            self.assertIn(f"{table}_append_only", migration)
+        for fragment in (
+            "contract_version = 'runtime-entry-authority-v1'",
+            "instrument_rule_snapshot_id UUID NOT NULL",
+            "reconciliation_checkpoint_id UUID NOT NULL",
+            "position_projection_id UUID NOT NULL",
+            "REFERENCES qd_durable_entry_specifications(command_id) ON DELETE RESTRICT",
+            "qd_assert_runtime_entry_scope_binding",
+            "qd_assert_runtime_entry_instrument_authority",
+            "qd_assert_runtime_entry_position_subject",
+            "qd_assert_runtime_entry_ingress",
+            "IS DISTINCT FROM",
+            "checkpoint_record.status <> 'HEALTHY'",
         ):
             self.assertIn(fragment, migration)
         self.assertNotIn("ON DELETE CASCADE", migration)
