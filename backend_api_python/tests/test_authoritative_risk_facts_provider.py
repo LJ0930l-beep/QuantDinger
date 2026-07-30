@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import unittest
 
@@ -90,6 +90,26 @@ class AuthoritativeRiskFactsProviderTests(unittest.TestCase):
     def test_missing_policy_fails_closed_and_closes_cursor(self):
         cursor = _Cursor([[]])
         with self.assertRaises(m.authoritative_risk_facts.RiskFactsUnavailable):
+            m.authoritative_risk_provider.AuthoritativeRiskFactsProvider().prepare(_Connection(cursor), graph())
+        self.assertTrue(cursor.closed)
+
+    def test_expired_persisted_source_fails_closed_without_a_market_fallback(self):
+        rows = source_rows()
+        policy = list(rows[0][0])
+        policy[3] = anchor - timedelta(seconds=61)
+        rows[0] = [tuple(policy)]
+        cursor = _Cursor(rows)
+        with self.assertRaises(m.authoritative_risk_facts.RiskFactsStale):
+            m.authoritative_risk_provider.AuthoritativeRiskFactsProvider().prepare(_Connection(cursor), graph())
+        self.assertTrue(cursor.closed)
+
+    def test_unclassified_driver_error_is_wrapped_and_cursor_is_closed(self):
+        class BrokenCursor(_Cursor):
+            def execute(self, query, params=()):
+                raise RuntimeError("driver fault")
+
+        cursor = BrokenCursor([])
+        with self.assertRaises(m.authoritative_risk_facts.RiskFactsRepositoryError):
             m.authoritative_risk_provider.AuthoritativeRiskFactsProvider().prepare(_Connection(cursor), graph())
         self.assertTrue(cursor.closed)
 

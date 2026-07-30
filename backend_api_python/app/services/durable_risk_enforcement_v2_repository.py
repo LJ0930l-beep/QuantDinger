@@ -20,6 +20,7 @@ from app.domain.durable_entry_persistence_contracts import (
     DURABLE_ENTRY_CONTRACT_VERSION,
     DURABLE_ENTRY_SPECIFICATION_TABLE,
 )
+from app.domain.canonical_entry_v2_contracts import DurableEntryGraphV2, EconomicOrderSubject
 from app.domain.order_contracts import OrderAction
 from app.domain.durable_risk_enforcement_v2_contracts import (
     DURABLE_RISK_DECISION_TABLE,
@@ -124,9 +125,12 @@ class DurableRiskEnforcementRepositoryV2:
     def load_complete_replay(
         self,
         connection: Connection,
-        graph: Any,
+        graph: DurableEntryGraphV2,
     ) -> DurableRiskPersistResultV2 | None:
         """Return an exact completed chain before any source facts are re-read."""
+
+        if not isinstance(graph, DurableEntryGraphV2) or not isinstance(graph.subject, EconomicOrderSubject):
+            raise DurableRiskConflict("durable risk replay requires a typed non-CANCEL durable graph")
 
         try:
             cursor = connection.cursor()
