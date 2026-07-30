@@ -19,7 +19,8 @@ SHADOW_DIFF_MIGRATION = MIGRATIONS / "20260726_shadow_diff_schema.sql"
 RECONCILIATION_MIGRATION = MIGRATIONS / "20260728_reconciliation_health_schema.sql"
 DURABLE_ENTRY_MIGRATION = MIGRATIONS / "20260729_durable_entry_specifications.sql"
 DURABLE_RISK_V2_MIGRATION = MIGRATIONS / "20260730_durable_risk_enforcement_v2.sql"
-INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION, DURABLE_RISK_V2_MIGRATION)
+AUTHORITATIVE_RISK_FACTS_MIGRATION = MIGRATIONS / "20260731_authoritative_risk_fact_sources.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION, DURABLE_RISK_V2_MIGRATION, AUTHORITATIVE_RISK_FACTS_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -62,6 +63,11 @@ EXPECTED_TABLES = {
     "qd_durable_risk_input_snapshots",
     "qd_durable_risk_decisions",
     "qd_durable_risk_reservations",
+    "qd_authoritative_risk_policies",
+    "qd_authoritative_account_risk_facts",
+    "qd_authoritative_market_observations",
+    "qd_authoritative_kill_switch_observations",
+    "qd_durable_risk_fact_provenance",
 }
 
 # These are representative pre-existing upstream tables whose availability is
@@ -285,6 +291,33 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
         self.assertNotIn("qd_order_commands", migration)
         self.assertNotIn("qd_order_intents_v2", migration)
         self.assertNotIn("qd_economic_orders", migration)
+        self.assertNotIn("ON DELETE CASCADE", migration)
+
+    def test_authoritative_risk_fact_sources_are_typed_scoped_and_append_only(self):
+        migration = AUTHORITATIVE_RISK_FACTS_MIGRATION.read_text(encoding="utf-8")
+        for table in (
+            "qd_authoritative_risk_policies",
+            "qd_authoritative_account_risk_facts",
+            "qd_authoritative_market_observations",
+            "qd_authoritative_kill_switch_observations",
+            "qd_durable_risk_fact_provenance",
+        ):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
+            self.assertIn(f"{table}_append_only", migration)
+        for fragment in (
+            "contract_version = 'authoritative-risk-facts-v1'",
+            "strategy_scope VARCHAR(160) NOT NULL",
+            "source_identity VARCHAR(160) NOT NULL",
+            "source_version VARCHAR(160) NOT NULL",
+            "source_fingerprint VARCHAR(64) NOT NULL",
+            "observed_at TIMESTAMPTZ NOT NULL",
+            "max_age_seconds INTEGER NOT NULL",
+            "selection_anchor TIMESTAMPTZ NOT NULL",
+            "source_observed_at <= selection_anchor",
+            "NUMERIC(38,18)",
+            "ON DELETE RESTRICT",
+        ):
+            self.assertIn(fragment, migration)
         self.assertNotIn("ON DELETE CASCADE", migration)
 
     def test_init_sql_retains_representative_upstream_trading_tables(self):
