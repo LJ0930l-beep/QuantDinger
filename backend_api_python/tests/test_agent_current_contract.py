@@ -70,7 +70,7 @@ def _reset_agent_auth():
     agent_auth._rate_state.clear()
 
 
-def test_live_capable_token_never_silently_falls_back_to_paper(client, monkeypatch):
+def test_live_capable_token_is_fail_closed_when_agent_execution_is_retired(client, monkeypatch):
     token = {
         "id": 9,
         "user_id": 1,
@@ -94,8 +94,8 @@ def test_live_capable_token_never_silently_falls_back_to_paper(client, monkeypat
         headers={"Authorization": "Bearer qd_agent_TESTTOKEN12345"},
         json={"market": "Crypto", "symbol": "BTC/USDT", "side": "buy", "qty": 0.01},
     )
-    assert response.status_code == 501
-    assert "AGENT_LIVE_TRADING_ENABLED" in response.get_json()["message"]
+    assert response.status_code == 410
+    assert "permanently disabled" in response.get_json()["message"].lower()
 
 
 def test_paper_limit_order_only_fills_when_marketable():
