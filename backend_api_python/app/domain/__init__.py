@@ -84,6 +84,15 @@ from .projection_consumer_contracts import (
     RegisteredProjectionConsumer,
     UnsupportedProjectionEvent,
 )
+from .projection_replay_contracts import (
+    PROJECTION_REPLAY_CONTRACT_VERSION,
+    ProjectionReplayDisposition,
+    ProjectionReplayError,
+    ProjectionReplayEvent,
+    ProjectionReplayResult,
+    ProjectionReplayState,
+    apply_projection_replay,
+)
 from .candidate_shadow_contracts import (
     CANDIDATE_GENERATION_CONTRACT_VERSION,
     CandidateGenerationBinding,
@@ -468,6 +477,13 @@ __all__ = [
     "ProjectionConsumerContractError",
     "RegisteredProjectionConsumer",
     "UnsupportedProjectionEvent",
+    "PROJECTION_REPLAY_CONTRACT_VERSION",
+    "ProjectionReplayDisposition",
+    "ProjectionReplayError",
+    "ProjectionReplayEvent",
+    "ProjectionReplayResult",
+    "ProjectionReplayState",
+    "apply_projection_replay",
     "CANDIDATE_GENERATION_CONTRACT_VERSION",
     "CandidateGenerationBinding",
     "CandidateGenerationConflict",
