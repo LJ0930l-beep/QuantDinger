@@ -39,6 +39,8 @@ def _first_terminal(node: ast.FunctionDef) -> ast.stmt:
 class SC15TerminalGuardProofTests(unittest.TestCase):
     def test_route_and_helper_mutations_are_terminal(self):
         checks = {
+            "app/routes/alpaca.py": {"place_order": ast.Return, "cancel_order": ast.Return},
+            "app/routes/ibkr.py": {"place_order": ast.Return, "cancel_order": ast.Return},
             "app/routes/quick_trade.py": {"place_order": ast.Return, "close_position": ast.Return},
             "app/routes/agent_v1/quick_trade.py": {"place_order": ast.Return, "_place_live_order": ast.Raise},
             "app/services/quick_trade/orders.py": {"attach_quick_trade_protection": ast.Raise},
