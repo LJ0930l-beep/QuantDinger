@@ -84,6 +84,15 @@ from .projection_consumer_contracts import (
     RegisteredProjectionConsumer,
     UnsupportedProjectionEvent,
 )
+from .projection_replay_contracts import (
+    PROJECTION_REPLAY_CONTRACT_VERSION,
+    ProjectionReplayDisposition,
+    ProjectionReplayError,
+    ProjectionReplayEvent,
+    ProjectionReplayResult,
+    ProjectionReplayState,
+    apply_projection_replay,
+)
 from .candidate_shadow_contracts import (
     CANDIDATE_GENERATION_CONTRACT_VERSION,
     CandidateGenerationBinding,
@@ -314,6 +323,16 @@ from .portfolio_risk_contracts import (
     evaluate_position_sizing,
     portfolio_risk_fingerprint,
 )
+from .portfolio_exposure_contracts import (
+    PORTFOLIO_EXPOSURE_CONTRACT_VERSION,
+    ExposureLimitDisposition,
+    ExposureSide,
+    PortfolioExposureError,
+    PortfolioExposureLimitDecision,
+    PortfolioExposureSnapshot,
+    PositionExposureFact,
+    evaluate_portfolio_exposure_limit,
+)
 from .market_data_quality_contracts import (
     DataQualityAssessment,
     DataQualityStatus,
@@ -338,6 +357,14 @@ from .gate_extended_read_contracts import (
     GateOptionMarkFact,
     OptionRight,
     gate_extended_fingerprint,
+)
+from .paper_shadow_reducer_contracts import (
+    PAPER_SHADOW_REDUCER_CONTRACT_VERSION,
+    PaperShadowDecisionSet,
+    PaperShadowRecordResult,
+    PaperShadowReducerError,
+    SimulationRecordDisposition,
+    record_paper_shadow_decision,
 )
 
 __all__ = [
@@ -439,6 +466,13 @@ __all__ = [
     "ProjectionConsumerContractError",
     "RegisteredProjectionConsumer",
     "UnsupportedProjectionEvent",
+    "PROJECTION_REPLAY_CONTRACT_VERSION",
+    "ProjectionReplayDisposition",
+    "ProjectionReplayError",
+    "ProjectionReplayEvent",
+    "ProjectionReplayResult",
+    "ProjectionReplayState",
+    "apply_projection_replay",
     "CANDIDATE_GENERATION_CONTRACT_VERSION",
     "CandidateGenerationBinding",
     "CandidateGenerationConflict",
@@ -571,6 +605,14 @@ __all__ = [
     "SizingDisposition",
     "evaluate_position_sizing",
     "portfolio_risk_fingerprint",
+    "PORTFOLIO_EXPOSURE_CONTRACT_VERSION",
+    "ExposureLimitDisposition",
+    "ExposureSide",
+    "PortfolioExposureError",
+    "PortfolioExposureLimitDecision",
+    "PortfolioExposureSnapshot",
+    "PositionExposureFact",
+    "evaluate_portfolio_exposure_limit",
     "DataQualityAssessment",
     "DataQualityStatus",
     "MARKET_DATA_QUALITY_CONTRACT_VERSION",
@@ -590,6 +632,12 @@ __all__ = [
     "GateOptionMarkFact",
     "OptionRight",
     "gate_extended_fingerprint",
+    "PAPER_SHADOW_REDUCER_CONTRACT_VERSION",
+    "PaperShadowDecisionSet",
+    "PaperShadowRecordResult",
+    "PaperShadowReducerError",
+    "SimulationRecordDisposition",
+    "record_paper_shadow_decision",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
