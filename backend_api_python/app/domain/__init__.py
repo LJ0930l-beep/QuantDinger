@@ -252,6 +252,15 @@ from .backtest_dataset_contracts import (
     BacktestDatasetSnapshot,
     dataset_fingerprint,
 )
+from .strategy_signal_contracts import (
+    STRATEGY_SIGNAL_CONTRACT_VERSION,
+    SignalPattern,
+    StrategySignalContractError,
+    StrategyStructureEvent,
+    build_strategy_signal,
+    detect_displacement,
+    detect_liquidity_sweep,
+)
 from .paper_shadow_contracts import (
     PAPER_SHADOW_CONTRACT_VERSION,
     PaperShadowContractError,
@@ -491,6 +500,13 @@ __all__ = [
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",
     "dataset_fingerprint",
+    "STRATEGY_SIGNAL_CONTRACT_VERSION",
+    "SignalPattern",
+    "StrategySignalContractError",
+    "StrategyStructureEvent",
+    "build_strategy_signal",
+    "detect_displacement",
+    "detect_liquidity_sweep",
     "PAPER_SHADOW_CONTRACT_VERSION",
     "PaperShadowContractError",
     "PaperShadowDecision",
