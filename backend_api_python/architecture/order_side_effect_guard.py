@@ -129,13 +129,47 @@ class _OrderCallVisitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self.scope.append(node.name)
-        self.generic_visit(node)
+        self._visit_function_body(node)
         self.scope.pop()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self.scope.append(node.name)
-        self.generic_visit(node)
+        self._visit_function_body(node)
         self.scope.pop()
+
+    def _visit_function_body(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        """Model terminal retirement guards without hiding reactivation."""
+        body = list(node.body)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(getattr(body[0], "value", None), ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body = body[1:]
+        if body and self._is_terminal_retirement(body[0]):
+            self.visit(body[0])
+            return
+        for statement in node.body:
+            self.visit(statement)
+
+    @staticmethod
+    def _is_terminal_retirement(statement: ast.stmt) -> bool:
+        if not isinstance(statement, ast.Return):
+            return False
+        value = statement.value
+        if isinstance(value, ast.Tuple) and len(value.elts) >= 2:
+            status = value.elts[1]
+            if isinstance(status, ast.Constant) and status.value == 410:
+                return True
+        if value is None:
+            return False
+        return any(
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and "permanently disabled" in node.value.lower()
+            for node in ast.walk(value)
+        )
 
     def visit_Call(self, node: ast.Call) -> None:
         pattern = self._forbidden_call_pattern(node.func)

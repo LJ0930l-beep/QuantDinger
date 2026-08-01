@@ -107,6 +107,40 @@ class OrderArchitectureGuardTests(unittest.TestCase):
             self.assertEqual(len(comparison.new_violations), 1)
             self.assertEqual(comparison.new_violations[0].pattern, "client.cancel_order")
 
+    def test_terminal_retirement_ignores_unreachable_calls_but_reactivation_is_detected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = self._write(
+                root,
+                "backend_api_python/app/routes/retired.py",
+                "def place(client):\n"
+                "    return {'status': 410}, 410\n"
+                "    return client.place_order({})\n",
+            )
+            baseline = scan_order_side_effects(root)
+            self.assertEqual(baseline, ())
+            path.write_text(
+                "def place(client):\n"
+                "    client.place_order({})\n",
+                encoding="utf-8",
+            )
+            violations = scan_order_side_effects(root)
+            self.assertEqual(len(violations), 1)
+            self.assertEqual(violations[0].pattern, "client.place_order")
+
+    def test_terminal_retirement_skips_docstring_before_return(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._write(
+                root,
+                "backend_api_python/app/services/grid/retired.py",
+                "def startup(client):\n"
+                "    \"\"\"retired\"\"\"\n"
+                "    return False, 'permanently disabled'\n"
+                "    client.place_market_order({})\n",
+            )
+            self.assertEqual(scan_order_side_effects(root), ())
+
     def test_virtualenv_build_generated_and_fixture_trees_are_excluded(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

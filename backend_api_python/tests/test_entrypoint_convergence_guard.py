@@ -47,7 +47,7 @@ class EntrypointConvergenceGuardTests(unittest.TestCase):
         comparison = compare_with_baseline(current, load_baseline(self.manifest))
         self.assertTrue(comparison.passed, comparison.new_violations)
         self.assertEqual(len(current), len(self.manifest["legacy_bypass_baseline"]))
-        self.assertEqual(len(current), 31)
+        self.assertEqual(len(current), 25)
         for item in self.manifest["legacy_bypass_baseline"]:
             self.assertNotIn("*", item["path"])
             self.assertNotIn("*", item["symbol"])

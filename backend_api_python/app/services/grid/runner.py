@@ -126,6 +126,8 @@ class GridRestingRunner:
         return self._engine.stop_reason
 
     def startup(self, current_price: float, *, bars_df: Any = None) -> tuple[bool, str]:
+        return False, "Grid direct trading entry is permanently disabled"
+
         cfg = GridBotConfig.from_trading_config(self.trading_config)
         try:
             fee_rate = float(self.trading_config.get("commission") or 0.0) / 100.0
@@ -242,6 +244,8 @@ class GridRestingRunner:
         bars_df: Any = None,
         is_closed_bar: bool = False,
     ) -> None:
+        return
+
         if not self._started or current_price <= 0:
             return
         if self._engine.stop_requested:
