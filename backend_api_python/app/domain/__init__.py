@@ -275,6 +275,13 @@ from .market_data_quality_contracts import (
     assess_point_in_time,
     quality_fingerprint,
 )
+from .gate_margin_read_contracts import (
+    GATE_MARGIN_CONTRACT_VERSION,
+    GateLeverageTier,
+    GateMarginContractError,
+    GateMarginSnapshot,
+    gate_margin_fingerprint,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -478,6 +485,11 @@ __all__ = [
     "MarketDataQualityError",
     "assess_point_in_time",
     "quality_fingerprint",
+    "GATE_MARGIN_CONTRACT_VERSION",
+    "GateLeverageTier",
+    "GateMarginContractError",
+    "GateMarginSnapshot",
+    "gate_margin_fingerprint",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
