@@ -140,6 +140,11 @@ from .strategy_v2_candidate_contracts import (
     StrategyV2CandidateError,
     StrategyV2CandidateTradePlan,
 )
+from .strategy_signal_candidate_contracts import (
+    STRATEGY_SIGNAL_CANDIDATE_CONTRACT_VERSION,
+    StrategySignalCandidateError,
+    candidate_from_strategy_signal,
+)
 from .projection_mapping_contracts import (
     CandidateProjectionFacts,
     PROJECTION_MAPPING_CONTRACT_VERSION,
@@ -488,6 +493,9 @@ __all__ = [
     "STRATEGY_V2_CANDIDATE_CONTRACT_VERSION",
     "StrategyV2CandidateError",
     "StrategyV2CandidateTradePlan",
+    "STRATEGY_SIGNAL_CANDIDATE_CONTRACT_VERSION",
+    "StrategySignalCandidateError",
+    "candidate_from_strategy_signal",
     "PROJECTION_CONSUMER_CONTRACT_VERSION",
     "ConsumerApplyDisposition",
     "ProjectionConsumeRequest",
