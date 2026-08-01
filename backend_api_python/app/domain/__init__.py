@@ -75,6 +75,15 @@ from .reducers import (
     reduce_economic_order,
     reduce_position,
 )
+from .projection_consumer_contracts import (
+    PROJECTION_CONSUMER_CONTRACT_VERSION,
+    ConsumerApplyDisposition,
+    ProjectionConsumeRequest,
+    ProjectionConsumeResult,
+    ProjectionConsumerContractError,
+    RegisteredProjectionConsumer,
+    UnsupportedProjectionEvent,
+)
 from .venue_order_contracts import (
     BINANCE_USDM_CLIENT_ID_PATTERN,
     CLIENT_ID_ALGORITHM_VERSION,
@@ -198,4 +207,11 @@ __all__ = [
     "STRATEGY_V2_CANDIDATE_CONTRACT_VERSION",
     "StrategyV2CandidateError",
     "StrategyV2CandidateTradePlan",
+    "PROJECTION_CONSUMER_CONTRACT_VERSION",
+    "ConsumerApplyDisposition",
+    "ProjectionConsumeRequest",
+    "ProjectionConsumeResult",
+    "ProjectionConsumerContractError",
+    "RegisteredProjectionConsumer",
+    "UnsupportedProjectionEvent",
 ]
