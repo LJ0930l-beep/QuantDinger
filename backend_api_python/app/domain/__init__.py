@@ -346,9 +346,12 @@ from .projection_replay_contracts import (
 )
 from .portfolio_exposure_contracts import (
     PORTFOLIO_EXPOSURE_CONTRACT_VERSION,
+    ExposureLimitDisposition,
+    ExposureSide,
     PortfolioExposureError,
     PortfolioExposureLimitDecision,
     PortfolioExposureSnapshot,
+    PositionExposureFact,
     evaluate_portfolio_exposure_limit,
 )
 from .market_data_quality_contracts import (
@@ -647,9 +650,12 @@ __all__ = [
     "ProjectionReplayResult",
     "apply_projection_replay",
     "PORTFOLIO_EXPOSURE_CONTRACT_VERSION",
+    "ExposureLimitDisposition",
+    "ExposureSide",
     "PortfolioExposureError",
     "PortfolioExposureLimitDecision",
     "PortfolioExposureSnapshot",
+    "PositionExposureFact",
     "evaluate_portfolio_exposure_limit",
     "DataQualityAssessment",
     "DataQualityStatus",
