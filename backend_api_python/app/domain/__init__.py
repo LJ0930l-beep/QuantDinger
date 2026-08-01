@@ -246,6 +246,12 @@ from .backtest_metrics_contracts import (
     build_walk_forward_windows,
     calculate_backtest_metrics,
 )
+from .backtest_dataset_contracts import (
+    BACKTEST_DATASET_CONTRACT_VERSION,
+    BacktestDatasetError,
+    BacktestDatasetSnapshot,
+    dataset_fingerprint,
+)
 from .paper_shadow_contracts import (
     PAPER_SHADOW_CONTRACT_VERSION,
     PaperShadowContractError,
@@ -481,6 +487,10 @@ __all__ = [
     "WalkForwardWindow",
     "build_walk_forward_windows",
     "calculate_backtest_metrics",
+    "BACKTEST_DATASET_CONTRACT_VERSION",
+    "BacktestDatasetError",
+    "BacktestDatasetSnapshot",
+    "dataset_fingerprint",
     "PAPER_SHADOW_CONTRACT_VERSION",
     "PaperShadowContractError",
     "PaperShadowDecision",
