@@ -84,6 +84,20 @@ from .projection_consumer_contracts import (
     RegisteredProjectionConsumer,
     UnsupportedProjectionEvent,
 )
+from .gate_readonly_contracts import (
+    GATE_TESTNET_API_PREFIX,
+    GATE_TESTNET_REST_BASE_URL,
+    GateEnvironment,
+    GateMarketType,
+    GateOhlcvBar,
+    GateReadCapabilityProfile,
+    GateReadonlyContractError,
+    GateUnsupportedEnvironment,
+    canonical_gate_testnet_base_url,
+    gate_testnet_api_url,
+    normalize_gate_ohlcv,
+    validate_gate_readonly_profile,
+)
 from .venue_order_contracts import (
     BINANCE_USDM_CLIENT_ID_PATTERN,
     CLIENT_ID_ALGORITHM_VERSION,
@@ -214,4 +228,16 @@ __all__ = [
     "ProjectionConsumerContractError",
     "RegisteredProjectionConsumer",
     "UnsupportedProjectionEvent",
+    "GATE_TESTNET_API_PREFIX",
+    "GATE_TESTNET_REST_BASE_URL",
+    "GateEnvironment",
+    "GateMarketType",
+    "GateOhlcvBar",
+    "GateReadCapabilityProfile",
+    "GateReadonlyContractError",
+    "GateUnsupportedEnvironment",
+    "canonical_gate_testnet_base_url",
+    "gate_testnet_api_url",
+    "normalize_gate_ohlcv",
+    "validate_gate_readonly_profile",
 ]
