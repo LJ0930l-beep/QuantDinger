@@ -165,6 +165,8 @@ class ReconciliationSourceSnapshot:
     asset_scope: str | None
     observed_at: datetime
     facts: Mapping[str, ReconciliationFactValue]
+    generation_id: UUID | str | None = None
+    checkpoint_watermark: int | None = None
     source_fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -184,6 +186,12 @@ class ReconciliationSourceSnapshot:
         if self.asset_scope is not None:
             object.__setattr__(self, "asset_scope", _text(self.asset_scope, "asset_scope", uppercase=True, max_length=24))
         object.__setattr__(self, "observed_at", _utc(self.observed_at, "observed_at"))
+        if (self.generation_id is None) != (self.checkpoint_watermark is None):
+            raise ReconciliationContractError("generation_id and checkpoint_watermark must be supplied together")
+        if self.generation_id is not None:
+            object.__setattr__(self, "generation_id", _uuid(self.generation_id, "generation_id"))
+            if isinstance(self.checkpoint_watermark, bool) or not isinstance(self.checkpoint_watermark, int) or self.checkpoint_watermark < 0:
+                raise ReconciliationContractError("checkpoint_watermark must be non-negative")
         canonical: dict[str, ReconciliationFactValue] = {}
         for key, value in self.facts.items():
             if not isinstance(value, ReconciliationFactValue):
@@ -202,6 +210,8 @@ class ReconciliationSourceSnapshot:
             "source_version": self.source_version,
             "scope": self.canonical_scope(),
             "observed_at": self.observed_at.isoformat(),
+            "generation_id": self.generation_id,
+            "checkpoint_watermark": self.checkpoint_watermark,
             "facts": {name: value.canonical_facts() for name, value in self.facts.items()},
         }
 
@@ -363,6 +373,8 @@ class ReconciliationResult:
         discrepancies = tuple(sorted(self.discrepancies, key=lambda item: item.discrepancy_fingerprint))
         if any(not isinstance(item, ReconciliationDiscrepancy) for item in discrepancies):
             raise ReconciliationContractError("discrepancies must use ReconciliationDiscrepancy")
+        if len({item.discrepancy_fingerprint for item in discrepancies}) != len(discrepancies):
+            raise ReconciliationContractError("discrepancy facts must be unique and append-only")
         object.__setattr__(self, "discrepancies", discrepancies)
         self._validate_bindings()
         replay = _fingerprint({
@@ -385,6 +397,13 @@ class ReconciliationResult:
     def _validate_bindings(self) -> None:
         if self.local.canonical_scope() != self.run.canonical_scope() or self.external.canonical_scope() != self.run.canonical_scope():
             raise ReconciliationContractError("source scope must exactly match reconciliation run scope")
+        if (
+            self.local.generation_id != self.run.local_generation_id
+            or self.local.checkpoint_watermark != self.run.local_checkpoint_watermark
+        ):
+            raise ReconciliationContractError("local source must bind the run generation and checkpoint watermark")
+        if self.external.generation_id is not None or self.external.checkpoint_watermark is not None:
+            raise ReconciliationContractError("external source cannot claim a local generation checkpoint")
         if self.local.observed_at != self.run.local_observed_at or self.external.observed_at != self.run.external_observed_at:
             raise ReconciliationContractError("source observed_at must exactly match run facts")
         if (self.external.source_identity != self.run.external_observation_identity
@@ -419,6 +438,11 @@ def compare_reconciliation_state(
         discrepancies.append(ReconciliationDiscrepancy("local", ReconciliationDiscrepancyKind.STALE_LOCAL, ReconciliationSeverity.BLOCKING, detail="stale_local"))
     if maximum_age and (run.as_of - external.observed_at).total_seconds() > maximum_age:
         discrepancies.append(ReconciliationDiscrepancy("external", ReconciliationDiscrepancyKind.STALE_EXTERNAL, ReconciliationSeverity.BLOCKING, detail="stale_external"))
+    if not local.facts and not external.facts:
+        discrepancies.append(ReconciliationDiscrepancy(
+            "facts", ReconciliationDiscrepancyKind.UNSUPPORTED_FACT,
+            ReconciliationSeverity.BLOCKING, detail="missing_facts",
+        ))
     for name in sorted(set(local.facts) | set(external.facts)):
         left, right = local.facts.get(name), external.facts.get(name)
         if left is None:

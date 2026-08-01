@@ -17,7 +17,7 @@ SHA = "a" * 64
 def comparison():
     fact = s.ReconciliationFactValue("1", s.ReconciliationFactKind.QUANTITY, "BTC")
     external = s.ReconciliationSourceSnapshot("venue", "facts-v1", 1, 2, "primary", "binance", "swap", "BTCUSDT", None, NOW, {"position": fact})
-    local = s.ReconciliationSourceSnapshot("local", "facts-v1", 1, 2, "primary", "binance", "swap", "BTCUSDT", None, NOW, {"position": fact})
+    local = s.ReconciliationSourceSnapshot("local", "facts-v1", 1, 2, "primary", "binance", "swap", "BTCUSDT", None, NOW, {"position": fact}, UUID("22222222-2222-2222-2222-222222222222"), 7)
     run = s.ReconciliationRun(
         UUID("11111111-1111-1111-1111-111111111111"), 1, 2, "primary", "binance", "swap", "BTCUSDT", None,
         UUID("22222222-2222-2222-2222-222222222222"), "ledger", SHA, 7,
