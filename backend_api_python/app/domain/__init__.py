@@ -266,6 +266,15 @@ from .portfolio_risk_contracts import (
     evaluate_position_sizing,
     portfolio_risk_fingerprint,
 )
+from .market_data_quality_contracts import (
+    DataQualityAssessment,
+    DataQualityStatus,
+    MARKET_DATA_QUALITY_CONTRACT_VERSION,
+    MarketDataEventFact,
+    MarketDataQualityError,
+    assess_point_in_time,
+    quality_fingerprint,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -462,6 +471,13 @@ __all__ = [
     "SizingDisposition",
     "evaluate_position_sizing",
     "portfolio_risk_fingerprint",
+    "DataQualityAssessment",
+    "DataQualityStatus",
+    "MARKET_DATA_QUALITY_CONTRACT_VERSION",
+    "MarketDataEventFact",
+    "MarketDataQualityError",
+    "assess_point_in_time",
+    "quality_fingerprint",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
