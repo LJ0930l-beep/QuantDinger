@@ -30,7 +30,7 @@ class PendingOrderWorkerRetirementTests(unittest.TestCase):
         method = _method("_tick")
         self.assertIsInstance(method.body[0], ast.Return)
         source = SOURCE.read_text(encoding="utf-8")
-        self.assertIn("pending_orders consumption is retired", source)
+        self.assertIn("legacy queue is permanently disabled", source)
         self.assertNotIn("ENABLE_PENDING_ORDER_WORKER=true", source)
 
     def test_retirement_does_not_add_a_new_direct_order_call(self):
