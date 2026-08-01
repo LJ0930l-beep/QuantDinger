@@ -245,6 +245,16 @@ from .paper_shadow_contracts import (
     SimulationMode,
     simulation_fingerprint,
 )
+from .strategy_library_contracts import (
+    STRATEGY_LIBRARY_CONTRACT_VERSION,
+    SignalDirection,
+    StrategyDefinition,
+    StrategyFamily,
+    StrategyLibraryError,
+    StrategyParameterFact,
+    StrategySignalFact,
+    strategy_fingerprint,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -424,6 +434,14 @@ __all__ = [
     "SimulationDisposition",
     "SimulationMode",
     "simulation_fingerprint",
+    "STRATEGY_LIBRARY_CONTRACT_VERSION",
+    "SignalDirection",
+    "StrategyDefinition",
+    "StrategyFamily",
+    "StrategyLibraryError",
+    "StrategyParameterFact",
+    "StrategySignalFact",
+    "strategy_fingerprint",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
