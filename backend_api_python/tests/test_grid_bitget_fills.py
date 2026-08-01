@@ -184,7 +184,7 @@ def test_query_grid_order_fill_bybit_filled():
 
 
 def test_execute_grid_market_order_requires_fill(monkeypatch):
-    from app.services.grid.exchange_orders import execute_grid_market_order
+    from app.services.grid.exchange_orders import GridTradingDisabledError, execute_grid_market_order
 
     class FakeResult:
         exchange_order_id = "oid1"
@@ -198,29 +198,14 @@ def test_execute_grid_market_order_requires_fill(monkeypatch):
         "app.services.grid.exchange_orders.wait_grid_market_fill",
         lambda *a, **k: (0.0, 0.0),
     )
-    ok, filled, avg = execute_grid_market_order(
-        client,
-        symbol="BTC/USDT",
-        signal_type="open_long",
-        quantity=0.01,
-        market_type="swap",
-        exchange_config={},
-    )
-    assert ok is False
-    assert filled == 0.0
+    with pytest.raises(GridTradingDisabledError, match="permanently disabled"):
+        execute_grid_market_order(
+            client,
+            symbol="BTC/USDT",
+            signal_type="open_long",
+            quantity=0.01,
+            market_type="swap",
+            exchange_config={},
+        )
 
-    monkeypatch.setattr(
-        "app.services.grid.exchange_orders.wait_grid_market_fill",
-        lambda *a, **k: (0.004, 73000.0),
-    )
-    ok2, filled2, avg2 = execute_grid_market_order(
-        client,
-        symbol="BTC/USDT",
-        signal_type="open_long",
-        quantity=0.01,
-        market_type="swap",
-        exchange_config={},
-    )
-    assert ok2 is True
-    assert filled2 == 0.004
-    assert avg2 == 73000.0
+    assert client.method_calls == []
