@@ -306,6 +306,9 @@ class GridEngine:
         *,
         client_order_id: Optional[str] = None,
     ) -> bool:
+        # Grid is retired from the trading authority.  Keep this terminal
+        # boundary before any recovery query, client creation, or legacy fill.
+        return False
         lev = self.cfg.leverage if self.cfg.market_type != "spot" else 1.0
         qty = float(usdt or 0) * lev / float(price) if price > 0 else 0.0
         if qty <= 0:
@@ -369,6 +372,8 @@ class GridEngine:
         return True
 
     def run_initial_market_position(self, current_price: float) -> bool:
+        # Retired Grid must not query an exchange or write a legacy order leg.
+        return False
         if self.cfg.initial_position_pct <= 0:
             self._initial_done = True
             return True
@@ -524,6 +529,9 @@ class GridEngine:
         return False
 
     def sync_grid_orders(self, current_price: float) -> int:
+        # Retired Grid has no order-producing path until a future Admission
+        # adapter is explicitly approved.
+        return 0
         if not self._bootstrapped or self._paused_entries or current_price <= 0:
             return 0
         if self._runtime_params.get("waterfall_pause"):
@@ -1000,6 +1008,8 @@ class GridEngine:
         pos_side: str,
         quantity: Optional[float] = None,
     ) -> bool:
+        # Keep the legacy exchange helper unreachable at the engine boundary.
+        return False
         px = float(price or 0)
         if px <= 0:
             return False
@@ -1185,6 +1195,9 @@ class GridEngine:
                     )
 
     def handle_boundary(self, current_price: float) -> bool:
+        # Boundary handling must not enqueue a legacy close or cancel an
+        # exchange order outside canonical admission.
+        return False
         upper, lower = self.cfg.effective_bounds(self._runtime_params)
         if upper <= lower or current_price <= 0:
             return False
@@ -1226,6 +1239,8 @@ class GridEngine:
         return True
 
     def cancel_entry_orders_on_exchange(self) -> None:
+        # Retired Grid cannot perform exchange cancellation side effects.
+        return None
         open_orders = self._orders.list_open(self.strategy_id)
         try:
             client = self._create_client()
@@ -1260,6 +1275,8 @@ class GridEngine:
                 self._orders.update_status(int(o.id), status="cancelled")
 
     def cancel_all_orders_on_exchange(self) -> None:
+        # Retired Grid cannot perform exchange cancellation side effects.
+        return None
         open_orders = self._orders.list_open(self.strategy_id)
         try:
             client = self._create_client()
