@@ -51,7 +51,7 @@ def test_grid_startup_fails_before_initial_market_when_client_missing():
     )
     ok, msg = runner.startup(95000.0)
     assert ok is False
-    assert "Missing OKX" in msg
+    assert "permanently disabled" in msg
     assert calls["market"] == 0
 
 
@@ -96,9 +96,9 @@ def test_grid_startup_places_limits_when_client_ok():
                 create_client_fn=_create_client,
             )
             ok, msg = runner.startup(95000.0)
-    assert ok is True
-    assert msg == ""
-    assert place.called
+    assert ok is False
+    assert "permanently disabled" in msg
+    assert not place.called
 
 
 def test_grid_config_rejects_spacing_that_cannot_cover_round_trip_fees():

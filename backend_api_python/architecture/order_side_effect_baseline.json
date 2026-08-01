@@ -4,77 +4,14 @@
     "symbol": "_place_live_order",
     "pattern": "alias:place_order_from_signal->place_order_from_signal",
     "fingerprint": "ba706fac304a81e50f78de2e",
-    "line": 197
+    "line": 199
   },
   {
     "path": "backend_api_python/app/routes/agent_v1/quick_trade.py",
     "symbol": "_place_live_order",
     "pattern": "client.place_limit_order",
     "fingerprint": "3a7875202e897b81b5ff5b1b",
-    "line": 207
-  },
-  {
-    "path": "backend_api_python/app/routes/alpaca.py",
-    "symbol": "cancel_order",
-    "pattern": "client.cancel_order",
-    "fingerprint": "277f0c2801a142427a4e5590",
-    "line": 420
-  },
-  {
-    "path": "backend_api_python/app/routes/alpaca.py",
-    "symbol": "place_order",
-    "pattern": "client.place_limit_order",
-    "fingerprint": "9777f71158bde88175511c63",
-    "line": 388
-  },
-  {
-    "path": "backend_api_python/app/routes/alpaca.py",
-    "symbol": "place_order",
-    "pattern": "client.place_market_order",
-    "fingerprint": "5d828bfbcee0442d9c078067",
-    "line": 393
-  },
-  {
-    "path": "backend_api_python/app/routes/ibkr.py",
-    "symbol": "cancel_order",
-    "pattern": "client.cancel_order",
-    "fingerprint": "27236f99901ab98a72b36f2e",
-    "line": 299
-  },
-  {
-    "path": "backend_api_python/app/routes/ibkr.py",
-    "symbol": "place_order",
-    "pattern": "client.place_limit_order",
-    "fingerprint": "c27bbdeb9872393d30520a21",
-    "line": 249
-  },
-  {
-    "path": "backend_api_python/app/routes/ibkr.py",
-    "symbol": "place_order",
-    "pattern": "client.place_market_order",
-    "fingerprint": "0859db8f6d7bd67af60679ff",
-    "line": 257
-  },
-  {
-    "path": "backend_api_python/app/routes/quick_trade.py",
-    "symbol": "close_position",
-    "pattern": "alias:place_order_from_signal->place_order_from_signal",
-    "fingerprint": "65934e6b25b37d5c65b5b4fd",
-    "line": 1589
-  },
-  {
-    "path": "backend_api_python/app/routes/quick_trade.py",
-    "symbol": "place_order",
-    "pattern": "alias:place_order_from_signal->place_order_from_signal",
-    "fingerprint": "5104a6cd20842c618bc0e356",
-    "line": 533
-  },
-  {
-    "path": "backend_api_python/app/routes/quick_trade.py",
-    "symbol": "place_order",
-    "pattern": "client.place_limit_order",
-    "fingerprint": "a3718b13a312858c57a5a241",
-    "line": 545
+    "line": 209
   },
   {
     "path": "backend_api_python/app/services/grid/engine.py",

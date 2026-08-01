@@ -362,6 +362,11 @@ def place_order():
         price (required for limit): Limit price
         extendedHours (optional): Allow extended-hours limit orders
     """
+    return jsonify({
+        "success": False,
+        "error": "Alpaca direct order entry is permanently disabled",
+    }), 410
+
     try:
         client, err = _require_connected_client()
         if err is not None:
@@ -413,6 +418,11 @@ def place_order():
 @login_required
 def cancel_order(order_id):
     """Cancel an Alpaca order by ID."""
+    return jsonify({
+        "success": False,
+        "error": "Alpaca direct order entry is permanently disabled",
+    }), 410
+
     try:
         client, err = _require_connected_client()
         if err is not None:
