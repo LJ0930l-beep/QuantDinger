@@ -236,6 +236,15 @@ from .deterministic_backtest_contracts import (
     backtest_fingerprint,
     next_open_execution,
 )
+from .paper_shadow_contracts import (
+    PAPER_SHADOW_CONTRACT_VERSION,
+    PaperShadowContractError,
+    PaperShadowDecision,
+    PaperShadowRunFacts,
+    SimulationDisposition,
+    SimulationMode,
+    simulation_fingerprint,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -408,6 +417,13 @@ __all__ = [
     "BacktestSide",
     "backtest_fingerprint",
     "next_open_execution",
+    "PAPER_SHADOW_CONTRACT_VERSION",
+    "PaperShadowContractError",
+    "PaperShadowDecision",
+    "PaperShadowRunFacts",
+    "SimulationDisposition",
+    "SimulationMode",
+    "simulation_fingerprint",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
