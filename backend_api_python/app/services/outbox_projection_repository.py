@@ -306,6 +306,8 @@ class OutboxProjectionRepository:
             result = apply_projection_event(
                 checkpoint, event, supported_schemas=supported_schemas, now_utc=now_utc,
             )
+            if source_offset > generation_facts[0]:
+                raise ProjectionGenerationConflict("source offset exceeds generation high watermark")
             if not result.idempotent_replay:
                 recorded = self._record_generation_event(
                     cursor, generation_id=generation_id, source_offset=source_offset,
@@ -527,8 +529,6 @@ class OutboxProjectionRepository:
         source_high_watermark = int(_row(row, 1, "source_high_watermark"))
         applied_event_count = int(_row(row, 2, "applied_event_count"))
         processed_high_watermark = int(_row(row, 3, "processed_high_watermark"))
-        if source_offset > source_high_watermark:
-            raise ProjectionGenerationConflict("source offset exceeds generation high watermark")
         return source_high_watermark, applied_event_count, processed_high_watermark
 
     def _load_generation(
