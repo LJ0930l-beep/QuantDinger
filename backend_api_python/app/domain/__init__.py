@@ -270,6 +270,12 @@ from .gate_read_formatters import (
     normalize_gate_instruments,
     normalize_gate_positions,
 )
+from .gate_market_payload_contracts import (
+    GATE_MARKET_PAYLOAD_CONTRACT_VERSION,
+    GateMarketPayloadError,
+    normalize_gate_candles,
+    normalize_gate_order_book,
+)
 from .paper_shadow_contracts import (
     PAPER_SHADOW_CONTRACT_VERSION,
     PaperShadowContractError,
@@ -523,6 +529,10 @@ __all__ = [
     "normalize_gate_balances",
     "normalize_gate_instruments",
     "normalize_gate_positions",
+    "GATE_MARKET_PAYLOAD_CONTRACT_VERSION",
+    "GateMarketPayloadError",
+    "normalize_gate_candles",
+    "normalize_gate_order_book",
     "PAPER_SHADOW_CONTRACT_VERSION",
     "PaperShadowContractError",
     "PaperShadowDecision",
