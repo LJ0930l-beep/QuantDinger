@@ -250,6 +250,13 @@ from .gate_market_read_contracts import (
     gate_market_fingerprint,
     gate_market_identity,
 )
+from .gate_read_snapshot_contracts import (
+    GATE_READ_SNAPSHOT_CONTRACT_VERSION,
+    GateReadSnapshot,
+    GateReadSnapshotError,
+    build_gate_read_snapshot,
+    build_gate_read_snapshot_fingerprint,
+)
 from .deterministic_backtest_contracts import (
     BACKTEST_CONTRACT_VERSION,
     BacktestBar,
@@ -302,6 +309,14 @@ from .gate_read_formatters import (
     normalize_gate_balances,
     normalize_gate_instruments,
     normalize_gate_positions,
+)
+from .gate_read_transport_contracts import (
+    GATE_READ_TRANSPORT_CONTRACT_VERSION,
+    GatePublicReadEndpoint,
+    GateReadRequest,
+    GateReadResponse,
+    GateReadTransportError,
+    validate_gate_read_request,
 )
 from .gate_market_payload_contracts import (
     GATE_MARKET_PAYLOAD_CONTRACT_VERSION,
@@ -567,6 +582,11 @@ __all__ = [
     "GateTradeSide",
     "gate_market_fingerprint",
     "gate_market_identity",
+    "GATE_READ_SNAPSHOT_CONTRACT_VERSION",
+    "GateReadSnapshot",
+    "GateReadSnapshotError",
+    "build_gate_read_snapshot",
+    "build_gate_read_snapshot_fingerprint",
     "BACKTEST_CONTRACT_VERSION",
     "BacktestBar",
     "BacktestContractError",
@@ -608,6 +628,12 @@ __all__ = [
     "normalize_gate_balances",
     "normalize_gate_instruments",
     "normalize_gate_positions",
+    "GATE_READ_TRANSPORT_CONTRACT_VERSION",
+    "GatePublicReadEndpoint",
+    "GateReadRequest",
+    "GateReadResponse",
+    "GateReadTransportError",
+    "validate_gate_read_request",
     "GATE_MARKET_PAYLOAD_CONTRACT_VERSION",
     "GateMarketPayloadError",
     "normalize_gate_candles",
