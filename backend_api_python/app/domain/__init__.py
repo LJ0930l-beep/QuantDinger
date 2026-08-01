@@ -366,6 +366,14 @@ from .paper_shadow_reducer_contracts import (
     SimulationRecordDisposition,
     record_paper_shadow_decision,
 )
+from .market_data_sequence_contracts import (
+    MARKET_DATA_SEQUENCE_CONTRACT_VERSION,
+    MarketDataSequenceError,
+    MarketDataSequenceState,
+    MarketDataSequenceResult,
+    SequenceDisposition,
+    apply_market_data_event,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -638,6 +646,12 @@ __all__ = [
     "PaperShadowReducerError",
     "SimulationRecordDisposition",
     "record_paper_shadow_decision",
+    "MARKET_DATA_SEQUENCE_CONTRACT_VERSION",
+    "MarketDataSequenceError",
+    "MarketDataSequenceState",
+    "MarketDataSequenceResult",
+    "SequenceDisposition",
+    "apply_market_data_event",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
