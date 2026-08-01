@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.services.grid.exchange_orders import place_grid_limit_order
+from app.services.grid.exchange_orders import GridTradingDisabledError, place_grid_limit_order
 from app.services.live_trading.base import LiveOrderResult
 from app.services.live_trading.binance import BinanceFuturesClient
 from app.services.live_trading.binance_spot import BinanceSpotClient
@@ -236,42 +236,42 @@ def _make_client(client_cls: Type) -> MagicMock:
 def test_place_grid_limit_order_param_contract(case: OrderParamCase):
     client = _make_client(case.client_cls)
 
-    result = place_grid_limit_order(
-        client,
-        symbol="BTC/USDT",
-        side=case.side,
-        quantity=0.01,
-        price=70000.0,
-        market_type=case.market_type,
-        exchange_config=case.exchange_config or {},
-        pos_side=case.pos_side,
-        reduce_only=case.reduce_only,
-        client_order_id="coid-1",
-        leverage=3.0,
-        margin_mode="cross",
-        post_only=True,
-    )
+    with pytest.raises(GridTradingDisabledError, match="permanently disabled"):
+        place_grid_limit_order(
+            client,
+            symbol="BTC/USDT",
+            side=case.side,
+            quantity=0.01,
+            price=70000.0,
+            market_type=case.market_type,
+            exchange_config=case.exchange_config or {},
+            pos_side=case.pos_side,
+            reduce_only=case.reduce_only,
+            client_order_id="coid-1",
+            leverage=3.0,
+            margin_mode="cross",
+            post_only=True,
+        )
 
-    assert result.exchange_order_id == "oid-1"
-    assert client.place_limit_order.call_args.kwargs == case.expected
+    client.place_limit_order.assert_not_called()
 
 
 def test_place_grid_limit_order_sets_leverage_for_contract_clients():
     client = _make_client(BitgetMixClient)
 
-    place_grid_limit_order(
-        client,
-        symbol="BTC/USDT",
-        side="buy",
-        quantity=0.01,
-        price=70000.0,
-        market_type="swap",
-        exchange_config={"product_type": "USDT-FUTURES", "margin_coin": "USDT"},
-        pos_side="long",
-        leverage=5.0,
-        margin_mode="cross",
-    )
+    with pytest.raises(GridTradingDisabledError, match="permanently disabled"):
+        place_grid_limit_order(
+            client,
+            symbol="BTC/USDT",
+            side="buy",
+            quantity=0.01,
+            price=70000.0,
+            market_type="swap",
+            exchange_config={"product_type": "USDT-FUTURES", "margin_coin": "USDT"},
+            pos_side="long",
+            leverage=5.0,
+            margin_mode="cross",
+        )
 
-    client.set_leverage.assert_called_once()
-    assert client.set_leverage.call_args.kwargs["hold_side"] == "long"
-    assert client.set_leverage.call_args.kwargs["product_type"] == "USDT-FUTURES"
+    client.set_leverage.assert_not_called()
+    client.place_limit_order.assert_not_called()
