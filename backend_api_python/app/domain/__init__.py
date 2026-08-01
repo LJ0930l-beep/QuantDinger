@@ -77,7 +77,9 @@ from .reducers import (
 )
 from .projection_consumer_contracts import (
     PROJECTION_CONSUMER_CONTRACT_VERSION,
+    ConsumerApplyDisposition,
     ProjectionConsumeRequest,
+    ProjectionConsumeResult,
     ProjectionConsumerContractError,
     RegisteredProjectionConsumer,
     UnsupportedProjectionEvent,
@@ -206,7 +208,9 @@ __all__ = [
     "StrategyV2CandidateError",
     "StrategyV2CandidateTradePlan",
     "PROJECTION_CONSUMER_CONTRACT_VERSION",
+    "ConsumerApplyDisposition",
     "ProjectionConsumeRequest",
+    "ProjectionConsumeResult",
     "ProjectionConsumerContractError",
     "RegisteredProjectionConsumer",
     "UnsupportedProjectionEvent",

@@ -40,7 +40,9 @@ def _load_contracts():
 
 OutboxEvent, contracts = _load_contracts()
 ProjectionConsumeRequest = contracts.ProjectionConsumeRequest
+ConsumerApplyDisposition = contracts.ConsumerApplyDisposition
 ProjectionConsumerContractError = contracts.ProjectionConsumerContractError
+ProjectionConsumeResult = contracts.ProjectionConsumeResult
 RegisteredProjectionConsumer = contracts.RegisteredProjectionConsumer
 UnsupportedProjectionEvent = contracts.UnsupportedProjectionEvent
 
@@ -89,6 +91,8 @@ class ProjectionConsumerContractTests(unittest.TestCase):
             _consumer(supported_schemas=(("ENTRY_ADMITTED", "v1"), ("ENTRY_ADMITTED", "v1")))
         with self.assertRaises(ProjectionConsumerContractError):
             _consumer(aggregate_types=("ECONOMIC_ORDER", "ECONOMIC_ORDER"))
+        with self.assertRaises(ProjectionConsumerContractError):
+            _consumer(consumer_name="Candidate-Ledger")
 
     def test_request_validates_scope_offset_event_and_strict_utc(self):
         consumer = _consumer()
@@ -102,6 +106,15 @@ class ProjectionConsumerContractTests(unittest.TestCase):
     def test_request_rejects_unknown_event_before_persistence(self):
         with self.assertRaises(UnsupportedProjectionEvent):
             ProjectionConsumeRequest(_consumer(), str(uuid4()), 0, _event(event_type="UNKNOWN"), NOW)
+
+    def test_result_is_typed_and_replay_fingerprint_is_deterministic(self):
+        request = ProjectionConsumeRequest(_consumer(), str(uuid4()), 3, _event(), NOW, 2)
+        first = ProjectionConsumeResult(request, ConsumerApplyDisposition.CREATED, 3)
+        replay = ProjectionConsumeResult(request, ConsumerApplyDisposition.REPLAYED, 3)
+        self.assertEqual(first.fingerprint, ProjectionConsumeResult(request, ConsumerApplyDisposition.CREATED, 3).fingerprint)
+        self.assertNotEqual(first.fingerprint, replay.fingerprint)
+        with self.assertRaises(ProjectionConsumerContractError):
+            ProjectionConsumeResult(request, "CREATED", 3)
 
     def test_contract_module_has_no_runtime_or_infrastructure_imports(self):
         path = Path(__file__).resolve().parents[1] / "app" / "domain" / "projection_consumer_contracts.py"
