@@ -223,6 +223,13 @@ from .gate_market_read_contracts import (
     gate_market_fingerprint,
     gate_market_identity,
 )
+from .gate_read_snapshot_contracts import (
+    GATE_READ_SNAPSHOT_CONTRACT_VERSION,
+    GateReadSnapshot,
+    GateReadSnapshotError,
+    build_gate_read_snapshot,
+    build_gate_read_snapshot_fingerprint,
+)
 from .deterministic_backtest_contracts import (
     BACKTEST_CONTRACT_VERSION,
     BacktestBar,
@@ -486,6 +493,11 @@ __all__ = [
     "GateTradeSide",
     "gate_market_fingerprint",
     "gate_market_identity",
+    "GATE_READ_SNAPSHOT_CONTRACT_VERSION",
+    "GateReadSnapshot",
+    "GateReadSnapshotError",
+    "build_gate_read_snapshot",
+    "build_gate_read_snapshot_fingerprint",
     "BACKTEST_CONTRACT_VERSION",
     "BacktestBar",
     "BacktestContractError",
