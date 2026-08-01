@@ -282,6 +282,15 @@ from .gate_margin_read_contracts import (
     GateMarginSnapshot,
     gate_margin_fingerprint,
 )
+from .gate_extended_read_contracts import (
+    GATE_EXTENDED_READ_CONTRACT_VERSION,
+    GateDeliveryFact,
+    GateEquitySessionFact,
+    GateExtendedReadError,
+    GateOptionMarkFact,
+    OptionRight,
+    gate_extended_fingerprint,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -490,6 +499,13 @@ __all__ = [
     "GateMarginContractError",
     "GateMarginSnapshot",
     "gate_margin_fingerprint",
+    "GATE_EXTENDED_READ_CONTRACT_VERSION",
+    "GateDeliveryFact",
+    "GateEquitySessionFact",
+    "GateExtendedReadError",
+    "GateOptionMarkFact",
+    "OptionRight",
+    "gate_extended_fingerprint",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
