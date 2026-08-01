@@ -79,7 +79,9 @@ def place_grid_limit_order(
     margin_mode: str = "cross",
     post_only: bool = True,
 ) -> LiveOrderResult:
-    _reject_grid_trading()
+    # Terminal retirement guard. Historical implementation remains
+    # unreachable until a reviewed Admission-backed Grid adapter exists.
+    raise GridTradingDisabledError(_GRID_TRADING_DISABLED_MESSAGE)
     sd = str(side or "").strip().lower()
     if sd not in ("buy", "sell"):
         raise LiveTradingError(f"Invalid side: {side}")
@@ -336,7 +338,8 @@ def execute_grid_market_order(
     Returns (filled_ok, filled_qty, avg_price). ``filled_ok`` is True only when
     exchange reports a non-zero fill (not merely order accepted).
     """
-    _reject_grid_trading()
+    # Terminal retirement guard; no executor, client, or fill query is reached.
+    raise GridTradingDisabledError(_GRID_TRADING_DISABLED_MESSAGE)
     from app.services.live_trading.execution import place_order_from_signal
 
     sig = str(signal_type or "").strip().lower()
@@ -402,7 +405,8 @@ def cancel_grid_order(
     client_order_id: str = "",
     exchange_config: Optional[Dict[str, Any]] = None,
 ) -> None:
-    _reject_grid_trading()
+    # Terminal retirement guard; no exchange cancellation is reached.
+    raise GridTradingDisabledError(_GRID_TRADING_DISABLED_MESSAGE)
     mt = str(market_type or "swap").strip().lower()
     ex_cfg = exchange_config if isinstance(exchange_config, dict) else {}
     if isinstance(client, OkxClient):

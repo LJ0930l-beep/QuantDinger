@@ -123,6 +123,7 @@ def place_native_protection_orders(
 
 
 def _place_binance(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     close_side = "SELL" if request.pos_side == "long" else "BUY"
     dual = client.get_dual_side_position()
     if dual is None:
@@ -157,6 +158,7 @@ def _place_binance(client: Any, request: NativeProtectionRequest) -> List[Dict[s
 
 
 def _place_okx(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     inst_id = to_okx_swap_inst_id(request.symbol)
     size, precision = client._normalize_order_size(
         inst_id=inst_id, market_type="swap", size=request.quantity
@@ -194,6 +196,7 @@ def _place_okx(client: Any, request: NativeProtectionRequest) -> List[Dict[str, 
 
 
 def _place_bitget(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     size, precision = client._normalize_size(
         symbol=request.symbol,
         product_type=request.product_type,
@@ -236,6 +239,7 @@ def _place_bitget(client: Any, request: NativeProtectionRequest) -> List[Dict[st
 
 
 def _place_bybit(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     close_side = "Sell" if request.pos_side == "long" else "Buy"
     size, precision = client._normalize_qty(symbol=request.symbol, qty=request.quantity)
     base: Dict[str, Any] = {
@@ -277,6 +281,7 @@ def _place_bybit(client: Any, request: NativeProtectionRequest) -> List[Dict[str
 
 
 def _place_gate(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     contract = to_gate_currency_pair(request.symbol)
     close_side = "sell" if request.pos_side == "long" else "buy"
     size, extra_headers = client._resolve_order_size(
@@ -319,6 +324,7 @@ def _place_gate(client: Any, request: NativeProtectionRequest) -> List[Dict[str,
 
 
 def _place_htx(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     volume = client._base_to_contracts(symbol=request.symbol, qty=request.quantity)
     body: Dict[str, Any] = {
         "contract_code": to_htx_contract_code(request.symbol),

@@ -163,6 +163,16 @@ from .readonly_quant_state_contracts import (
     ReadonlyQuantStateView,
     build_readonly_quant_state_view,
 )
+from .legacy_retirement_contracts import (
+    LEGACY_RETIREMENT_CONTRACT_VERSION,
+    LegacyRetirementError,
+    LegacySurface,
+    LegacySurfaceDisposition,
+    FailureDrillKind,
+    LegacyRetirementFact,
+    validate_legacy_retirement,
+    failure_drill_disposition,
+)
 from .entry_convergence_gate_contracts import (
     ENTRY_CONVERGENCE_CONTRACT_VERSION,
     EntryConvergenceError,

@@ -176,16 +176,12 @@ def test_boundary_stop_loss_auto_stops_neutral_grid(monkeypatch):
         enqueue_market=lambda *args: enqueued.append(args) or True,
     )
 
-    assert engine.handle_boundary(69000.0) is True
-    assert engine.stop_requested is True
-    assert "out of bounds" in engine.stop_reason
-    assert enqueued == [
-        ("close_long", 0, 69000.0, "grid_boundary_stop"),
-        ("close_short", 0, 69000.0, "grid_boundary_stop"),
-    ]
-    assert stopped and stopped[0][0] == 77
-    assert stopped[0][2] == "grid_boundary"
-    assert any("69000.0000" in str(row[-1]) and "70200.0000" in str(row[-1]) for row in logs)
+    # SC-15 retires Grid direct trading, including boundary actions.
+    assert engine.handle_boundary(69000.0) is False
+    assert engine.stop_requested is False
+    assert enqueued == []
+    assert stopped == []
+    assert logs == []
 
 
 def test_boundary_pause_does_not_auto_stop(monkeypatch):
@@ -223,9 +219,10 @@ def test_boundary_pause_does_not_auto_stop(monkeypatch):
         enqueue_market=lambda *args: enqueued.append(args) or True,
     )
 
-    assert engine.handle_boundary(69000.0) is True
+    # Retired Grid paths fail closed even for pause configuration.
+    assert engine.handle_boundary(69000.0) is False
     assert engine.stop_requested is False
-    assert engine._paused_entries is True
+    assert engine._paused_entries is False
     assert enqueued == []
     assert stopped == []
 
@@ -365,9 +362,9 @@ def test_initial_market_recovers_from_exchange_without_new_order(monkeypatch):
     monkeypatch.setattr("app.services.grid.engine.GridEngine._leg_position_qty", lambda self, side: target)
 
     ok = engine.run_initial_market_position(72710.0)
-    assert ok is True
-    assert engine._initial_done is True
-    assert recorded["calls"] == 1
+    assert ok is False
+    assert engine._initial_done is False
+    assert recorded["calls"] == 0
 
 
 def test_sync_exit_coverage_places_long_exit_for_uncovered_position(monkeypatch):
@@ -780,9 +777,9 @@ def test_run_initial_market_stops_when_okx_net_position_exists(monkeypatch):
     monkeypatch.setattr("app.services.grid.engine.GridEngine._leg_position_qty", lambda self, side: target)
 
     ok = engine.run_initial_market_position(679.0)
-    assert ok is True
-    assert engine._initial_done is True
-    assert recorded["calls"] == 1
+    assert ok is False
+    assert engine._initial_done is False
+    assert recorded["calls"] == 0
     assert recorded["market"] == 0
 
 
@@ -846,8 +843,8 @@ def test_sync_grid_orders_skips_non_idle_cell(monkeypatch):
     engine._orders = FakeOrders()
 
     n = engine.sync_grid_orders(691.5)
-    assert n == len(cells) - 1
-    assert all(int(p[0].index) != 3 for p in placed)
+    assert n == 0
+    assert placed == []
 
 
 def test_sync_grid_orders_skips_when_exit_open(monkeypatch):
