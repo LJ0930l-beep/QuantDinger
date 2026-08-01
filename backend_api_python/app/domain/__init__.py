@@ -261,6 +261,15 @@ from .strategy_signal_contracts import (
     detect_displacement,
     detect_liquidity_sweep,
 )
+from .gate_read_formatters import (
+    GATE_READ_FORMATTER_VERSION,
+    GateReadErrorKind,
+    GateReadPayloadError,
+    classify_gate_response_error,
+    normalize_gate_balances,
+    normalize_gate_instruments,
+    normalize_gate_positions,
+)
 from .paper_shadow_contracts import (
     PAPER_SHADOW_CONTRACT_VERSION,
     PaperShadowContractError,
@@ -507,6 +516,13 @@ __all__ = [
     "build_strategy_signal",
     "detect_displacement",
     "detect_liquidity_sweep",
+    "GATE_READ_FORMATTER_VERSION",
+    "GateReadErrorKind",
+    "GateReadPayloadError",
+    "classify_gate_response_error",
+    "normalize_gate_balances",
+    "normalize_gate_instruments",
+    "normalize_gate_positions",
     "PAPER_SHADOW_CONTRACT_VERSION",
     "PaperShadowContractError",
     "PaperShadowDecision",
