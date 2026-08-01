@@ -115,12 +115,15 @@ def _event():
     )
 
 
-def _request():
+def _request(*, expected_checkpoint_version=-1):
     consumer = RegisteredProjectionConsumer(
         "candidate-ledger", "projection-consumer-v1",
         (("ENTRY_ADMITTED", "entry-admission-v2"),), ("ECONOMIC_ORDER",),
     )
-    return ProjectionConsumeRequest(consumer, str(uuid4()), 0, _event(), NOW)
+    return ProjectionConsumeRequest(
+        consumer, str(uuid4()), 0, _event(), NOW,
+        expected_checkpoint_version=expected_checkpoint_version,
+    )
 
 
 class _FakeRepository:
@@ -163,6 +166,10 @@ class ProjectionConsumerRepositoryTests(unittest.TestCase):
         self.assertEqual(connection.rollbacks, 0)
         self.assertTrue(connection.cursor_value.closed)
         self.assertEqual(repository.calls[0][1]["source_offset"], request.source_offset)
+        self.assertEqual(
+            repository.calls[0][1]["expected_checkpoint_version"],
+            request.expected_checkpoint_version,
+        )
 
     def test_replay_is_typed_and_does_not_commit_or_rollback(self):
         request = _request()
@@ -172,6 +179,12 @@ class ProjectionConsumerRepositoryTests(unittest.TestCase):
         self.assertIs(result.disposition, ConsumerApplyDisposition.REPLAYED)
         self.assertEqual(connection.commits, 0)
         self.assertEqual(connection.rollbacks, 0)
+
+    def test_expected_checkpoint_version_is_forwarded(self):
+        request = _request(expected_checkpoint_version=7)
+        repository = _FakeRepository(self._projection_outcome(request, replay=False))
+        ProjectionConsumerRepository(repository=repository).consume(_FakeConnection(), request)
+        self.assertEqual(repository.calls[0][1]["expected_checkpoint_version"], 7)
 
     def test_business_conflict_is_preserved(self):
         request = _request()

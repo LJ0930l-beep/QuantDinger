@@ -67,6 +67,7 @@ class ProjectionConsumerRepository:
                 now_utc=request.now_utc,
                 generation_id=request.generation_id,
                 source_offset=request.source_offset,
+                expected_checkpoint_version=request.expected_checkpoint_version,
             )
         except (
             OutboxRepositoryError,
