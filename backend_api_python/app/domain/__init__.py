@@ -272,6 +272,12 @@ from .backtest_metrics_contracts import (
     build_walk_forward_windows,
     calculate_backtest_metrics,
 )
+from .backtest_report_contracts import (
+    BACKTEST_REPORT_CONTRACT_VERSION,
+    BacktestReportError,
+    BacktestReportSnapshot,
+    build_backtest_report,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -600,6 +606,10 @@ __all__ = [
     "WalkForwardWindow",
     "build_walk_forward_windows",
     "calculate_backtest_metrics",
+    "BACKTEST_REPORT_CONTRACT_VERSION",
+    "BacktestReportError",
+    "BacktestReportSnapshot",
+    "build_backtest_report",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",
