@@ -298,6 +298,14 @@ from .gate_read_formatters import (
     normalize_gate_instruments,
     normalize_gate_positions,
 )
+from .gate_read_transport_contracts import (
+    GATE_READ_TRANSPORT_CONTRACT_VERSION,
+    GatePublicReadEndpoint,
+    GateReadRequest,
+    GateReadResponse,
+    GateReadTransportError,
+    validate_gate_read_request,
+)
 from .gate_market_payload_contracts import (
     GATE_MARKET_PAYLOAD_CONTRACT_VERSION,
     GateMarketPayloadError,
@@ -600,6 +608,12 @@ __all__ = [
     "normalize_gate_balances",
     "normalize_gate_instruments",
     "normalize_gate_positions",
+    "GATE_READ_TRANSPORT_CONTRACT_VERSION",
+    "GatePublicReadEndpoint",
+    "GateReadRequest",
+    "GateReadResponse",
+    "GateReadTransportError",
+    "validate_gate_read_request",
     "GATE_MARKET_PAYLOAD_CONTRACT_VERSION",
     "GateMarketPayloadError",
     "normalize_gate_candles",
