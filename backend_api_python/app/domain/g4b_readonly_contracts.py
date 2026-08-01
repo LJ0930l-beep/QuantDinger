@@ -16,6 +16,7 @@ from app.domain.outbox_projection_contracts import OutboxEvent
 from app.domain.projection_consumer_contracts import ProjectionConsumeResult
 from app.domain.projection_mapping_contracts import CandidateProjectionFacts, ProjectionMappingError, map_admission_outbox_to_projection
 from app.domain.candidate_shadow_contracts import CandidateProjectionGeneration, CandidateShadowBinding
+from app.domain.shadow_diff_contracts import ShadowComparisonResult
 from app.domain.reconciliation_contracts import ReconciliationResult
 
 
@@ -41,6 +42,7 @@ class G4BReadonlyChainReceipt:
     consume: ProjectionConsumeResult
     candidate: CandidateProjectionGeneration
     shadow: CandidateShadowBinding
+    shadow_result: ShadowComparisonResult
     reconciliation: ReconciliationResult
     chain_fingerprint: str = field(init=False)
 
@@ -57,6 +59,8 @@ class G4BReadonlyChainReceipt:
             raise G4BReadonlyContractError("candidate must use CandidateProjectionGeneration")
         if not isinstance(self.shadow, CandidateShadowBinding):
             raise G4BReadonlyContractError("shadow must use CandidateShadowBinding")
+        if not isinstance(self.shadow_result, ShadowComparisonResult):
+            raise G4BReadonlyContractError("shadow_result must use ShadowComparisonResult")
         if not isinstance(self.reconciliation, ReconciliationResult):
             raise G4BReadonlyContractError("reconciliation must use ReconciliationResult")
 
@@ -72,6 +76,10 @@ class G4BReadonlyChainReceipt:
             raise G4BReadonlyContractError("candidate generation does not contain the mapped event")
         if self.shadow.generation is not self.candidate:
             raise G4BReadonlyContractError("shadow binding must use the supplied candidate generation")
+        if self.shadow_result.run != self.shadow.run:
+            raise G4BReadonlyContractError("shadow result run is not bound to the shadow request")
+        if self.shadow_result.candidate.generation_id != self.candidate.binding.generation_id:
+            raise G4BReadonlyContractError("shadow result candidate is not bound to the candidate generation")
         if self.reconciliation.run.correlation_id == "":
             raise G4BReadonlyContractError("reconciliation correlation must be canonical")
         object.__setattr__(self, "chain_fingerprint", _fingerprint({
@@ -89,6 +97,7 @@ class G4BReadonlyChainReceipt:
             "consume": self.consume.fingerprint,
             "candidate": self.candidate.projection_fingerprint,
             "shadow": self.shadow.binding_fingerprint,
+            "shadow_result": self.shadow_result.replay_fingerprint,
             "reconciliation": self.reconciliation.replay_fingerprint,
         }))
 
@@ -102,6 +111,7 @@ def validate_g4b_readonly_chain(
     consume: ProjectionConsumeResult,
     candidate: CandidateProjectionGeneration,
     shadow: CandidateShadowBinding,
+    shadow_result: ShadowComparisonResult,
     reconciliation: ReconciliationResult,
 ) -> G4BReadonlyChainReceipt:
     """Parse and validate the full chain without persistence or side effects."""
@@ -110,7 +120,7 @@ def validate_g4b_readonly_chain(
         admission = parse_admission_outbox_event(event)
     except (EntryAdmissionError, ProjectionMappingError, TypeError) as exc:
         raise G4BReadonlyContractError("admission event is not a canonical typed event") from exc
-    return G4BReadonlyChainReceipt(event, admission, map_admission_outbox_to_projection(event), consume, candidate, shadow, reconciliation)
+    return G4BReadonlyChainReceipt(event, admission, map_admission_outbox_to_projection(event), consume, candidate, shadow, shadow_result, reconciliation)
 
 
 __all__ = ["G4B_READONLY_CONTRACT_VERSION", "G4BReadonlyChainReceipt", "G4BReadonlyContractError", "validate_g4b_readonly_chain"]

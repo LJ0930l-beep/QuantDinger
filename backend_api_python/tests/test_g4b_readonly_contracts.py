@@ -141,9 +141,14 @@ class G4BReadonlyContractTests(unittest.TestCase):
             m.shadow_diff_contracts.ShadowTolerancePolicy("policy-v1", "0.01", "0.10", "0.001"),
         )
         shadow = m.candidate_shadow_contracts.bind_candidate_shadow(run, candidate)
-        receipt = m.g4b_readonly_contracts.validate_g4b_readonly_chain(event, consume, candidate, shadow, _reconciliation())
+        shadow_result = m.candidate_shadow_contracts.compare_bound_candidate_shadow(shadow, m.shadow_diff_contracts.ShadowSourceSnapshot(
+            "legacy", 7, 8, "paper-main", "BTC-USDT", "swap", "candidate-v1", NOW,
+            m.shadow_diff_contracts.ShadowSourceStatus.READY,
+            {"equity": m.shadow_diff_contracts.ShadowFactValue("100", m.shadow_diff_contracts.ShadowValueKind.MONETARY, "USDT")},
+        ))
+        receipt = m.g4b_readonly_contracts.validate_g4b_readonly_chain(event, consume, candidate, shadow, shadow_result, _reconciliation())
         self.assertTrue(receipt.is_read_only)
-        self.assertEqual(receipt.chain_fingerprint, m.g4b_readonly_contracts.validate_g4b_readonly_chain(event, consume, candidate, shadow, _reconciliation()).chain_fingerprint)
+        self.assertEqual(receipt.chain_fingerprint, m.g4b_readonly_contracts.validate_g4b_readonly_chain(event, consume, candidate, shadow, shadow_result, _reconciliation()).chain_fingerprint)
 
     def test_chain_rejects_projection_or_event_mismatch(self):
         event, mapped, candidate = _candidate()
@@ -155,9 +160,14 @@ class G4BReadonlyContractTests(unittest.TestCase):
             m.shadow_diff_contracts.ShadowTolerancePolicy("policy-v1", "0.01", "0.10", "0.001"),
         )
         shadow = m.candidate_shadow_contracts.bind_candidate_shadow(run, candidate)
+        shadow_result = m.candidate_shadow_contracts.compare_bound_candidate_shadow(shadow, m.shadow_diff_contracts.ShadowSourceSnapshot(
+            "legacy", 7, 8, "paper-main", "BTC-USDT", "swap", "candidate-v1", NOW,
+            m.shadow_diff_contracts.ShadowSourceStatus.READY,
+            {"equity": m.shadow_diff_contracts.ShadowFactValue("100", m.shadow_diff_contracts.ShadowValueKind.MONETARY, "USDT")},
+        ))
         with self.assertRaises(m.g4b_readonly_contracts.G4BReadonlyContractError):
             bad_projection = replace(mapped, event_id="deadbeef")
-            m.g4b_readonly_contracts.G4BReadonlyChainReceipt(event, m.entry_admission_v2_contracts.parse_admission_outbox_event(event), bad_projection, consume, candidate, shadow, _reconciliation())
+            m.g4b_readonly_contracts.G4BReadonlyChainReceipt(event, m.entry_admission_v2_contracts.parse_admission_outbox_event(event), bad_projection, consume, candidate, shadow, shadow_result, _reconciliation())
 
 
 if __name__ == "__main__":
