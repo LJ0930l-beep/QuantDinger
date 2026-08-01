@@ -349,6 +349,12 @@ def place_quick_order(
     confirm_live_trading: bool = False,
 ) -> Any:
     """Place a quick order through Agent Gateway (requires T scope)."""
+    return {
+        "error": True,
+        "status": 410,
+        "body": {"message": "Agent and MCP trading authority is permanently disabled."},
+    }
+
     if not confirm_order:
         return {
             "error": True,
@@ -702,6 +708,12 @@ def list_paper_orders() -> Any:
 @mcp.tool()
 def cancel_open_paper_orders(confirm_cancel: bool = False) -> Any:
     """Cancel all open agent paper orders for this tenant (scope T)."""
+    return {
+        "error": True,
+        "status": 410,
+        "body": {"message": "Agent and MCP trading authority is permanently disabled."},
+    }
+
     if not confirm_cancel:
         return {
             "error": True,

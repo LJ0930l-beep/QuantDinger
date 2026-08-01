@@ -288,7 +288,7 @@ def baseline_json(violations: Sequence[ArchitectureViolation]) -> str:
 
 
 def _default_repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[2]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
