@@ -153,6 +153,15 @@ from .g4b_readonly_contracts import (
     G4BReadonlyContractError,
     validate_g4b_readonly_chain,
 )
+from .entry_convergence_gate_contracts import (
+    ENTRY_CONVERGENCE_CONTRACT_VERSION,
+    EntryConvergenceError,
+    EntrySurfaceDecision,
+    EntrySurfaceDisposition,
+    EntrySurfacePolicy,
+    default_entry_surface_policy,
+    validate_entry_surface,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -272,6 +281,13 @@ __all__ = [
     "G4BReadonlyChainReceipt",
     "G4BReadonlyContractError",
     "validate_g4b_readonly_chain",
+    "ENTRY_CONVERGENCE_CONTRACT_VERSION",
+    "EntryConvergenceError",
+    "EntrySurfaceDecision",
+    "EntrySurfaceDisposition",
+    "EntrySurfacePolicy",
+    "default_entry_surface_policy",
+    "validate_entry_surface",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
