@@ -1,20 +1,20 @@
-# 前端只读集成计划
+# Frontend Trading Workspace 计划
 
-产品前端名称为 **Quant Trading Dashboard**。当前独立原型可使用 Mock / PAPER / SHADOW 数据展示，但不代表交易功能已接入。
+产品名称：**Quant Trading Dashboard**。当前页面是只读 Mock/PAPER/SHADOW 原型，不代表交易能力已接入。
 
-## 路线
+## 阶段
 
 | 阶段 | 状态 | 范围 |
 | --- | --- | --- |
-| F-01 | IN_PROGRESS | 只读 Mock Dashboard，路径 `/#/quant-dashboard`；无真实 API、Executor、Exchange 或交易按钮 |
-| F-02 | NOT_STARTED | 鉴权 workspace 和权限 UX |
-| F-03 | BLOCKED | 只读 Dashboard API 合同，依赖 SC-14 权威读模型 |
-| F-04 | BLOCKED | 渲染账户、仓位、风险、Admission、Shadow、对账与健康的只读数据 |
-| F-05 | NOT_STARTED | loading / stale / unavailable / unauthorized 状态 |
+| F-01 Mock Dashboard | CANDIDATE | 只读展示账户、仓位、风险、Admission、Shadow、对账和健康；无真实 API |
+| F-02 Trading Workspace | PLANNED | 只读 K 线、指标、信号、订单/成交事实和配置快照；不得前端推断权威事实 |
+| F-03 Read API Contract | BLOCKED | 依赖 SC-14/G4-B 的权威 Projection 与 stale/unavailable/unauthorized 语义 |
+| F-04 Account/Position/Risk views | BLOCKED | 依赖已验证的 Projection/Ledger/Reconciliation |
+| F-05 Loading/Health UX | PLANNED | 明确显示 loading、stale、unavailable、unauthorized，不用空值伪装健康 |
 
-## 前端不变量
+## 不可变边界
 
-- 不得称为 “AI Quant Dashboard”，也不得提供 AI 一键交易、AI 推荐并执行、自动调仓、模型信心下单或 Prompt 下单。
-- 金额与数量以字符串 Decimal 语义展示；前端不产生账户、仓位、风险或交易真相。
-- Live 状态只由服务端权威事实提供；Dashboard 不得自行开启或推断 Live。
-- 写交易 UX 即使未来讨论，也必须独立授权，且不得由此原型按钮演化而来。
+- 前端不产生账户、持仓、风险、策略或交易事实；金额/数量按 Decimal 字符串展示。
+- 不提供下单、撤单、改仓、自动调参或 AI 建议执行按钮。
+- Live 状态只能来自服务端权威事实，不能由前端开启或推断。
+- 任何未来写入口必须另行授权，并强制经过 Canonical Entry → Hard Risk → Admission。
