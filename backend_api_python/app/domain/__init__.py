@@ -236,6 +236,16 @@ from .deterministic_backtest_contracts import (
     backtest_fingerprint,
     next_open_execution,
 )
+from .backtest_metrics_contracts import (
+    BACKTEST_METRICS_CONTRACT_VERSION,
+    BacktestEquityPoint,
+    BacktestMetrics,
+    BacktestMetricsError,
+    BacktestTradeResult,
+    WalkForwardWindow,
+    build_walk_forward_windows,
+    calculate_backtest_metrics,
+)
 from .paper_shadow_contracts import (
     PAPER_SHADOW_CONTRACT_VERSION,
     PaperShadowContractError,
@@ -463,6 +473,14 @@ __all__ = [
     "BacktestSide",
     "backtest_fingerprint",
     "next_open_execution",
+    "BACKTEST_METRICS_CONTRACT_VERSION",
+    "BacktestEquityPoint",
+    "BacktestMetrics",
+    "BacktestMetricsError",
+    "BacktestTradeResult",
+    "WalkForwardWindow",
+    "build_walk_forward_windows",
+    "calculate_backtest_metrics",
     "PAPER_SHADOW_CONTRACT_VERSION",
     "PaperShadowContractError",
     "PaperShadowDecision",
