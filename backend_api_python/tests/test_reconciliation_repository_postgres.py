@@ -62,7 +62,7 @@ class ReconciliationRepositoryPostgresTests(unittest.TestCase):
         observed = datetime(2026, 7, 28, 9, 0, tzinfo=timezone.utc)
         fact = s.ReconciliationFactValue(external_value, s.ReconciliationFactKind.QUANTITY, "BTC")
         external = s.ReconciliationSourceSnapshot("venue", "facts-v1", tenant_id, credential_id, "primary", "binance", "swap", "BTCUSDT", None, observed, {"position": fact})
-        local = s.ReconciliationSourceSnapshot("local", "facts-v1", tenant_id, credential_id, "primary", "binance", "swap", "BTCUSDT", None, observed, {"position": s.ReconciliationFactValue("1", s.ReconciliationFactKind.QUANTITY, "BTC")})
+        local = s.ReconciliationSourceSnapshot("local", "facts-v1", tenant_id, credential_id, "primary", "binance", "swap", "BTCUSDT", None, observed, {"position": s.ReconciliationFactValue("1", s.ReconciliationFactKind.QUANTITY, "BTC")}, generation_id, 7)
         run = s.ReconciliationRun(
             run_id or uuid.uuid4(), tenant_id, credential_id, "primary", "binance", "swap", "BTCUSDT", None,
             generation_id, f"reconcile-{suffix}", "b" * 64, 7, external.source_identity,

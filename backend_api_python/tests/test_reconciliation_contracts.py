@@ -30,6 +30,8 @@ def source(identity, facts, **changes):
         "credential_id": 2, "account_scope": "primary", "venue": "binance", "market_type": "swap",
         "instrument_id": "BTCUSDT", "asset_scope": None, "observed_at": OBSERVED, "facts": facts,
     }
+    if identity == "local":
+        values.update({"generation_id": GENERATION_ID, "checkpoint_watermark": 7})
     values.update(changes)
     return s.ReconciliationSourceSnapshot(**values)
 
@@ -111,6 +113,53 @@ class ReconciliationContractTests(unittest.TestCase):
         external = source("venue", {"position": quantity("1")})
         with self.assertRaises(s.ReconciliationContractError):
             run(external, external_observation_fingerprint="bad")
+
+    def test_local_generation_and_checkpoint_watermark_are_bound(self):
+        external = source("venue", {"position": quantity("1")})
+        local = source("local", {"position": quantity("1")}, checkpoint_watermark=8)
+        with self.assertRaises(s.ReconciliationContractError):
+            s.compare_reconciliation_state(run(external), local, external)
+        local_with_wrong_generation = source(
+            "local", {"position": quantity("1")},
+            generation_id=UUID("33333333-3333-3333-3333-333333333333"),
+        )
+        with self.assertRaises(s.ReconciliationContractError):
+            s.compare_reconciliation_state(run(external), local_with_wrong_generation, external)
+
+    def test_external_source_cannot_claim_local_generation(self):
+        external = source(
+            "venue", {"position": quantity("1")},
+            generation_id=GENERATION_ID, checkpoint_watermark=7,
+        )
+        local = source("local", {"position": quantity("1")})
+        with self.assertRaises(s.ReconciliationContractError):
+            s.compare_reconciliation_state(run(external), local, external)
+
+    def test_empty_both_sources_fail_closed_to_unhealthy(self):
+        external = source("venue", {})
+        local = source("local", {})
+        result = s.compare_reconciliation_state(run(external), local, external)
+        self.assertEqual(result.checkpoint.status, s.ReconciliationCheckpointStatus.CONFLICT)
+        self.assertEqual(result.checkpoint.health, s.ReconciliationHealth.UNHEALTHY)
+
+    def test_duplicate_discrepancy_facts_are_rejected(self):
+        external = source("venue", {"position": quantity("1")})
+        local = source("local", {"position": quantity("1")})
+        discrepancy = s.ReconciliationDiscrepancy(
+            "position", s.ReconciliationDiscrepancyKind.POSITION_MISMATCH,
+            s.ReconciliationSeverity.WARNING, quantity("1"), quantity("2"), "value_mismatch",
+        )
+        with self.assertRaises(s.ReconciliationContractError):
+            s.ReconciliationResult(run(external), local, external, (discrepancy, discrepancy))
+
+    def test_fingerprint_is_stable_for_decimal_and_mapping_order(self):
+        external_one = source("venue", {"position": quantity("1.000000000000000000"), "equity": money("100")})
+        local_one = source("local", {"position": quantity("1"), "equity": money("100.00")})
+        external_two = source("venue", {"equity": money("100.00"), "position": quantity("1")})
+        local_two = source("local", {"equity": money("100"), "position": quantity("1.000000000000000000")})
+        first = s.compare_reconciliation_state(run(external_one), local_one, external_one)
+        second = s.compare_reconciliation_state(run(external_two), local_two, external_two)
+        self.assertEqual(first.replay_fingerprint, second.replay_fingerprint)
 
 
 if __name__ == "__main__":
