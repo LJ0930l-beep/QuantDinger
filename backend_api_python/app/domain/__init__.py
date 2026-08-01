@@ -195,6 +195,19 @@ from .multi_asset_capability_contracts import (
     gate_testnet_capability_matrix,
     validate_capability_matrix,
 )
+from .gate_vertical_read_contracts import (
+    GATE_VERTICAL_CONTRACT_VERSION,
+    GateAuthFacts,
+    GateBalanceFact,
+    GateInstrumentRuleSnapshot,
+    GateMarginMode,
+    GatePermission,
+    GatePositionFact,
+    GatePositionSide,
+    GateVerticalContractError,
+    gate_read_fingerprint,
+    require_gate_capability,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -332,6 +345,17 @@ __all__ = [
     "UnsupportedCapability",
     "gate_testnet_capability_matrix",
     "validate_capability_matrix",
+    "GATE_VERTICAL_CONTRACT_VERSION",
+    "GateAuthFacts",
+    "GateBalanceFact",
+    "GateInstrumentRuleSnapshot",
+    "GateMarginMode",
+    "GatePermission",
+    "GatePositionFact",
+    "GatePositionSide",
+    "GateVerticalContractError",
+    "gate_read_fingerprint",
+    "require_gate_capability",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
