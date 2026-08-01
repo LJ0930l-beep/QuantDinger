@@ -255,6 +255,17 @@ from .strategy_library_contracts import (
     StrategySignalFact,
     strategy_fingerprint,
 )
+from .portfolio_risk_contracts import (
+    PORTFOLIO_RISK_CONTRACT_VERSION,
+    CooldownFact,
+    CooldownState,
+    PortfolioRiskError,
+    PositionSizingDecision,
+    PositionSizingRequest,
+    SizingDisposition,
+    evaluate_position_sizing,
+    portfolio_risk_fingerprint,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -442,6 +453,15 @@ __all__ = [
     "StrategyParameterFact",
     "StrategySignalFact",
     "strategy_fingerprint",
+    "PORTFOLIO_RISK_CONTRACT_VERSION",
+    "CooldownFact",
+    "CooldownState",
+    "PortfolioRiskError",
+    "PositionSizingDecision",
+    "PositionSizingRequest",
+    "SizingDisposition",
+    "evaluate_position_sizing",
+    "portfolio_risk_fingerprint",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
