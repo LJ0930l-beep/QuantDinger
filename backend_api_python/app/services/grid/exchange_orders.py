@@ -23,6 +23,23 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class GridTradingDisabledError(LiveTradingError):
+    """Raised when a legacy Grid order helper is invoked.
+
+    Grid is no longer an order authority.  Keeping the guard at the helper
+    boundary prevents callers (including old engine paths) from reaching an
+    exchange client while a future Admission-backed Grid integration is
+    designed.
+    """
+
+
+_GRID_TRADING_DISABLED_MESSAGE = "Grid direct trading entry is permanently disabled"
+
+
+def _reject_grid_trading() -> None:
+    raise GridTradingDisabledError(_GRID_TRADING_DISABLED_MESSAGE)
+
+
 def make_grid_initial_client_order_id(strategy_id: int, leg: str = "") -> str:
     """Stable client oid for grid initial market leg (one per strategy/leg, avoids duplicate opens)."""
     suffix = str(leg or "").strip().lower()[:1]
@@ -62,6 +79,7 @@ def place_grid_limit_order(
     margin_mode: str = "cross",
     post_only: bool = True,
 ) -> LiveOrderResult:
+    _reject_grid_trading()
     sd = str(side or "").strip().lower()
     if sd not in ("buy", "sell"):
         raise LiveTradingError(f"Invalid side: {side}")
@@ -318,6 +336,7 @@ def execute_grid_market_order(
     Returns (filled_ok, filled_qty, avg_price). ``filled_ok`` is True only when
     exchange reports a non-zero fill (not merely order accepted).
     """
+    _reject_grid_trading()
     from app.services.live_trading.execution import place_order_from_signal
 
     sig = str(signal_type or "").strip().lower()
@@ -383,6 +402,7 @@ def cancel_grid_order(
     client_order_id: str = "",
     exchange_config: Optional[Dict[str, Any]] = None,
 ) -> None:
+    _reject_grid_trading()
     mt = str(market_type or "swap").strip().lower()
     ex_cfg = exchange_config if isinstance(exchange_config, dict) else {}
     if isinstance(client, OkxClient):
