@@ -16,6 +16,15 @@ from app.services.live_trading.symbols import (
 )
 
 
+class NativeProtectionDisabledError(LiveTradingError):
+    """Raised when the retired native-protection entry is reached.
+
+    Native exchange protection orders are not part of the canonical admission
+    path.  Keeping a typed error at this boundary makes every legacy caller
+    fail closed before it can import a venue client or invoke an exchange API.
+    """
+
+
 @dataclass(frozen=True)
 class NativeProtectionRequest:
     symbol: str
@@ -74,7 +83,16 @@ def place_native_protection_orders(
     client: Any,
     request: NativeProtectionRequest,
 ) -> List[Dict[str, Any]]:
-    """Place reduce-only native protection and return exchange responses."""
+    """Reject the retired direct native-protection entry point.
+
+    The implementation below is retained as inert compatibility code while
+    callers migrate to canonical Protection admission.  This guard must stay
+    first: no request validation, venue-client import, or exchange call may
+    occur from this legacy path.
+    """
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
+
+    # Legacy implementation retained below for source compatibility only.
     side = str(request.pos_side or "").strip().lower()
     qty = float(request.quantity or 0.0)
     if side not in ("long", "short") or qty <= 0:
