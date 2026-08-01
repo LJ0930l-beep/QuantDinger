@@ -182,6 +182,19 @@ from .entry_convergence_gate_contracts import (
     default_entry_surface_policy,
     validate_entry_surface,
 )
+from .multi_asset_capability_contracts import (
+    AssetMarketType,
+    AssetProduct,
+    CapabilityEnvironment,
+    CapabilityOrderKind,
+    MULTI_ASSET_CAPABILITY_CONTRACT_VERSION,
+    MultiAssetCapabilityError,
+    MultiAssetCapabilityMatrix,
+    MultiAssetVenueCapability,
+    UnsupportedCapability,
+    gate_testnet_capability_matrix,
+    validate_capability_matrix,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -308,6 +321,17 @@ __all__ = [
     "EntrySurfacePolicy",
     "default_entry_surface_policy",
     "validate_entry_surface",
+    "AssetMarketType",
+    "AssetProduct",
+    "CapabilityEnvironment",
+    "CapabilityOrderKind",
+    "MULTI_ASSET_CAPABILITY_CONTRACT_VERSION",
+    "MultiAssetCapabilityError",
+    "MultiAssetCapabilityMatrix",
+    "MultiAssetVenueCapability",
+    "UnsupportedCapability",
+    "gate_testnet_capability_matrix",
+    "validate_capability_matrix",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
