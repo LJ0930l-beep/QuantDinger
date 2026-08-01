@@ -72,6 +72,12 @@ class G4BReadonlyChainReceipt:
         request = self.consume.request
         if request.event.event_id != self.event.event_id or request.event.payload_hash != self.event.payload_hash:
             raise G4BReadonlyContractError("consumer request is not bound to the event")
+        if request.generation_id != self.candidate.binding.generation_id:
+            raise G4BReadonlyContractError("consumer request generation is not the candidate generation")
+        if request.consumer.consumer_name != self.candidate.binding.consumer_name:
+            raise G4BReadonlyContractError("consumer request is not bound to the candidate consumer")
+        if self.consume.resulting_checkpoint_version != self.candidate.binding.checkpoint_watermark:
+            raise G4BReadonlyContractError("consumer checkpoint does not prove candidate high watermark")
         if not any(item.event_id == self.projection.event_id and item.fingerprint == self.projection.fingerprint for item in self.candidate.facts):
             raise G4BReadonlyContractError("candidate generation does not contain the mapped event")
         if self.shadow.generation is not self.candidate:
