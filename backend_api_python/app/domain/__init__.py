@@ -360,6 +360,14 @@ from .gate_extended_read_contracts import (
     OptionRight,
     gate_extended_fingerprint,
 )
+from .paper_shadow_reducer_contracts import (
+    PAPER_SHADOW_REDUCER_CONTRACT_VERSION,
+    PaperShadowDecisionSet,
+    PaperShadowRecordResult,
+    PaperShadowReducerError,
+    SimulationRecordDisposition,
+    record_paper_shadow_decision,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -617,6 +625,12 @@ __all__ = [
     "GateOptionMarkFact",
     "OptionRight",
     "gate_extended_fingerprint",
+    "PAPER_SHADOW_REDUCER_CONTRACT_VERSION",
+    "PaperShadowDecisionSet",
+    "PaperShadowRecordResult",
+    "PaperShadowReducerError",
+    "SimulationRecordDisposition",
+    "record_paper_shadow_decision",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
