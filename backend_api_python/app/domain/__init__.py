@@ -95,6 +95,11 @@ from .venue_order_contracts import (
     query_failure_result,
     validate_binance_usdm_client_order_id,
 )
+from .protection_entry_contracts import (
+    ProtectionEntryContractError,
+    ProtectionEntryFacts,
+    map_protection_to_canonical_entry,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -182,4 +187,7 @@ __all__ = [
     "validate_attempt_transition",
     "validate_binance_usdm_client_order_id",
     "validate_transition",
+    "ProtectionEntryContractError",
+    "ProtectionEntryFacts",
+    "map_protection_to_canonical_entry",
 ]

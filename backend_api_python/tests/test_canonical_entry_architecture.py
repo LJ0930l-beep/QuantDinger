@@ -11,6 +11,7 @@ DOMAIN = Path(__file__).resolve().parents[1] / "app" / "domain"
 MODULES = (
     DOMAIN / "canonical_entry_contracts.py",
     DOMAIN / "canonical_entry_adapters.py",
+    DOMAIN / "protection_entry_contracts.py",
 )
 FORBIDDEN_IMPORT_TERMS = (
     "service",
