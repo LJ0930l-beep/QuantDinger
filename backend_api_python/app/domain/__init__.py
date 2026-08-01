@@ -275,6 +275,12 @@ from .gate_read_formatters import (
     normalize_gate_instruments,
     normalize_gate_positions,
 )
+from .gate_market_payload_contracts import (
+    GATE_MARKET_PAYLOAD_CONTRACT_VERSION,
+    GateMarketPayloadError,
+    normalize_gate_candles,
+    normalize_gate_order_book,
+)
 from .readonly_quant_api_contracts import (
     READONLY_QUANT_API_CONTRACT_VERSION,
     ReadonlyQuantApiContractError,
@@ -534,6 +540,10 @@ __all__ = [
     "normalize_gate_balances",
     "normalize_gate_instruments",
     "normalize_gate_positions",
+    "GATE_MARKET_PAYLOAD_CONTRACT_VERSION",
+    "GateMarketPayloadError",
+    "normalize_gate_candles",
+    "normalize_gate_order_book",
     "READONLY_QUANT_API_CONTRACT_VERSION",
     "ReadonlyQuantApiContractError",
     "ReadonlyQuantApiResponse",
