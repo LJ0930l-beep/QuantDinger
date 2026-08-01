@@ -223,6 +223,19 @@ from .gate_market_read_contracts import (
     gate_market_fingerprint,
     gate_market_identity,
 )
+from .deterministic_backtest_contracts import (
+    BACKTEST_CONTRACT_VERSION,
+    BacktestBar,
+    BacktestContractError,
+    BacktestDecision,
+    BacktestExecutionDecision,
+    BacktestExecutionKind,
+    BacktestOrderIntent,
+    BacktestRunFacts,
+    BacktestSide,
+    backtest_fingerprint,
+    next_open_execution,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -384,6 +397,17 @@ __all__ = [
     "GateTradeSide",
     "gate_market_fingerprint",
     "gate_market_identity",
+    "BACKTEST_CONTRACT_VERSION",
+    "BacktestBar",
+    "BacktestContractError",
+    "BacktestDecision",
+    "BacktestExecutionDecision",
+    "BacktestExecutionKind",
+    "BacktestOrderIntent",
+    "BacktestRunFacts",
+    "BacktestSide",
+    "backtest_fingerprint",
+    "next_open_execution",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
