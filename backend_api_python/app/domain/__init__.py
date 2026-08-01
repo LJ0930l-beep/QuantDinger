@@ -128,6 +128,13 @@ from .strategy_v2_candidate_contracts import (
     StrategyV2CandidateError,
     StrategyV2CandidateTradePlan,
 )
+from .projection_mapping_contracts import (
+    CandidateProjectionFacts,
+    PROJECTION_MAPPING_CONTRACT_VERSION,
+    ProjectionMappingError,
+    ProjectionSubjectKind,
+    map_admission_outbox_to_projection,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -228,6 +235,11 @@ __all__ = [
     "ProjectionConsumerContractError",
     "RegisteredProjectionConsumer",
     "UnsupportedProjectionEvent",
+    "CandidateProjectionFacts",
+    "PROJECTION_MAPPING_CONTRACT_VERSION",
+    "ProjectionMappingError",
+    "ProjectionSubjectKind",
+    "map_admission_outbox_to_projection",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
