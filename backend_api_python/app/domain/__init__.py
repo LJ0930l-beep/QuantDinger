@@ -278,6 +278,12 @@ from .gate_read_transport_contracts import (
     GateReadTransportError,
     validate_gate_read_request,
 )
+from .gate_readonly_adapter_contracts import (
+    GATE_READONLY_ADAPTER_CONTRACT_VERSION,
+    GateReadTransport,
+    GateReadonlyAdapter,
+    GateReadonlyAdapterError,
+)
 from .paper_shadow_contracts import (
     PAPER_SHADOW_CONTRACT_VERSION,
     PaperShadowContractError,
@@ -537,6 +543,10 @@ __all__ = [
     "GateReadResponse",
     "GateReadTransportError",
     "validate_gate_read_request",
+    "GATE_READONLY_ADAPTER_CONTRACT_VERSION",
+    "GateReadTransport",
+    "GateReadonlyAdapter",
+    "GateReadonlyAdapterError",
     "PAPER_SHADOW_CONTRACT_VERSION",
     "PaperShadowContractError",
     "PaperShadowDecision",
