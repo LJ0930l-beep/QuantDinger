@@ -147,6 +147,12 @@ from .projection_mapping_contracts import (
     ProjectionSubjectKind,
     map_admission_outbox_to_projection,
 )
+from .g4b_readonly_contracts import (
+    G4B_READONLY_CONTRACT_VERSION,
+    G4BReadonlyChainReceipt,
+    G4BReadonlyContractError,
+    validate_g4b_readonly_chain,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -262,6 +268,10 @@ __all__ = [
     "ProjectionMappingError",
     "ProjectionSubjectKind",
     "map_admission_outbox_to_projection",
+    "G4B_READONLY_CONTRACT_VERSION",
+    "G4BReadonlyChainReceipt",
+    "G4BReadonlyContractError",
+    "validate_g4b_readonly_chain",
     "GATE_TESTNET_API_PREFIX",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
