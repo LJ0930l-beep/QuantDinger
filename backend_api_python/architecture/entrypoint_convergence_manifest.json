@@ -476,16 +476,6 @@
       "line": 153,
       "count": 1,
       "legacy_reason": "legacy quick-trade protection submission; migrate through admission"
-    },
-    {
-      "path": "backend_api_python/app/services/strategy_v2/live_execution.py",
-      "symbol": "StrategyV2OrderGateway.submit",
-      "category": "legacy_order_intent_write",
-      "pattern": "SQL:INSERT pending_orders",
-      "fingerprint": "1e4ec70f5a1d776b0a8ee78b",
-      "line": 100,
-      "count": 1,
-      "legacy_reason": "legacy Strategy V2 pending-order persistence; migrate through admission"
     }
   ]
 }
