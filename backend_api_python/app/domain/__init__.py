@@ -110,6 +110,11 @@ from .gate_readonly_contracts import (
     normalize_gate_ohlcv,
     validate_gate_readonly_profile,
 )
+from app.domain.gate_backtest_dataset_contracts import (
+    GATE_BACKTEST_DATASET_CONTRACT_VERSION,
+    GateBacktestDatasetError,
+    build_gate_backtest_dataset,
+)
 from .venue_order_contracts import (
     BINANCE_USDM_CLIENT_ID_PATTERN,
     CLIENT_ID_ALGORITHM_VERSION,
@@ -578,4 +583,7 @@ __all__ = [
     "gate_testnet_api_url",
     "normalize_gate_ohlcv",
     "validate_gate_readonly_profile",
+    "GATE_BACKTEST_DATASET_CONTRACT_VERSION",
+    "GateBacktestDatasetError",
+    "build_gate_backtest_dataset",
 ]
