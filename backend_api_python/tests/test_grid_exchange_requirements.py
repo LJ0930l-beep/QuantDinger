@@ -55,7 +55,7 @@ def test_bitget_one_way_blocks_neutral_startup():
         exchange_config={"product_type": "USDT-FUTURES", "margin_coin": "USDT"},
     )
     assert ok is False
-    assert "permanently disabled" in msg.lower()
+    assert "hedge" in msg.lower()
 
 
 def test_bitget_hedge_allows_neutral_startup():
@@ -112,7 +112,7 @@ def test_runner_startup_rejects_bitget_one_way(monkeypatch):
             )
             ok, msg = runner.startup(73494.0)
     assert ok is False
-    assert "hedge" in msg.lower()
+    assert "permanently disabled" in msg.lower()
 
 
 def test_runner_startup_places_both_neutral_legs_in_hedge_mode(monkeypatch):
