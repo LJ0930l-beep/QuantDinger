@@ -95,6 +95,11 @@ from .venue_order_contracts import (
     query_failure_result,
     validate_binance_usdm_client_order_id,
 )
+from .strategy_v2_candidate_contracts import (
+    STRATEGY_V2_CANDIDATE_CONTRACT_VERSION,
+    StrategyV2CandidateError,
+    StrategyV2CandidateTradePlan,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -182,4 +187,7 @@ __all__ = [
     "validate_attempt_transition",
     "validate_binance_usdm_client_order_id",
     "validate_transition",
+    "STRATEGY_V2_CANDIDATE_CONTRACT_VERSION",
+    "StrategyV2CandidateError",
+    "StrategyV2CandidateTradePlan",
 ]
