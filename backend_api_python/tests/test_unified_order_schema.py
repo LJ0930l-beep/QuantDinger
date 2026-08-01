@@ -22,7 +22,8 @@ DURABLE_RISK_V2_MIGRATION = MIGRATIONS / "20260730_durable_risk_enforcement_v2.s
 AUTHORITATIVE_RISK_FACTS_MIGRATION = MIGRATIONS / "20260731_authoritative_risk_fact_sources.sql"
 INSTRUMENT_RISK_RULES_MIGRATION = MIGRATIONS / "20260801_authoritative_instrument_risk_rules.sql"
 RUNTIME_ENTRY_AUTHORITY_MIGRATION = MIGRATIONS / "20260802_runtime_entry_authority.sql"
-INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION, DURABLE_RISK_V2_MIGRATION, AUTHORITATIVE_RISK_FACTS_MIGRATION, INSTRUMENT_RISK_RULES_MIGRATION, RUNTIME_ENTRY_AUTHORITY_MIGRATION)
+CONSUMER_INBOX_GUARDS_MIGRATION = MIGRATIONS / "20260803_consumer_inbox_guards.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION, DURABLE_RISK_V2_MIGRATION, AUTHORITATIVE_RISK_FACTS_MIGRATION, INSTRUMENT_RISK_RULES_MIGRATION, RUNTIME_ENTRY_AUTHORITY_MIGRATION, CONSUMER_INBOX_GUARDS_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -351,6 +352,25 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
             "checkpoint_record.status <> 'HEALTHY'",
         ):
             self.assertIn(fragment, migration)
+        self.assertNotIn("ON DELETE CASCADE", migration)
+
+    def test_consumer_inbox_schema_is_canonical_and_append_only(self):
+        migration = CONSUMER_INBOX_GUARDS_MIGRATION.read_text(encoding="utf-8")
+        for fragment in (
+            "ALTER COLUMN consumer_name TYPE VARCHAR(160)",
+            "ALTER COLUMN result_hash DROP DEFAULT",
+            "chk_qd_consumer_inbox_consumer_name_canonical",
+            "consumer_name = lower(consumer_name)",
+            "consumer_name = btrim(consumer_name)",
+            "consumer_name ~ '^[a-z0-9][a-z0-9._:/-]*$'",
+            "chk_qd_consumer_inbox_result_hash_sha256",
+            "result_hash ~ '^[0-9a-f]{64}$'",
+            "qd_reject_consumer_inbox_mutation",
+            "trg_qd_consumer_inbox_append_only",
+            "BEFORE UPDATE OR DELETE ON qd_consumer_inbox",
+        ):
+            self.assertIn(fragment, migration)
+        self.assertIn(migration, INIT_SQL.read_text(encoding="utf-8"))
         self.assertNotIn("ON DELETE CASCADE", migration)
 
     def test_init_sql_retains_representative_upstream_trading_tables(self):
@@ -988,6 +1008,75 @@ class UnifiedOrderSchemaPostgresTests(unittest.TestCase):
                     (graph["economic_order_id"],),
                 )
                 self.assertEqual(cursor.fetchone()[0], 1)
+        finally:
+            connection.rollback()
+            connection.close()
+
+    def test_consumer_inbox_constraints_and_append_only(self):
+        import hashlib
+        import psycopg2
+
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            connection.autocommit = False
+            with connection.cursor() as cursor:
+                cursor.execute(INIT_SQL.read_text(encoding="utf-8"))
+                for migration in INCREMENTAL_MIGRATIONS:
+                    cursor.execute(migration.read_text(encoding="utf-8"))
+
+                event_id = str(uuid.uuid4())
+                aggregate_id = str(uuid.uuid4())
+                payload = '{"consumer_inbox":true}'
+                payload_hash = hashlib.sha256(payload.encode("ascii")).hexdigest()
+                cursor.execute(
+                    "INSERT INTO qd_transactional_outbox "
+                    "(event_id, aggregate_type, aggregate_id, aggregate_version, event_type, "
+                    "payload_json, schema_version, payload_hash, event_fingerprint) "
+                    "VALUES (%s, 'SCHEMA_TEST', %s, 0, 'INBOX_TEST', %s::jsonb, 'v1', %s, %s)",
+                    (event_id, aggregate_id, payload, payload_hash, "e" * 64),
+                )
+
+                valid_hash = "a" * 64
+                cursor.execute(
+                    "INSERT INTO qd_consumer_inbox (consumer_name, event_id, result_hash) "
+                    "VALUES (%s, %s, %s)",
+                    ("ledger-read-model", event_id, valid_hash),
+                )
+                for invalid_name in ("", "Ledger-read-model", " ledger-read-model", "ledger-read-model "):
+                    self._assert_rejected(
+                        cursor,
+                        "INSERT INTO qd_consumer_inbox (consumer_name, event_id, result_hash) "
+                        "VALUES (%s, %s, %s)",
+                        (invalid_name, event_id, valid_hash),
+                    )
+                for invalid_hash, name in (
+                    ("", "hash-test-empty"),
+                    ("A" * 64, "hash-test-upper"),
+                    ("a" * 63, "hash-test-short"),
+                    ("z" * 64, "hash-test-char"),
+                ):
+                    self._assert_rejected(
+                        cursor,
+                        "INSERT INTO qd_consumer_inbox (consumer_name, event_id, result_hash) "
+                        "VALUES (%s, %s, %s)",
+                        (name, event_id, invalid_hash),
+                    )
+                self._assert_rejected(
+                    cursor,
+                    "INSERT INTO qd_consumer_inbox (consumer_name, event_id) VALUES (%s, %s)",
+                    ("missing-result-hash", event_id),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "UPDATE qd_consumer_inbox SET result_hash = %s "
+                    "WHERE consumer_name = %s AND event_id = %s",
+                    ("b" * 64, "ledger-read-model", event_id),
+                )
+                self._assert_rejected(
+                    cursor,
+                    "DELETE FROM qd_consumer_inbox WHERE consumer_name = %s AND event_id = %s",
+                    ("ledger-read-model", event_id),
+                )
         finally:
             connection.rollback()
             connection.close()
