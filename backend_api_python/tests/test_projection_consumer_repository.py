@@ -163,6 +163,10 @@ class ProjectionConsumerRepositoryTests(unittest.TestCase):
         self.assertEqual(connection.rollbacks, 0)
         self.assertTrue(connection.cursor_value.closed)
         self.assertEqual(repository.calls[0][1]["source_offset"], request.source_offset)
+        self.assertEqual(
+            repository.calls[0][1]["expected_checkpoint_version"],
+            request.expected_checkpoint_version,
+        )
 
     def test_replay_is_typed_and_does_not_commit_or_rollback(self):
         request = _request()
