@@ -236,6 +236,12 @@ from .deterministic_backtest_contracts import (
     backtest_fingerprint,
     next_open_execution,
 )
+from .deterministic_backtest_runner_contracts import (
+    DETERMINISTIC_BACKTEST_RUNNER_CONTRACT_VERSION,
+    BacktestExecutionTrace,
+    DeterministicBacktestRunnerError,
+    run_deterministic_backtest,
+)
 from .backtest_metrics_contracts import (
     BACKTEST_METRICS_CONTRACT_VERSION,
     BacktestEquityPoint,
@@ -497,6 +503,10 @@ __all__ = [
     "BacktestSide",
     "backtest_fingerprint",
     "next_open_execution",
+    "DETERMINISTIC_BACKTEST_RUNNER_CONTRACT_VERSION",
+    "BacktestExecutionTrace",
+    "DeterministicBacktestRunnerError",
+    "run_deterministic_backtest",
     "BACKTEST_METRICS_CONTRACT_VERSION",
     "BacktestEquityPoint",
     "BacktestMetrics",
