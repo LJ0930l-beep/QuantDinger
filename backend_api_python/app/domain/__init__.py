@@ -110,6 +110,11 @@ from .gate_readonly_contracts import (
     normalize_gate_ohlcv,
     validate_gate_readonly_profile,
 )
+from app.domain.gate_backtest_dataset_contracts import (
+    GATE_BACKTEST_DATASET_CONTRACT_VERSION,
+    GateBacktestDatasetError,
+    build_gate_backtest_dataset,
+)
 from .venue_order_contracts import (
     BINANCE_USDM_CLIENT_ID_PATTERN,
     CLIENT_ID_ALGORITHM_VERSION,
@@ -277,6 +282,18 @@ from .gate_read_transport_contracts import (
     GateReadResponse,
     GateReadTransportError,
     validate_gate_read_request,
+)
+from .gate_market_payload_contracts import (
+    GATE_MARKET_PAYLOAD_CONTRACT_VERSION,
+    GateMarketPayloadError,
+    normalize_gate_candles,
+    normalize_gate_order_book,
+)
+from .readonly_quant_api_contracts import (
+    READONLY_QUANT_API_CONTRACT_VERSION,
+    ReadonlyQuantApiContractError,
+    ReadonlyQuantApiResponse,
+    serialize_readonly_quant_state,
 )
 from .paper_shadow_contracts import (
     PAPER_SHADOW_CONTRACT_VERSION,
@@ -537,6 +554,14 @@ __all__ = [
     "GateReadResponse",
     "GateReadTransportError",
     "validate_gate_read_request",
+    "GATE_MARKET_PAYLOAD_CONTRACT_VERSION",
+    "GateMarketPayloadError",
+    "normalize_gate_candles",
+    "normalize_gate_order_book",
+    "READONLY_QUANT_API_CONTRACT_VERSION",
+    "ReadonlyQuantApiContractError",
+    "ReadonlyQuantApiResponse",
+    "serialize_readonly_quant_state",
     "PAPER_SHADOW_CONTRACT_VERSION",
     "PaperShadowContractError",
     "PaperShadowDecision",
@@ -592,4 +617,7 @@ __all__ = [
     "gate_testnet_api_url",
     "normalize_gate_ohlcv",
     "validate_gate_readonly_profile",
+    "GATE_BACKTEST_DATASET_CONTRACT_VERSION",
+    "GateBacktestDatasetError",
+    "build_gate_backtest_dataset",
 ]
