@@ -174,7 +174,6 @@ class PendingOrderWorker(PendingOrderPositionSyncMixin):
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._notifier = SignalNotifier()
-
         # Reclaim stuck orders (e.g. if the worker crashed after claiming an order).
         try:
             self._stale_processing_sec = int(os.getenv("PENDING_ORDER_STALE_SEC", "90"))
@@ -186,8 +185,9 @@ class PendingOrderWorker(PendingOrderPositionSyncMixin):
         self._position_sync_interval_sec = float(os.getenv("POSITION_SYNC_INTERVAL_SEC", "30"))
         self._last_position_sync_ts = 0.0
         logger.info(f"PendingOrderWorker: sync_enabled={self._position_sync_enabled}, interval={self._position_sync_interval_sec}s")
-
     def start(self) -> bool:
+        logger.warning("PendingOrderWorker legacy queue is permanently disabled")
+        return False
         with self._lock:
             try:
                 ensure_position_ledger_schema()
@@ -208,7 +208,6 @@ class PendingOrderWorker(PendingOrderPositionSyncMixin):
         if th and th.is_alive():
             th.join(timeout=timeout_sec)
         logger.info("PendingOrderWorker stopped")
-
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
@@ -218,6 +217,7 @@ class PendingOrderWorker(PendingOrderPositionSyncMixin):
             time.sleep(self.poll_interval_sec)
 
     def _tick(self) -> None:
+        return
         # logger.info(f"[PendingOrderWorker] _tick start. last_sync={self._last_position_sync_ts}")
         self._sync_quick_trade_orders()
         self._sync_alpaca_sent_orders()
