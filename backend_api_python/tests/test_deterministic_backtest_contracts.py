@@ -12,7 +12,8 @@ UTC = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 def load():
     name = "app.domain.deterministic_backtest_contracts"
-    old = sys.modules.get(name)
+    names = ["app", "app.domain", name]
+    old = {item: sys.modules.get(item) for item in names}
     try:
         app = ModuleType("app"); app.__path__ = [str(ROOT / "app")]
         domain = ModuleType("app.domain"); domain.__path__ = [str(ROOT / "app" / "domain")]
@@ -20,8 +21,9 @@ def load():
         spec = importlib.util.spec_from_file_location(name, ROOT / "app" / "domain" / "deterministic_backtest_contracts.py")
         module = importlib.util.module_from_spec(spec); sys.modules[name] = module; spec.loader.exec_module(module); return module
     finally:
-        if old is None: sys.modules.pop(name, None)
-        else: sys.modules[name] = old
+        for item in reversed(names):
+            if old[item] is None: sys.modules.pop(item, None)
+            else: sys.modules[item] = old[item]
 
 
 M = load()
