@@ -169,6 +169,28 @@ class G4BReadonlyContractTests(unittest.TestCase):
             bad_projection = replace(mapped, event_id="deadbeef")
             m.g4b_readonly_contracts.G4BReadonlyChainReceipt(event, m.entry_admission_v2_contracts.parse_admission_outbox_event(event), bad_projection, consume, candidate, shadow, shadow_result, _reconciliation())
 
+    def test_chain_rejects_generation_or_checkpoint_mismatch(self):
+        event, _mapped, candidate = _candidate()
+        run = m.shadow_diff_contracts.ShadowComparisonRun(
+            RUN_ID, 7, 8, "paper-main", "BTC-USDT", "swap", "legacy", "v1", "b" * 64, GENERATION_ID,
+            "candidate-consumer", BUILD, 7, NOW, "shadow-corr",
+            m.shadow_diff_contracts.ShadowTolerancePolicy("policy-v1", "0.01", "0.10", "0.001"),
+        )
+        shadow = m.candidate_shadow_contracts.bind_candidate_shadow(run, candidate)
+        shadow_result = m.candidate_shadow_contracts.compare_bound_candidate_shadow(shadow, m.shadow_diff_contracts.ShadowSourceSnapshot(
+            "legacy", 7, 8, "paper-main", "BTC-USDT", "swap", "candidate-v1", NOW,
+            m.shadow_diff_contracts.ShadowSourceStatus.READY,
+            {"equity": m.shadow_diff_contracts.ShadowFactValue("100", m.shadow_diff_contracts.ShadowValueKind.MONETARY, "USDT")},
+        ))
+        request = m.projection_consumer_contracts.ProjectionConsumeRequest(_consumer(), str(GENERATION_ID), 7, event, NOW)
+        for altered in (
+            replace(request, generation_id="77777777-7777-7777-7777-777777777777"),
+            request,
+        ):
+            consume = m.projection_consumer_contracts.ProjectionConsumeResult(altered, m.projection_consumer_contracts.ConsumerApplyDisposition.CREATED, 8 if altered is request else 7)
+            with self.assertRaises(m.g4b_readonly_contracts.G4BReadonlyContractError):
+                m.g4b_readonly_contracts.validate_g4b_readonly_chain(event, consume, candidate, shadow, shadow_result, _reconciliation())
+
 
 if __name__ == "__main__":
     unittest.main()
