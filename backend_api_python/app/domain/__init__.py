@@ -100,6 +100,11 @@ from .protection_entry_contracts import (
     ProtectionEntryFacts,
     map_protection_to_canonical_entry,
 )
+from .strategy_v2_candidate_contracts import (
+    STRATEGY_V2_CANDIDATE_CONTRACT_VERSION,
+    StrategyV2CandidateError,
+    StrategyV2CandidateTradePlan,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -190,4 +195,7 @@ __all__ = [
     "ProtectionEntryContractError",
     "ProtectionEntryFacts",
     "map_protection_to_canonical_entry",
+    "STRATEGY_V2_CANDIDATE_CONTRACT_VERSION",
+    "StrategyV2CandidateError",
+    "StrategyV2CandidateTradePlan",
 ]
