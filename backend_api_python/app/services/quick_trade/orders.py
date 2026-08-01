@@ -124,7 +124,17 @@ def attach_quick_trade_protection(
     margin_mode: str,
     client_order_id: str,
 ) -> list[Dict[str, Any]]:
-    """Attach native protection to the filled part of a Quick Trade entry."""
+    """Reject the retired direct native-protection entry point.
+
+    Protection must enter through the canonical admission contract.  Keep this
+    guard before any legacy request construction or native-protection import so
+    no caller can reach an exchange client through Quick Trade.
+    """
+    from app.services.live_trading.native_protection import NativeProtectionDisabledError
+
+    raise NativeProtectionDisabledError("quick-trade native protection is permanently disabled")
+
+    # Legacy compatibility implementation retained below while callers migrate.
     if str(market_type or "").strip().lower() != "swap":
         return []
     if float(filled_qty or 0.0) <= 0 or float(avg_price or 0.0) <= 0:
