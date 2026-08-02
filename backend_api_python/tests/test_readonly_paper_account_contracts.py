@@ -98,6 +98,27 @@ class ReadonlyPaperAccountTests(unittest.TestCase):
         public = first.to_public_dict()
         self.assertEqual(public["orders"][0]["quantity"], "1")
         self.assertFalse(public["live_enabled"])
+        self.assertEqual(public["positions"][0]["signed_quantity"], "1")
+        self.assertEqual(public["positions"][0]["average_entry_price"], "100")
+        self.assertEqual(public["fees_status"], "UNAVAILABLE_NO_FEE_FACTS")
+        self.assertEqual(public["position_projection_version"], "paper-position-projection-v1")
+
+    def test_position_projection_handles_partial_close_and_flip(self):
+        first = list(row())
+        second = list(row())
+        second[0], second[3], second[7], second[11] = "paper-2", "sell", Decimal("110"), datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc)
+        third = list(row())
+        third[0], third[3], third[5], third[7], third[11] = "paper-3", "sell", Decimal("2"), Decimal("90"), datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc)
+        snapshot = R.ReadonlyPaperAccountRepository().read(Connection([tuple(third), tuple(second), tuple(first)]), user_id=7)
+        self.assertEqual(snapshot.positions[0].signed_quantity, Decimal("-2"))
+        self.assertEqual(snapshot.positions[0].average_entry_price, Decimal("90"))
+        self.assertEqual(snapshot.positions[0].realized_pnl, Decimal("10"))
+
+    def test_filled_order_without_price_fails_closed_for_position_projection(self):
+        missing = list(row())
+        missing[7] = None
+        with self.assertRaises(R.ReadonlyPaperAccountRepositoryError):
+            R.ReadonlyPaperAccountRepository().read(Connection([tuple(missing)]), user_id=7)
 
     def test_malformed_numeric_row_fails_closed(self):
         with self.assertRaises(R.ReadonlyPaperAccountRepositoryError):

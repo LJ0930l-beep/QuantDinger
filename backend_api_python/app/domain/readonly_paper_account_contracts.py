@@ -17,6 +17,7 @@ from typing import Any
 
 
 READONLY_PAPER_ACCOUNT_CONTRACT_VERSION = "readonly-paper-account-v1"
+PAPER_POSITION_PROJECTION_VERSION = "paper-position-projection-v1"
 
 
 class ReadonlyPaperAccountError(ValueError):
@@ -28,6 +29,75 @@ class PaperOrderStatus(str, Enum):
     FILLED = "filled"
     CANCELLED = "cancelled"
     REJECTED = "rejected"
+
+
+class PaperPositionProjectionError(ReadonlyPaperAccountError):
+    """Filled paper facts cannot form a deterministic position projection."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReadonlyPaperPositionEstimate:
+    market: str
+    symbol: str
+    signed_quantity: Decimal
+    average_entry_price: Decimal | None
+    realized_pnl: Decimal
+    projection_status: str = "DERIVED_PAPER_ESTIMATE"
+
+    def __post_init__(self) -> None:
+        _text(self.market, "market")
+        _text(self.symbol, "symbol")
+        quantity = _decimal(self.signed_quantity, "signed_quantity")
+        average = None if self.average_entry_price is None else _decimal(self.average_entry_price, "average_entry_price", positive=True)
+        realized = _decimal(self.realized_pnl, "realized_pnl")
+        if self.projection_status != "DERIVED_PAPER_ESTIMATE":
+            raise PaperPositionProjectionError("unsupported paper position projection status")
+        object.__setattr__(self, "signed_quantity", quantity)
+        object.__setattr__(self, "average_entry_price", average)
+        object.__setattr__(self, "realized_pnl", realized)
+
+
+def project_paper_positions(orders: tuple["ReadonlyPaperOrderFact", ...]) -> tuple[ReadonlyPaperPositionEstimate, ...]:
+    """Project filled paper orders into deterministic, explicitly derived positions.
+
+    This is not an account-balance or fee ledger.  Every filled order must
+    carry a fill price; otherwise the projection refuses to guess.
+    """
+    if not isinstance(orders, tuple) or any(not isinstance(item, ReadonlyPaperOrderFact) for item in orders):
+        raise PaperPositionProjectionError("orders must be typed")
+    state: dict[tuple[str, str], dict[str, Decimal | None]] = {}
+    for order in sorted(orders, key=lambda item: (item.created_at, item.order_uid)):
+        if order.status is not PaperOrderStatus.FILLED:
+            continue
+        if order.fill_price is None:
+            raise PaperPositionProjectionError("filled paper order requires fill_price for projection")
+        key = (order.market, order.symbol)
+        current = state.setdefault(key, {"quantity": Decimal("0"), "average": None, "realized": Decimal("0")})
+        signed = order.quantity if order.side.lower() == "buy" else -order.quantity
+        quantity = current["quantity"] or Decimal("0")
+        average = current["average"]
+        fill_price = order.fill_price
+        if quantity == 0:
+            current["quantity"] = signed
+            current["average"] = fill_price
+            continue
+        same_direction = (quantity > 0 and signed > 0) or (quantity < 0 and signed < 0)
+        if same_direction:
+            current["average"] = ((abs(quantity) * (average or fill_price)) + (abs(signed) * fill_price)) / (abs(quantity) + abs(signed))
+            current["quantity"] = quantity + signed
+            continue
+        closing = min(abs(quantity), abs(signed))
+        if quantity > 0:
+            current["realized"] = (current["realized"] or Decimal("0")) + (fill_price - (average or fill_price)) * closing
+        else:
+            current["realized"] = (current["realized"] or Decimal("0")) + ((average or fill_price) - fill_price) * closing
+        remaining = quantity + signed
+        current["quantity"] = remaining
+        current["average"] = None if remaining == 0 else (average if (quantity > 0 and remaining > 0) or (quantity < 0 and remaining < 0) else fill_price)
+    result = []
+    for (market, symbol), values in sorted(state.items()):
+        result.append(ReadonlyPaperPositionEstimate(market, symbol, values["quantity"] or Decimal("0"), values["average"], values["realized"] or Decimal("0")))
+    return tuple(result)
 
 
 def _text(value: Any, field_name: str) -> str:
@@ -97,6 +167,7 @@ class ReadonlyPaperAccountSnapshot:
     orders: tuple[ReadonlyPaperOrderFact, ...]
     observed_at: datetime
     snapshot_fingerprint: str = field(init=False)
+    positions: tuple[ReadonlyPaperPositionEstimate, ...] = field(init=False)
 
     def __post_init__(self) -> None:
         if isinstance(self.user_id, bool) or not isinstance(self.user_id, int) or self.user_id <= 0:
@@ -108,9 +179,15 @@ class ReadonlyPaperAccountSnapshot:
         observed = _utc(self.observed_at, "observed_at")
         if any(item.created_at > observed for item in self.orders):
             raise ReadonlyPaperAccountError("order cannot be newer than observed_at")
+        try:
+            projected_positions = project_paper_positions(self.orders)
+        except PaperPositionProjectionError:
+            raise
+        object.__setattr__(self, "positions", projected_positions)
         object.__setattr__(self, "observed_at", observed)
         material = {
             "version": READONLY_PAPER_ACCOUNT_CONTRACT_VERSION,
+            "position_projection_version": PAPER_POSITION_PROJECTION_VERSION,
             "user_id": self.user_id,
             "observed_at": observed.isoformat(),
             "orders": [
@@ -151,6 +228,21 @@ class ReadonlyPaperAccountSnapshot:
             "observed_at": self.observed_at.isoformat(),
             "order_count": len(self.orders),
             "filled_count": self.filled_count,
+            "position_projection_status": "DERIVED_PAPER_ESTIMATE",
+            "position_projection_version": PAPER_POSITION_PROJECTION_VERSION,
+            "positions": [
+                {
+                    "market": item.market,
+                    "symbol": item.symbol,
+                    "signed_quantity": decimal_text(item.signed_quantity),
+                    "average_entry_price": decimal_text(item.average_entry_price),
+                    "realized_pnl": decimal_text(item.realized_pnl),
+                    "projection_status": item.projection_status,
+                }
+                for item in self.positions
+            ],
+            "fees_status": "UNAVAILABLE_NO_FEE_FACTS",
+            "funding_status": "UNAVAILABLE_NO_FUNDING_FACTS",
             "snapshot_fingerprint": self.snapshot_fingerprint,
             "orders": [
                 {
@@ -175,8 +267,12 @@ class ReadonlyPaperAccountSnapshot:
 
 __all__ = [
     "PaperOrderStatus",
+    "PAPER_POSITION_PROJECTION_VERSION",
     "READONLY_PAPER_ACCOUNT_CONTRACT_VERSION",
     "ReadonlyPaperAccountError",
+    "PaperPositionProjectionError",
+    "ReadonlyPaperPositionEstimate",
     "ReadonlyPaperAccountSnapshot",
     "ReadonlyPaperOrderFact",
+    "project_paper_positions",
 ]
