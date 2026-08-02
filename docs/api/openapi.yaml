@@ -983,6 +983,26 @@ paths:
       - Dashboard
       operationId: getApiQuantProjectionGenerationReadonly
       x-visibility: internal
+  /api/quant/reconciliation/checkpoint/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return one authenticated scoped reconciliation checkpoint without writes.
+      tags:
+      - Dashboard
+      operationId: getApiQuantReconciliationCheckpointReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:
