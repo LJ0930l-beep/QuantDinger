@@ -36,6 +36,10 @@ from app.services.production_readiness_service import (
     ProductionReadinessServiceError,
     service_from_app as production_readiness_service_from_app,
 )
+from app.services.gate_testnet_rehearsal_result_service import (
+    GateTestnetRehearsalResultServiceError,
+    service_from_app as gate_testnet_rehearsal_service_from_app,
+)
 from app.utils.auth import login_required
 
 
@@ -124,6 +128,18 @@ def get_readonly_release_readiness():
         status, body = production_readiness_service_from_app(current_app).read_response()
     except ProductionReadinessServiceError:
         return jsonify({"code": 0, "msg": "release readiness unavailable", "data": None}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/testnet/rehearsal/readonly", methods=["GET"])
+@login_required
+def get_readonly_gate_testnet_rehearsal():
+    """Return injected Gate TestNet rehearsal evidence without writes."""
+
+    try:
+        status, body = gate_testnet_rehearsal_service_from_app(current_app).read_response()
+    except GateTestnetRehearsalResultServiceError:
+        return jsonify({"code": 0, "msg": "testnet rehearsal unavailable", "data": None}), 503
     return jsonify(body), status
 
 

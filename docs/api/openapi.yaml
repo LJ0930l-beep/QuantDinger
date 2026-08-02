@@ -882,6 +882,26 @@ paths:
       - Dashboard
       operationId: getApiQuantReleaseReadinessReadonly
       x-visibility: internal
+  /api/quant/testnet/rehearsal/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return injected Gate TestNet rehearsal evidence without writes.
+      tags:
+      - Dashboard
+      operationId: getApiQuantTestnetRehearsalReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:

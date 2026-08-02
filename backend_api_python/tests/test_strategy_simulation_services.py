@@ -58,6 +58,7 @@ from app.services.research_run_result_service import ResearchRunResultService, R
 from app.domain.production_readiness_contracts import ProductionReadinessEvidence, ProductionReadinessError, ProductionReadinessStatus, derive_production_readiness  # noqa: E402
 from app.services.production_readiness_service import ProductionReadinessService, ProductionReadinessServiceError  # noqa: E402
 from app.services.gate_testnet_rehearsal_service import GateTestnetRehearsalService, GateTestnetRehearsalServiceError  # noqa: E402
+from app.services.gate_testnet_rehearsal_result_service import GateTestnetRehearsalResultService, GateTestnetRehearsalResultServiceError  # noqa: E402
 
 
 UTC = timezone.utc
@@ -256,6 +257,13 @@ class StrategySimulationServiceTests(unittest.TestCase):
                 GateTestnetMarketSessionRequest("BTC_USDT", datetime(2026, 1, 1, 0, 5, tzinfo=UTC), "rehearsal-2", "rules-1"),
                 GateTestnetMarketSessionRequest("BTC_USDT", datetime(2026, 1, 1, 0, 5, tzinfo=UTC), "rehearsal-3", "rules-1"),
             ))
+
+    def test_rehearsal_result_surface_is_read_only(self):
+        status, body = GateTestnetRehearsalResultService().read_response()
+        self.assertEqual(status, 503)
+        self.assertFalse(body["live_enabled"])
+        with self.assertRaises(GateTestnetRehearsalResultServiceError):
+            GateTestnetRehearsalResultService(lambda: {"live": True}).read_response()
 
 
 if __name__ == "__main__":
