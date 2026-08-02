@@ -311,6 +311,13 @@ from .strategy_catalog_contracts import (
     StrategyCatalogStatus,
     StrategyCatalogView,
 )
+from .production_readiness_contracts import (
+    PRODUCTION_READINESS_CONTRACT_VERSION,
+    ProductionReadinessError,
+    ProductionReadinessEvidence,
+    ProductionReadinessStatus,
+    derive_production_readiness,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -675,6 +682,11 @@ __all__ = [
     "StrategyCatalogError",
     "StrategyCatalogStatus",
     "StrategyCatalogView",
+    "PRODUCTION_READINESS_CONTRACT_VERSION",
+    "ProductionReadinessError",
+    "ProductionReadinessEvidence",
+    "ProductionReadinessStatus",
+    "derive_production_readiness",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",
