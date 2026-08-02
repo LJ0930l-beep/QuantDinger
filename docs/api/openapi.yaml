@@ -1018,7 +1018,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanSuccessEnvelope'
-      summary: Return one authenticated, credential- and instrument-scoped Shadow Diff summary.
+      summary: Return one authenticated, credential- and instrument-scoped Shadow
+        Diff summary.
       tags:
       - Dashboard
       operationId: getApiQuantShadowSummaryReadonly
