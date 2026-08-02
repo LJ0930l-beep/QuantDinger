@@ -250,6 +250,8 @@ class GateOrderFact:
     average_fill_price: Decimal | None
     observed_at: datetime
     source_event_id: str
+    raw_status: str = ""
+    finish_reason: str | None = None
 
     def __post_init__(self) -> None:
         if _text(self.venue_id, "venue_id", lower=True) != "gate" or not isinstance(self.market_type, AssetMarketType):
@@ -269,6 +271,10 @@ class GateOrderFact:
         if self.average_fill_price is not None:
             object.__setattr__(self, "average_fill_price", _decimal(self.average_fill_price, "average_fill_price", positive=True))
         object.__setattr__(self, "observed_at", _utc(self.observed_at))
+        if self.raw_status:
+            _text(self.raw_status, "raw_status")
+        if self.finish_reason is not None:
+            _text(self.finish_reason, "finish_reason")
 
 
 @dataclass(frozen=True)

@@ -155,7 +155,27 @@ def normalize_gate_orders(
     for index, row in enumerate(rows):
         try:
             side = GateOrderSide(str(_required(row, "side")).lower())
-            status = GateOrderStatus(str(_required(row, "status", "state")).lower())
+            raw_status = str(_required(row, "status", "state")).lower()
+            finish_reason = row.get("finish_as", row.get("finish_reason"))
+            if finish_reason not in (None, ""):
+                finish_reason = str(finish_reason).lower()
+            if raw_status == "open":
+                status = GateOrderStatus.OPEN
+            elif raw_status == "partially_filled":
+                status = GateOrderStatus.PARTIALLY_FILLED
+            elif raw_status in {"finished", "closed"}:
+                if finish_reason in {"filled", "succeeded"}:
+                    status = GateOrderStatus.FILLED
+                elif finish_reason in {"cancelled", "liquidated", "liquidate_cancelled", "ioc", "poc", "fok", "stp", "small", "depth_not_enough", "trader_not_enough", "reduce_only", "position_closed", "reduce_out", "auto_deleveraged"}:
+                    status = GateOrderStatus.CANCELLED
+                else:
+                    raise ValueError("finished Gate order lacks an authoritative finish reason")
+            elif raw_status == "cancelled":
+                status = GateOrderStatus.CANCELLED
+            elif raw_status == "rejected":
+                status = GateOrderStatus.REJECTED
+            else:
+                raise ValueError("unsupported Gate order status")
         except ValueError as exc:
             raise GateReadPayloadError("order side or status is unsupported") from exc
         result.append(GateOrderFact(
@@ -166,7 +186,7 @@ def normalize_gate_orders(
             side, status, _required(row, "quantity", "size"),
             _required(row, "filled_quantity", "filled_size", "filled") ,
             (row.get("average_fill_price", row.get("avg_deal_price")) or None),
-            observed_at, f"{source_event_prefix}:{index}",
+            observed_at, f"{source_event_prefix}:{index}", raw_status, finish_reason,
         ))
     return tuple(result)
 

@@ -60,6 +60,13 @@ class GateReadFormatterTests(unittest.TestCase):
         }], market_type=C.AssetMarketType.PERPETUAL, account_scope="paper", observed_at=NOW, source_event_prefix="order")
         self.assertEqual(orders[0].exchange_order_id, "order-1")
         self.assertEqual(orders[0].filled_quantity, Decimal("1"))
+        finished = M.normalize_gate_orders([{
+            "contract": "BTC_USDT", "id": "order-2", "side": "sell", "status": "finished",
+            "finish_as": "filled", "size": "1", "filled": "1", "avg_deal_price": "101",
+        }], market_type=C.AssetMarketType.PERPETUAL, account_scope="paper", observed_at=NOW, source_event_prefix="order")
+        self.assertEqual(finished[0].status, M.GateOrderStatus.FILLED)
+        with self.assertRaises(M.GateReadPayloadError):
+            M.normalize_gate_orders([{"contract": "BTC_USDT", "id": "order-3", "side": "buy", "status": "finished", "size": "1", "filled": "0"}], market_type=C.AssetMarketType.PERPETUAL, account_scope="paper", observed_at=NOW, source_event_prefix="order")
         fills = M.normalize_gate_fills([{
             "contract": "BTC_USDT", "order_id": "order-1", "trade_id": "fill-1",
             "side": "buy", "size": "1.000", "price": "100", "fee": "0.1", "fee_asset": "usdt",
