@@ -742,6 +742,26 @@ paths:
       summary: Prometheus metrics
       operationId: getPrometheusMetrics
       x-visibility: internal
+  /api/quant/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return the validated read-only projection/shadow/reconciliation view.
+      tags:
+      - Dashboard
+      operationId: getApiQuantReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:
@@ -6914,20 +6934,7 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/QuickTradeOrderRequest'
-      summary: Place a quick market or limit order.
-      description: "Body JSON:\ncredential_id  (int)    - saved exchange credential\
-        \ ID\nsymbol         (str)    - e.g. \"BTC/USDT\"\nside           (str)  \
-        \  - \"buy\" or \"sell\"\norder_type     (str)    - \"market\" or \"limit\"\
-        \  (default: market)\namount         (float)  - spot quote amount or swap\
-        \ margin amount in USDT\nprice          (float)  - limit price (required for\
-        \ limit orders)\nleverage       (int)    - leverage multiplier (default: 1)\n\
-        \                          - leverage = 1: spot market\n                 \
-        \         - leverage > 1: swap (perpetual futures) market\nmarket_type   \
-        \ (str)    - \"swap\" / \"spot\" (optional, auto-determined by leverage if\
-        \ not provided)\ntp_price       (float)  - take-profit price (optional, for\
-        \ record only)\nsl_price       (float)  - stop-loss price (optional, for record\
-        \ only)\nsource         (str)    - \"ai_radar\" / \"ai_analysis\" / \"indicator\"\
-        \ / \"manual\""
+      summary: Reject the retired legacy quick-trade order mutation endpoint.
       tags:
       - QuickTrade
       operationId: postApiQuickTradePlaceOrder
@@ -7002,25 +7009,7 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/QuickTradeCloseRequest'
-      summary: Close an existing position.
-      description: 'Body JSON:
-
-        credential_id  (int)    - saved exchange credential ID
-
-        symbol         (str)    - e.g. "BTC/USDT"
-
-        market_type    (str)    - "swap" / "spot" (default: swap)
-
-        size           (float)  - position size to close (optional, defaults to full
-        position)
-
-        close_scope    (str)    - "full" (default) or "system_tracked" (swap only:
-        min(position, net from qd_quick_trades))
-
-        position_side  (str)    - optional "long" / "short"; required when both directions
-        exist for the same symbol
-
-        source         (str)    - "ai_radar" / "ai_analysis" / "indicator" / "manual"'
+      summary: Reject the retired legacy quick-trade position mutation endpoint.
       tags:
       - QuickTrade
       operationId: postApiQuickTradeClosePosition
