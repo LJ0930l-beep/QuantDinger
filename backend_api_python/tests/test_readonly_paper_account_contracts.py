@@ -90,6 +90,13 @@ class ReadonlyPaperAccountTests(unittest.TestCase):
         snapshot = R.ReadonlyPaperAccountRepository().read(Connection([tuple(legacy)]), user_id=7)
         self.assertEqual(snapshot.orders[0].created_at.tzinfo, timezone.utc)
 
+    def test_side_and_order_type_are_canonicalized(self):
+        values = list(row())
+        values[3], values[4] = "BUY", "MARKET"
+        snapshot = R.ReadonlyPaperAccountRepository().read(Connection([tuple(values)]), user_id=7)
+        self.assertEqual(snapshot.orders[0].side, "buy")
+        self.assertEqual(snapshot.orders[0].order_type, "market")
+
     def test_snapshot_fingerprint_and_public_output_are_stable(self):
         connection = Connection([row()])
         first = R.ReadonlyPaperAccountRepository().read(connection, user_id=7)

@@ -146,7 +146,9 @@ class ReadonlyPaperOrderFact:
         side = _text(self.side, "side").lower()
         if side not in {"buy", "sell"}:
             raise ReadonlyPaperAccountError("side is unsupported")
-        _text(self.order_type, "order_type")
+        order_type = _text(self.order_type, "order_type").lower()
+        object.__setattr__(self, "side", side)
+        object.__setattr__(self, "order_type", order_type)
         if not isinstance(self.status, PaperOrderStatus):
             raise ReadonlyPaperAccountError("status must be typed")
         object.__setattr__(self, "quantity", _decimal(self.quantity, "quantity", positive=True))
