@@ -150,6 +150,13 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         from app.routes import register_routes
 
         register_routes(app)
+        # The built-in catalog is read-only metadata for the Strategy Factory.
+        # It is safe as the default because it contains no credentials,
+        # account facts, execution calls, or live authority.  Deployments may
+        # replace it with an explicitly reviewed provider before serving.
+        from app.services.builtin_strategy_catalog import builtin_strategy_catalog
+
+        app.extensions.setdefault("readonly_strategy_catalog_provider", builtin_strategy_catalog)
     run_startup_hooks(app)
 
     return app
