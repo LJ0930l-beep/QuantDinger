@@ -957,7 +957,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanSuccessEnvelope'
-      summary: Return artifact and rollback readiness without changing deployment state.
+      summary: Return artifact and rollback readiness without changing deployment
+        state.
       tags:
       - Dashboard
       operationId: getApiQuantDeploymentReadinessReadonly
