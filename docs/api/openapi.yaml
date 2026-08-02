@@ -1059,7 +1059,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanSuccessEnvelope'
-      summary: Return injected Gate account balances, orders, fills, and positions.
+      summary: Return injected Gate account balances, orders, fills, and
+        positions.
       tags:
       - Dashboard
       operationId: getApiQuantGateAccountReadonly
