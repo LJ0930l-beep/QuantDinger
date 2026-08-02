@@ -283,6 +283,11 @@ from .backtest_report_contracts import (
     BacktestReportSnapshot,
     build_backtest_report,
 )
+from .backtest_report_codec import (
+    BacktestReportCodecError,
+    deserialize_backtest_report,
+    serialize_backtest_report,
+)
 from .backtest_result_contracts import (
     BACKTEST_RESULT_CONTRACT_VERSION,
     BacktestResultError,
@@ -695,7 +700,10 @@ __all__ = [
     "BACKTEST_REPORT_CONTRACT_VERSION",
     "BacktestReportError",
     "BacktestReportSnapshot",
+    "BacktestReportCodecError",
     "build_backtest_report",
+    "deserialize_backtest_report",
+    "serialize_backtest_report",
     "BACKTEST_RESULT_CONTRACT_VERSION",
     "BacktestResultError",
     "BacktestResultResponse",

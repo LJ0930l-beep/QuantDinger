@@ -25,6 +25,7 @@ def _contracts() -> SimpleNamespace:
     names = (
         "app", "app.domain", "app.domain.deterministic_backtest_contracts", "app.domain.market_data_quality_contracts",
         "app.domain.backtest_dataset_contracts", "app.domain.backtest_metrics_contracts", "app.domain.backtest_report_contracts",
+        "app.domain.backtest_report_codec",
     )
     missing = object(); previous = {name: sys.modules.get(name, missing) for name in names}
     try:
@@ -36,7 +37,8 @@ def _contracts() -> SimpleNamespace:
         dataset = _load(names[4], ROOT / "app" / "domain" / "backtest_dataset_contracts.py")
         metrics = _load(names[5], ROOT / "app" / "domain" / "backtest_metrics_contracts.py")
         report = _load(names[6], ROOT / "app" / "domain" / "backtest_report_contracts.py")
-        return SimpleNamespace(backtest=backtest, quality=quality, dataset=dataset, metrics=metrics, report=report)
+        codec = _load(names[7], ROOT / "app" / "domain" / "backtest_report_codec.py")
+        return SimpleNamespace(backtest=backtest, quality=quality, dataset=dataset, metrics=metrics, report=report, codec=codec)
     finally:
         for name in reversed(names):
             original = previous[name]
@@ -85,6 +87,25 @@ class BacktestReportContractTests(unittest.TestCase):
         window = C.metrics.WalkForwardWindow("w1", UTC, UTC + timedelta(minutes=3), True)
         with self.assertRaises(C.report.BacktestReportError):
             C.report.build_backtest_report(report.run, report.dataset, report.metrics, (window,), report_created_at=UTC + timedelta(minutes=4))
+
+    def test_canonical_codec_round_trips_and_keeps_decimal_text(self):
+        report = _report()
+        encoded = C.codec.serialize_backtest_report(report)
+        self.assertEqual(encoded["contract_version"], "backtest-report-v1")
+        self.assertEqual(encoded["metrics"]["final_equity"], "1010")
+        self.assertEqual(C.codec.deserialize_backtest_report(encoded).report_fingerprint, report.report_fingerprint)
+        self.assertNotIn("e+", repr(encoded))
+
+    def test_codec_rejects_float_and_tampered_fingerprint(self):
+        report = _report()
+        encoded = C.codec.serialize_backtest_report(report)
+        encoded["metrics"]["final_equity"] = 1010.0
+        with self.assertRaises(C.codec.BacktestReportCodecError):
+            C.codec.deserialize_backtest_report(encoded)
+        encoded = C.codec.serialize_backtest_report(report)
+        encoded["report_fingerprint"] = "0" * 64
+        with self.assertRaises(C.codec.BacktestReportCodecError):
+            C.codec.deserialize_backtest_report(encoded)
 
 
 if __name__ == "__main__": unittest.main()
