@@ -495,6 +495,11 @@ from .market_data_sequence_contracts import (
     SequenceDisposition,
     apply_market_data_event,
 )
+from .readonly_shadow_summary_contracts import (
+    READONLY_SHADOW_SUMMARY_VERSION,
+    ReadonlyShadowComparisonSummary,
+    ReadonlyShadowSummaryError,
+)
 
 __all__ = [
     "CALCULATION_POLICY_VERSION",
@@ -870,4 +875,7 @@ __all__ = [
     "GATE_BACKTEST_DATASET_CONTRACT_VERSION",
     "GateBacktestDatasetError",
     "build_gate_backtest_dataset",
+    "READONLY_SHADOW_SUMMARY_VERSION",
+    "ReadonlyShadowComparisonSummary",
+    "ReadonlyShadowSummaryError",
 ]

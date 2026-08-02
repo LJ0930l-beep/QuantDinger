@@ -62,6 +62,10 @@ from app.services.readonly_reconciliation_summary_service import (
     ReadonlyReconciliationSummaryServiceError,
     service_from_app as reconciliation_summary_service_from_app,
 )
+from app.services.readonly_shadow_summary_service import (
+    ReadonlyShadowSummaryServiceError,
+    service_from_app as shadow_summary_service_from_app,
+)
 from app.utils.auth import get_current_user_id
 from app.utils.auth import login_required
 
@@ -242,6 +246,29 @@ def get_readonly_reconciliation_checkpoint():
             as_of=as_of,
         )
     except (KeyError, ValueError, TypeError, ReadonlyReconciliationSummaryServiceError):
+        return jsonify({"status": "UNAVAILABLE", "live_enabled": False}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/shadow/summary/readonly", methods=["GET"])
+@login_required
+def get_readonly_shadow_summary():
+    """Return one authenticated, credential- and instrument-scoped Shadow Diff summary."""
+
+    try:
+        credential_id = int(request.args["credential_id"])
+        exchange = request.args["exchange"]
+        market_type = request.args["market_type"]
+        account_scope = request.args["account_scope"]
+        instrument_id = request.args.get("instrument_id", "")
+        observed_at = request.args.get("as_of")
+        as_of = datetime.fromisoformat(observed_at.replace("Z", "+00:00")) if observed_at else datetime.now(timezone.utc)
+        status, body = shadow_summary_service_from_app(current_app).read_response(
+            user_id=get_current_user_id(), credential_id=credential_id, exchange=exchange,
+            market_type=market_type, account_scope=account_scope, instrument_id=instrument_id,
+            as_of=as_of,
+        )
+    except (KeyError, ValueError, TypeError, ReadonlyShadowSummaryServiceError):
         return jsonify({"status": "UNAVAILABLE", "live_enabled": False}), 503
     return jsonify(body), status
 

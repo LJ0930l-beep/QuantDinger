@@ -157,6 +157,7 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         from app.services.builtin_strategy_catalog import builtin_strategy_catalog
         from app.services.readonly_projection_summary_service import postgres_projection_summary_provider
         from app.services.readonly_reconciliation_summary_service import postgres_reconciliation_summary_provider
+        from app.services.readonly_shadow_summary_service import postgres_shadow_summary_provider
 
         app.extensions.setdefault("readonly_strategy_catalog_provider", builtin_strategy_catalog)
         # This provider is SELECT-only and returns UNAVAILABLE when the
@@ -164,6 +165,7 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         # the stricter G4-B receipt required by /api/quant/readonly.
         app.extensions.setdefault("readonly_projection_summary_provider", postgres_projection_summary_provider)
         app.extensions.setdefault("readonly_reconciliation_summary_provider", postgres_reconciliation_summary_provider)
+        app.extensions.setdefault("readonly_shadow_summary_provider", postgres_shadow_summary_provider)
     run_startup_hooks(app)
 
     return app

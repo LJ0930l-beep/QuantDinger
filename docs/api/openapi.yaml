@@ -1003,6 +1003,26 @@ paths:
       - Dashboard
       operationId: getApiQuantReconciliationCheckpointReadonly
       x-visibility: internal
+  /api/quant/shadow/summary/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return one authenticated, credential- and instrument-scoped Shadow Diff summary.
+      tags:
+      - Dashboard
+      operationId: getApiQuantShadowSummaryReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:
