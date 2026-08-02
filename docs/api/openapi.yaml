@@ -817,7 +817,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanSuccessEnvelope'
-      summary: Return Gate, backtest, and Paper/Shadow readiness without side effects.
+      summary: Return Gate/backtest/Paper readiness without side effects.
       tags:
       - Dashboard
       operationId: getApiQuantReadiness
