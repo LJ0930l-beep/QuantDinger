@@ -32,6 +32,10 @@ from app.services.research_run_result_service import (
     ResearchRunResultServiceError,
     service_from_app as research_run_service_from_app,
 )
+from app.services.production_readiness_service import (
+    ProductionReadinessServiceError,
+    service_from_app as production_readiness_service_from_app,
+)
 from app.utils.auth import login_required
 
 
@@ -108,6 +112,18 @@ def get_readonly_research_run():
         status, body = research_run_service_from_app(current_app).read_response()
     except ResearchRunResultServiceError:
         return jsonify({"code": 0, "msg": "research run unavailable", "data": None}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/release-readiness/readonly", methods=["GET"])
+@login_required
+def get_readonly_release_readiness():
+    """Return release evidence without changing deployment state."""
+
+    try:
+        status, body = production_readiness_service_from_app(current_app).read_response()
+    except ProductionReadinessServiceError:
+        return jsonify({"code": 0, "msg": "release readiness unavailable", "data": None}), 503
     return jsonify(body), status
 
 

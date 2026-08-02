@@ -56,6 +56,7 @@ from app.services.gate_testnet_market_session_service import GateTestnetMarketSe
 from app.services.gate_research_run_service import GateResearchRunService  # noqa: E402
 from app.services.research_run_result_service import ResearchRunResultService, ResearchRunResultServiceError  # noqa: E402
 from app.domain.production_readiness_contracts import ProductionReadinessEvidence, ProductionReadinessError, ProductionReadinessStatus, derive_production_readiness  # noqa: E402
+from app.services.production_readiness_service import ProductionReadinessService, ProductionReadinessServiceError  # noqa: E402
 
 
 UTC = timezone.utc
@@ -220,6 +221,15 @@ class StrategySimulationServiceTests(unittest.TestCase):
         self.assertEqual(derive_production_readiness(approved), ProductionReadinessStatus.PRODUCTION_READY)
         with self.assertRaises(ProductionReadinessError):
             ProductionReadinessEvidence(True, True, True, True, True, True, True, True, True)
+
+    def test_release_readiness_surface_is_read_only(self):
+        evidence = ProductionReadinessEvidence(True, True, True, True, True, True, True, True)
+        status, body = ProductionReadinessService(lambda: evidence).read_response()
+        self.assertEqual(status, 200)
+        self.assertEqual(body["status"], "PRODUCTION_READY")
+        self.assertFalse(body["live_enabled"])
+        with self.assertRaises(ProductionReadinessServiceError):
+            ProductionReadinessService(lambda: {"live": True}).read_response()
 
 
 if __name__ == "__main__":

@@ -862,6 +862,26 @@ paths:
       - Dashboard
       operationId: getApiQuantResearchReadonly
       x-visibility: internal
+  /api/quant/release-readiness/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return release evidence without changing deployment state.
+      tags:
+      - Dashboard
+      operationId: getApiQuantReleaseReadinessReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:
