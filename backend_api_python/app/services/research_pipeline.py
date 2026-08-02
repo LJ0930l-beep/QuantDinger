@@ -9,9 +9,8 @@ from typing import Iterable
 from app.domain.deterministic_backtest_contracts import BacktestBar
 from app.domain.backtest_dataset_contracts import BacktestDatasetSnapshot
 from app.domain.paper_shadow_contracts import PaperShadowDecision, PaperShadowRunFacts, simulation_fingerprint
-from app.domain.portfolio_risk_contracts import PositionSizingDecision, PositionSizingRequest
+from app.domain.portfolio_risk_contracts import PositionSizingDecision, PositionSizingRequest, portfolio_risk_fingerprint
 from app.domain.strategy_library_contracts import StrategyDefinition, StrategySignalFact, strategy_fingerprint
-from app.domain.portfolio_risk_contracts import portfolio_risk_fingerprint
 from app.services.paper_shadow_service import PaperShadowService
 from app.services.portfolio_risk_service import PortfolioRiskService
 from app.services.strategy_factory import StrategyFactory
