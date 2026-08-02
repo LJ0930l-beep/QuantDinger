@@ -12,6 +12,10 @@ from app.services.readonly_quant_state_service import (
     ReadonlyQuantStateServiceError,
     service_from_app,
 )
+from app.services.backtest_result_service import (
+    BacktestResultServiceError,
+    service_from_app as backtest_service_from_app,
+)
 from app.utils.auth import login_required
 
 
@@ -28,6 +32,18 @@ def get_readonly_quant_state():
     except ReadonlyQuantStateServiceError:
         # Keep provider details and payloads out of the public boundary.
         return jsonify({"code": 0, "msg": "read-only state unavailable", "data": None}), 503
+    return jsonify(response.body), response.http_status
+
+
+@blp.route("/api/quant/backtest/readonly", methods=["GET"])
+@login_required
+def get_readonly_backtest_result():
+    """Return an injected deterministic backtest report without side effects."""
+
+    try:
+        response = backtest_service_from_app(current_app).read_response()
+    except BacktestResultServiceError:
+        return jsonify({"code": 0, "msg": "backtest result unavailable", "data": None}), 503
     return jsonify(response.body), response.http_status
 
 

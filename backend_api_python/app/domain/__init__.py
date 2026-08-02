@@ -283,6 +283,14 @@ from .backtest_report_contracts import (
     BacktestReportSnapshot,
     build_backtest_report,
 )
+from .backtest_result_contracts import (
+    BACKTEST_RESULT_CONTRACT_VERSION,
+    BacktestResultError,
+    BacktestResultResponse,
+    BacktestResultStatus,
+    BacktestResultView,
+    serialize_backtest_result,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -627,6 +635,12 @@ __all__ = [
     "BacktestReportError",
     "BacktestReportSnapshot",
     "build_backtest_report",
+    "BACKTEST_RESULT_CONTRACT_VERSION",
+    "BacktestResultError",
+    "BacktestResultResponse",
+    "BacktestResultStatus",
+    "BacktestResultView",
+    "serialize_backtest_result",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",

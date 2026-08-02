@@ -762,6 +762,26 @@ paths:
       - Dashboard
       operationId: getApiQuantReadonly
       x-visibility: internal
+  /api/quant/backtest/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return an injected deterministic backtest report.
+      tags:
+      - Dashboard
+      operationId: getApiQuantBacktestReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:
