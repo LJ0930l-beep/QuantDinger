@@ -159,6 +159,7 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         from app.services.readonly_reconciliation_summary_service import postgres_reconciliation_summary_provider
         from app.services.readonly_shadow_summary_service import postgres_shadow_summary_provider
         from app.services.readonly_backtest_report_service import postgres_backtest_report_provider
+        from app.services.readonly_paper_account_service import postgres_paper_account_provider
         from app.services.gate_testnet_rehearsal_file_provider import provider_from_path as gate_rehearsal_provider_from_path
 
         app.extensions.setdefault("readonly_strategy_catalog_provider", builtin_strategy_catalog)
@@ -172,6 +173,7 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         # JSON. Legacy result_json rows remain unavailable rather than being
         # guessed into typed backtest facts.
         app.extensions.setdefault("readonly_backtest_report_provider", postgres_backtest_report_provider)
+        app.extensions.setdefault("readonly_paper_account_provider", postgres_paper_account_provider)
         # An explicitly supplied, sanitized public-read artifact can feed the
         # read-only TestNet evidence endpoint.  No default path is guessed and
         # no credentials or venue client are loaded here.

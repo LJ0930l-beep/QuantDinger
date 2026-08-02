@@ -26,6 +26,10 @@ from app.services.paper_shadow_result_service import (
     PaperShadowResultServiceError,
     service_from_app as paper_shadow_service_from_app,
 )
+from app.services.readonly_paper_account_service import (
+    ReadonlyPaperAccountServiceError,
+    service_from_app as paper_account_service_from_app,
+)
 from app.services.research_readiness_service import (
     ResearchReadinessServiceError,
     service_from_app as readiness_service_from_app,
@@ -130,6 +134,21 @@ def get_readonly_paper_shadow_result():
         status, body = paper_shadow_service_from_app(current_app).read_response()
     except PaperShadowResultServiceError:
         return jsonify({"code": 0, "msg": "paper/shadow result unavailable", "data": None}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/paper/account/readonly", methods=["GET"])
+@login_required
+def get_readonly_paper_account():
+    """Return persisted PAPER order facts without exchange access or writes."""
+
+    try:
+        limit = request.args.get("limit", default=200, type=int)
+        status, body = paper_account_service_from_app(current_app).read_response(
+            user_id=int(get_current_user_id()), limit=limit
+        )
+    except (ReadonlyPaperAccountServiceError, TypeError, ValueError):
+        return jsonify({"code": 0, "msg": "paper account unavailable", "data": None}), 503
     return jsonify(body), status
 
 

@@ -822,6 +822,26 @@ paths:
       - Dashboard
       operationId: getApiQuantPaperShadowReadonly
       x-visibility: internal
+  /api/quant/paper/account/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return persisted PAPER order facts without exchange access or writes.
+      tags:
+      - Dashboard
+      operationId: getApiQuantPaperAccountReadonly
+      x-visibility: internal
   /api/quant/readiness:
     get:
       responses:
