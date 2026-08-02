@@ -5,7 +5,9 @@ validated G4-B receipt provider.  It cannot create connections, read secrets,
 call an exchange, or mutate a projection.
 """
 
-from flask import current_app, jsonify
+from datetime import datetime, timezone
+
+from flask import current_app, jsonify, request
 
 from app.openapi.blueprint import HumanBlueprint as Blueprint
 from app.services.readonly_quant_state_service import (
@@ -51,6 +53,10 @@ from app.services.non_live_run_manifest_service import (
 from app.services.deployment_readiness_service import (
     DeploymentReadinessServiceError,
     service_from_app as deployment_readiness_service_from_app,
+)
+from app.services.readonly_projection_summary_service import (
+    ReadonlyProjectionSummaryServiceError,
+    service_from_app as projection_summary_service_from_app,
 )
 from app.utils.auth import login_required
 
@@ -188,6 +194,23 @@ def get_readonly_deployment_readiness():
         status, body = deployment_readiness_service_from_app(current_app).read_response()
     except DeploymentReadinessServiceError:
         return jsonify({"code": 0, "msg": "deployment readiness unavailable", "data": None}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/projection/generation/readonly", methods=["GET"])
+@login_required
+def get_readonly_projection_generation():
+    """Return persisted projection-generation facts without claiming G4-B."""
+
+    consumer_name = request.args.get("consumer", "candidate")
+    observed_at = request.args.get("as_of")
+    try:
+        as_of = datetime.fromisoformat(observed_at.replace("Z", "+00:00")) if observed_at else datetime.now(timezone.utc)
+        status, body = projection_summary_service_from_app(current_app).read_response(
+            consumer_name=consumer_name, as_of=as_of
+        )
+    except (ReadonlyProjectionSummaryServiceError, ValueError, TypeError):
+        return jsonify({"status": "UNAVAILABLE", "live_enabled": False}), 503
     return jsonify(body), status
 
 
