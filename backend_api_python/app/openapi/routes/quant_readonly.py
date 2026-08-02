@@ -12,12 +12,14 @@ from app.services.readonly_quant_state_service import (
     ReadonlyQuantStateServiceError,
     service_from_app,
 )
+from app.utils.auth import login_required
 
 
 blp = Blueprint("quant_readonly", __name__)
 
 
 @blp.route("/api/quant/readonly", methods=["GET"])
+@login_required
 def get_readonly_quant_state():
     """Return the validated read-only projection/shadow/reconciliation view."""
 
