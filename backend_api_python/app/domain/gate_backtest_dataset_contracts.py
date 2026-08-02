@@ -16,7 +16,8 @@ from app.domain.backtest_dataset_contracts import (
     BacktestDatasetSnapshot,
 )
 from app.domain.deterministic_backtest_contracts import BacktestBar
-from app.domain.gate_market_read_contracts import GateCandleFact
+from app.domain.gate_market_read_contracts import GateCandleFact, GateMarketKind
+from app.domain.multi_asset_capability_contracts import AssetMarketType
 from app.domain.market_data_quality_contracts import (
     DataQualityStatus,
     MarketDataEventFact,
@@ -135,6 +136,12 @@ def _canonical_candle(item: object) -> GateCandleFact:
     )
     try:
         values = {name: getattr(item, name) for name in fields}
+        market_type = values["market_type"]
+        if not isinstance(market_type, AssetMarketType) and type(market_type).__name__ == "AssetMarketType":
+            values["market_type"] = AssetMarketType(getattr(market_type, "value", None))
+        kind = values["kind"]
+        if not isinstance(kind, GateMarketKind) and type(kind).__name__ == "GateMarketKind":
+            values["kind"] = GateMarketKind(getattr(kind, "value", None))
         return GateCandleFact(**values)
     except (AttributeError, TypeError, ValueError) as exc:
         raise GateBacktestDatasetError("dataset requires complete typed Gate candle facts") from exc
