@@ -82,6 +82,10 @@ from app.services.gate_public_market_service import (
     GatePublicMarketServiceError,
     service_from_app as gate_public_market_service_from_app,
 )
+from app.services.non_live_product_rehearsal_service import (
+    NonLiveProductRehearsalError,
+    build_offline_product_rehearsal,
+)
 from app.domain.gate_readonly_contracts import GateMarketType
 from app.utils.auth import get_current_user_id
 from app.utils.auth import login_required
@@ -369,6 +373,21 @@ def get_readonly_gate_market():
     except (KeyError, ValueError, TypeError, GatePublicMarketServiceError):
         return jsonify({"status": "UNAVAILABLE", "live_enabled": False}), 503
     return jsonify(body), status
+
+
+@blp.route("/api/quant/product/rehearsal/readonly", methods=["GET"])
+@login_required
+def get_readonly_non_live_product_rehearsal():
+    """Return the complete fixture-only non-live product rehearsal.
+
+    This endpoint is deliberately a local deterministic evidence surface. It
+    cannot read credentials, create a connection, call a venue, or mutate any
+    account/order state.
+    """
+    try:
+        return jsonify(build_offline_product_rehearsal()), 200
+    except NonLiveProductRehearsalError:
+        return jsonify({"status": "UNAVAILABLE", "live_enabled": False}), 503
 
 
 __all__ = ["blp"]

@@ -1107,6 +1107,32 @@ paths:
       - Dashboard
       operationId: getApiQuantGateMarketReadonly
       x-visibility: internal
+  /api/quant/product/rehearsal/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return the complete fixture-only non-live product rehearsal.
+      description: 'This endpoint is deliberately a local deterministic evidence surface.
+        It
+
+        cannot read credentials, create a connection, call a venue, or mutate any
+
+        account/order state.'
+      tags:
+      - Dashboard
+      operationId: getApiQuantProductRehearsalReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:
