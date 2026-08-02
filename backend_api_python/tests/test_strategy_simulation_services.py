@@ -48,6 +48,12 @@ from app.services.paper_shadow_service import PaperShadowCandidate, PaperShadowS
 from app.services.portfolio_risk_service import PortfolioRiskService  # noqa: E402
 from app.services.strategy_factory import StrategyFactory, StrategyFactoryError  # noqa: E402
 from app.services.research_pipeline import ResearchPipeline  # noqa: E402
+from app.domain.gate_readonly_contracts import GateEnvironment, GateMarketType, GateReadCapabilityProfile  # noqa: E402
+from app.domain.gate_readonly_adapter_contracts import GateReadonlyAdapter  # noqa: E402
+from app.domain.gate_read_transport_contracts import GatePublicReadEndpoint, GateReadResponse  # noqa: E402
+from app.services.gate_market_research_service import GateMarketResearchService  # noqa: E402
+from app.services.gate_testnet_market_session_service import GateTestnetMarketSessionRequest, GateTestnetMarketSessionService  # noqa: E402
+from app.services.gate_research_run_service import GateResearchRunService  # noqa: E402
 
 
 UTC = timezone.utc
@@ -176,6 +182,27 @@ class StrategySimulationServiceTests(unittest.TestCase):
         self.assertEqual(result.sizing.disposition.value, "denied")
         self.assertEqual(result.sizing.reason, "cooldown_active")
         self.assertEqual(result.simulation.disposition.value, "REJECTED")
+
+    def test_gate_read_session_enters_the_same_pipeline_without_writes(self):
+        raw = [
+            [1767225600, "200", "101", "102", "99", "100", "2", True],
+            [1767225660, "202", "102", "103", "99", "101", "2", True],
+            [1767225720, "204", "103", "104", "100", "102", "2", True],
+            [1767225780, "206", "104", "105", "101", "103", "2", True],
+        ]
+        def transport(request):
+            if request.endpoint is GatePublicReadEndpoint.CANDLESTICKS:
+                return GateReadResponse(200, raw)
+            return GateReadResponse(200, {"id": 7, "current": 1767225720000, "update": 1767225719000, "bids": [["100", "1"]], "asks": [["101", "2"]]})
+        profile = GateReadCapabilityProfile(GateEnvironment.TESTNET, GateMarketType.SPOT, credential_ref="fixture")
+        session = GateTestnetMarketSessionService(GateMarketResearchService(GateReadonlyAdapter(profile, transport), "fixture", "evidence"))
+        request = GateTestnetMarketSessionRequest("BTC_USDT", datetime(2026, 1, 1, 0, 4, tzinfo=UTC), "dataset-run", "rules-1")
+        sizing = PositionSizingRequest("request-run", "BTC_USDT", Decimal("100"), Decimal("1"), Decimal("1000"), Decimal("20000"), Decimal("2"), Decimal("0.5"), datetime.now(UTC))
+        run = PaperShadowRunFacts("run-gate", SimulationMode.SHADOW, "dataset-run", "strategy-1", "risk-1", "tolerance-1", datetime.now(UTC))
+        result = GateResearchRunService(session).execute(request, _strategy(StrategyFamily.ICT), sizing, run, signal_id="signal-run", request_fingerprint="request-run", decided_at=datetime(2026, 1, 1, 0, 4, tzinfo=UTC))
+        self.assertEqual(result.dataset.venue, "gate")
+        self.assertEqual(result.pipeline.simulation.mode, SimulationMode.SHADOW)
+        self.assertFalse(result.to_public_dict()["live_enabled"])
 
 
 if __name__ == "__main__":
