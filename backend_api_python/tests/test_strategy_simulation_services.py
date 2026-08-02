@@ -57,6 +57,7 @@ from app.services.gate_research_run_service import GateResearchRunService  # noq
 from app.services.research_run_result_service import ResearchRunResultService, ResearchRunResultServiceError  # noqa: E402
 from app.domain.production_readiness_contracts import ProductionReadinessEvidence, ProductionReadinessError, ProductionReadinessStatus, derive_production_readiness  # noqa: E402
 from app.services.production_readiness_service import ProductionReadinessService, ProductionReadinessServiceError  # noqa: E402
+from app.services.gate_testnet_rehearsal_service import GateTestnetRehearsalService, GateTestnetRehearsalServiceError  # noqa: E402
 
 
 UTC = timezone.utc
@@ -230,6 +231,31 @@ class StrategySimulationServiceTests(unittest.TestCase):
         self.assertFalse(body["live_enabled"])
         with self.assertRaises(ProductionReadinessServiceError):
             ProductionReadinessService(lambda: {"live": True}).read_response()
+
+    def test_gate_testnet_rehearsal_is_ordered_and_repeatable(self):
+        raw = [
+            [1767225600, "200", "101", "102", "99", "100", "2", True],
+            [1767225660, "202", "102", "103", "99", "101", "2", True],
+            [1767225720, "204", "103", "104", "100", "102", "2", True],
+            [1767225780, "206", "104", "105", "101", "103", "2", True],
+        ]
+        def transport(request):
+            if request.endpoint is GatePublicReadEndpoint.CANDLESTICKS:
+                return GateReadResponse(200, raw)
+            return GateReadResponse(200, {"id": 7, "current": 1767225720000, "update": 1767225719000, "bids": [["100", "1"]], "asks": [["101", "2"]]})
+        profile = GateReadCapabilityProfile(GateEnvironment.TESTNET, GateMarketType.SPOT, credential_ref="fixture")
+        session = GateTestnetMarketSessionService(GateMarketResearchService(GateReadonlyAdapter(profile, transport), "fixture", "evidence"))
+        first = GateTestnetRehearsalService(session).run((
+            GateTestnetMarketSessionRequest("BTC_USDT", datetime(2026, 1, 1, 0, 4, tzinfo=UTC), "rehearsal-1", "rules-1"),
+            GateTestnetMarketSessionRequest("BTC_USDT", datetime(2026, 1, 1, 0, 5, tzinfo=UTC), "rehearsal-2", "rules-1"),
+        ))
+        self.assertEqual(first.status.value, "READY")
+        self.assertEqual(first.to_public_dict()["snapshot_count"], 2)
+        with self.assertRaises(GateTestnetRehearsalServiceError):
+            GateTestnetRehearsalService(session).run((
+                GateTestnetMarketSessionRequest("BTC_USDT", datetime(2026, 1, 1, 0, 5, tzinfo=UTC), "rehearsal-2", "rules-1"),
+                GateTestnetMarketSessionRequest("BTC_USDT", datetime(2026, 1, 1, 0, 5, tzinfo=UTC), "rehearsal-3", "rules-1"),
+            ))
 
 
 if __name__ == "__main__":

@@ -318,6 +318,13 @@ from .production_readiness_contracts import (
     ProductionReadinessStatus,
     derive_production_readiness,
 )
+from .gate_testnet_rehearsal_contracts import (
+    GATE_TESTNET_REHEARSAL_CONTRACT_VERSION,
+    GateTestnetRehearsalError,
+    GateTestnetRehearsalResult,
+    GateTestnetRehearsalSnapshot,
+    GateTestnetRehearsalStatus,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -687,6 +694,11 @@ __all__ = [
     "ProductionReadinessEvidence",
     "ProductionReadinessStatus",
     "derive_production_readiness",
+    "GATE_TESTNET_REHEARSAL_CONTRACT_VERSION",
+    "GateTestnetRehearsalError",
+    "GateTestnetRehearsalResult",
+    "GateTestnetRehearsalSnapshot",
+    "GateTestnetRehearsalStatus",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",
