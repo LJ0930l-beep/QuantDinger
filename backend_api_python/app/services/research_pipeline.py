@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable
 
 from app.domain.deterministic_backtest_contracts import BacktestBar
 from app.domain.backtest_dataset_contracts import BacktestDatasetSnapshot
-from app.domain.paper_shadow_contracts import PaperShadowDecision, PaperShadowRunFacts
+from app.domain.paper_shadow_contracts import PaperShadowDecision, PaperShadowRunFacts, simulation_fingerprint
 from app.domain.portfolio_risk_contracts import PositionSizingDecision, PositionSizingRequest
-from app.domain.strategy_library_contracts import StrategyDefinition, StrategySignalFact
+from app.domain.strategy_library_contracts import StrategyDefinition, StrategySignalFact, strategy_fingerprint
+from app.domain.portfolio_risk_contracts import portfolio_risk_fingerprint
 from app.services.paper_shadow_service import PaperShadowService
 from app.services.portfolio_risk_service import PortfolioRiskService
 from app.services.strategy_factory import StrategyFactory
@@ -23,6 +24,56 @@ class ResearchPipelineResult:
     signal: StrategySignalFact
     sizing: PositionSizingDecision
     simulation: PaperShadowDecision
+    result_fingerprint: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.signal, StrategySignalFact) or not isinstance(self.sizing, PositionSizingDecision) or not isinstance(self.simulation, PaperShadowDecision):
+            raise ResearchPipelineError("pipeline result facts must be typed")
+        if self.sizing.request_fingerprint != self.simulation.request_fingerprint:
+            raise ResearchPipelineError("pipeline result request identity mismatch")
+        if self.simulation.economic_fingerprint != self.signal.signal_id:
+            raise ResearchPipelineError("pipeline result economic identity mismatch")
+        object.__setattr__(self, "result_fingerprint", simulation_fingerprint({
+            "version": "research-pipeline-result-v1",
+            "signal": strategy_fingerprint(self.signal),
+            "sizing": portfolio_risk_fingerprint(self.sizing),
+            "simulation": simulation_fingerprint(self.simulation),
+        }))
+
+    def to_public_dict(self) -> dict[str, object]:
+        """Return safe evidence for a read-only UI or report provider."""
+
+        return {
+            "contract_version": "research-pipeline-result-v1",
+            "result_fingerprint": self.result_fingerprint,
+            "signal": {
+                "signal_id": self.signal.signal_id,
+                "strategy_id": self.signal.strategy.strategy_id,
+                "strategy_family": self.signal.strategy.family.value,
+                "instrument_id": self.signal.instrument_id,
+                "direction": self.signal.direction.value,
+                "confidence": format(self.signal.confidence.normalize(), "f"),
+                "occurred_at": self.signal.occurred_at.isoformat(),
+                "data_snapshot_id": self.signal.data_snapshot_id,
+            },
+            "sizing": {
+                "request_fingerprint": self.sizing.request_fingerprint,
+                "disposition": self.sizing.disposition.value,
+                "approved_quantity": format(self.sizing.approved_quantity.normalize(), "f"),
+                "notional": format(self.sizing.notional.normalize(), "f"),
+                "required_margin": format(self.sizing.required_margin.normalize(), "f"),
+                "reason": self.sizing.reason,
+            },
+            "simulation": {
+                "run_id": self.simulation.run_id,
+                "mode": self.simulation.mode.value,
+                "disposition": self.simulation.disposition.value,
+                "quantity": format(self.simulation.quantity.normalize(), "f"),
+                "notional": format(self.simulation.notional.normalize(), "f"),
+                "reason": self.simulation.reason,
+                "decided_at": self.simulation.decided_at.isoformat(),
+            },
+        }
 
 
 class ResearchPipelineError(ValueError):

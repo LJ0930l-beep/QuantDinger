@@ -114,6 +114,10 @@ class StrategySimulationServiceTests(unittest.TestCase):
         )
         self.assertEqual(result.simulation.mode, SimulationMode.SHADOW)
         self.assertEqual(result.signal.strategy.family, StrategyFamily.SMC)
+        self.assertEqual(len(result.result_fingerprint), 64)
+        public = result.to_public_dict()
+        self.assertEqual(public["sizing"]["request_fingerprint"], "request-2")
+        self.assertNotIn("e+", repr(public))
 
     def test_paper_shadow_batch_replays_and_conflicts_deterministically(self):
         signal = StrategyFactory().generate_signal(
