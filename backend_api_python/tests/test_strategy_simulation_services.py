@@ -34,6 +34,8 @@ from app.domain.gate_backtest_dataset_contracts import build_gate_backtest_datas
 from app.domain.multi_asset_capability_contracts import AssetMarketType  # noqa: E402
 from app.domain.paper_shadow_contracts import PaperShadowRunFacts, SimulationMode  # noqa: E402
 from app.domain.portfolio_risk_contracts import (  # noqa: E402
+    CooldownFact,
+    CooldownState,
     PositionSizingRequest,
 )
 from app.domain.strategy_library_contracts import (  # noqa: E402
@@ -159,6 +161,21 @@ class StrategySimulationServiceTests(unittest.TestCase):
         )
         self.assertEqual(result.signal.data_snapshot_id, "dataset-gate-1")
         self.assertEqual(result.simulation.mode, SimulationMode.SHADOW)
+
+    def test_research_pipeline_applies_cooldown_before_paper_shadow(self):
+        request = PositionSizingRequest("request-cooldown", "BTC-USDT", Decimal("100"), Decimal("1"), Decimal("1000"), Decimal("20000"), Decimal("2"), Decimal("0.5"), datetime.now(UTC))
+        run = PaperShadowRunFacts("run-cooldown", SimulationMode.PAPER, "dataset-1", "strategy-1", "risk-1", "tolerance-1", datetime.now(UTC))
+        now = datetime(2026, 1, 1, tzinfo=UTC)
+        cooldown = CooldownFact("account-1", "BTC-USDT", CooldownState.ACTIVE, now + timedelta(hours=1), "loss-limit")
+        result = ResearchPipeline().evaluate(
+            _strategy(StrategyFamily.SMC), _bars(), request, run,
+            signal_id="signal-cooldown", data_snapshot_id="snapshot-2",
+            request_fingerprint="request-cooldown", decided_at=now,
+            cooldown=cooldown, now=now,
+        )
+        self.assertEqual(result.sizing.disposition.value, "denied")
+        self.assertEqual(result.sizing.reason, "cooldown_active")
+        self.assertEqual(result.simulation.disposition.value, "REJECTED")
 
 
 if __name__ == "__main__":

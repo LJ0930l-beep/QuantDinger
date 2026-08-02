@@ -9,7 +9,7 @@ from typing import Iterable
 from app.domain.deterministic_backtest_contracts import BacktestBar
 from app.domain.backtest_dataset_contracts import BacktestDatasetSnapshot
 from app.domain.paper_shadow_contracts import PaperShadowDecision, PaperShadowRunFacts, simulation_fingerprint
-from app.domain.portfolio_risk_contracts import PositionSizingDecision, PositionSizingRequest, portfolio_risk_fingerprint
+from app.domain.portfolio_risk_contracts import CooldownFact, PositionSizingDecision, PositionSizingRequest, portfolio_risk_fingerprint
 from app.domain.strategy_library_contracts import StrategyDefinition, StrategySignalFact, strategy_fingerprint
 from app.services.paper_shadow_service import PaperShadowService
 from app.services.portfolio_risk_service import PortfolioRiskService
@@ -96,6 +96,8 @@ class ResearchPipeline:
         data_snapshot_id: str,
         request_fingerprint: str,
         decided_at: datetime,
+        cooldown: CooldownFact | None = None,
+        now: datetime | None = None,
     ) -> ResearchPipelineResult:
         if not isinstance(definition, StrategyDefinition):
             raise ResearchPipelineError("definition must be typed")
@@ -109,7 +111,7 @@ class ResearchPipeline:
             signal_id=signal_id,
             data_snapshot_id=data_snapshot_id,
         )
-        sizing = self.risk_service.evaluate(sizing_request)
+        sizing = self.risk_service.evaluate(sizing_request, cooldown=cooldown, now=now)
         simulation = self.simulation_service.decide(
             run,
             signal,
@@ -129,6 +131,8 @@ class ResearchPipeline:
         signal_id: str,
         request_fingerprint: str,
         decided_at: datetime,
+        cooldown: CooldownFact | None = None,
+        now: datetime | None = None,
     ) -> ResearchPipelineResult:
         """Run the same pipeline from a complete point-in-time dataset.
 
@@ -149,6 +153,8 @@ class ResearchPipeline:
             data_snapshot_id=dataset.dataset_snapshot_id,
             request_fingerprint=request_fingerprint,
             decided_at=decided_at,
+            cooldown=cooldown,
+            now=now,
         )
 
 
