@@ -39,6 +39,7 @@ _PREFIX_TAGS: list[tuple[str, str]] = [
     ("/api/fast-analysis", "FastAnalysis"),
     ("/api/billing", "Billing"),
     ("/api/quick-trade", "QuickTrade"),
+    ("/api/quant", "Dashboard"),
 ]
 
 
@@ -56,6 +57,7 @@ def _tag_for_prefix(prefix: str) -> str | None:
 def register_human_blueprints(api: Api) -> None:
     """Mount every human web blueprint on the shared smorest Api instance."""
     from app.openapi.routes.health import blp as health_blp
+    from app.openapi.routes.quant_readonly import blp as quant_readonly_blp
     from app.routes.policy import policy_blp
     from app.routes.auth import auth_blp
     from app.routes.user import user_blp
@@ -83,6 +85,7 @@ def register_human_blueprints(api: Api) -> None:
 
     registrations: list[tuple] = [
         (health_blp, ""),
+        (quant_readonly_blp, ""),
         (policy_blp, "/api/policy"),
         (auth_blp, "/api/auth"),
         (user_blp, "/api/users"),
