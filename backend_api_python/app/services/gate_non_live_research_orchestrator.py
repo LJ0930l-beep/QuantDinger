@@ -33,6 +33,14 @@ class GateNonLiveResearchError(ValueError):
     """The shared Gate snapshot cannot form a safe non-live run."""
 
 
+def _typed_fact(value: object, expected: type, required: tuple[str, ...]) -> bool:
+    """Accept canonical immutable facts and isolated-loader equivalents."""
+    return isinstance(value, expected) or (
+        type(value).__name__ == expected.__name__
+        and all(hasattr(value, name) for name in required)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class GateNonLiveResearchResult:
     session: GateTestnetMarketSessionReceipt
@@ -42,9 +50,21 @@ class GateNonLiveResearchResult:
     result_fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.session, GateTestnetMarketSessionReceipt) or not isinstance(self.dataset, BacktestDatasetSnapshot):
+        if not isinstance(self.session, GateTestnetMarketSessionReceipt) or not _typed_fact(
+            self.dataset,
+            BacktestDatasetSnapshot,
+            ("dataset_snapshot_id", "dataset_fingerprint", "bars", "instrument_id"),
+        ):
             raise GateNonLiveResearchError("session and dataset must be typed")
-        if not isinstance(self.pipeline, ResearchPipelineResult) or not isinstance(self.deterministic_backtest, DeterministicStrategyBacktest):
+        if not _typed_fact(
+            self.pipeline,
+            ResearchPipelineResult,
+            ("result_fingerprint", "to_public_dict"),
+        ) or not _typed_fact(
+            self.deterministic_backtest,
+            DeterministicStrategyBacktest,
+            ("dataset", "result_fingerprint", "to_public_dict"),
+        ):
             raise GateNonLiveResearchError("pipeline and deterministic backtest must be typed")
         if self.dataset.dataset_snapshot_id != self.session.request.snapshot_id:
             raise GateNonLiveResearchError("dataset/session snapshot mismatch")

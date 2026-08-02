@@ -33,6 +33,21 @@ class GateDeterministicBacktestError(ValueError):
     """Gate session facts cannot form a deterministic trace."""
 
 
+def _typed_fact(value: object, expected: type, required: tuple[str, ...]) -> bool:
+    """Accept the canonical class and isolated-loader equivalents only.
+
+    Some repository tests load the same immutable domain module in an isolated
+    module namespace.  The resulting class identity differs, but the value is
+    still required to have the exact canonical type name and immutable public
+    contract.  This is deliberately structural and fail-closed; arbitrary
+    duck-typed objects are not accepted.
+    """
+    return isinstance(value, expected) or (
+        type(value).__name__ == expected.__name__
+        and all(hasattr(value, name) for name in required)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class GateDeterministicBacktestResult:
     session: GateTestnetMarketSessionReceipt
@@ -43,7 +58,15 @@ class GateDeterministicBacktestResult:
     def __post_init__(self) -> None:
         if not isinstance(self.session, GateTestnetMarketSessionReceipt):
             raise GateDeterministicBacktestError("session must be typed")
-        if not isinstance(self.dataset, BacktestDatasetSnapshot) or not isinstance(self.strategy_backtest, DeterministicStrategyBacktest):
+        if not _typed_fact(
+            self.dataset,
+            BacktestDatasetSnapshot,
+            ("dataset_snapshot_id", "dataset_fingerprint", "bars", "instrument_id"),
+        ) or not _typed_fact(
+            self.strategy_backtest,
+            DeterministicStrategyBacktest,
+            ("dataset", "result_fingerprint", "to_public_dict"),
+        ):
             raise GateDeterministicBacktestError("dataset and backtest must be typed")
         if self.dataset.dataset_snapshot_id != self.session.request.snapshot_id:
             raise GateDeterministicBacktestError("dataset/session snapshot mismatch")

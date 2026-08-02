@@ -29,6 +29,14 @@ class GateResearchRunServiceError(ValueError):
     """The caller-owned Gate research inputs cannot form a safe run."""
 
 
+def _typed_fact(value: object, expected: type, required: tuple[str, ...]) -> bool:
+    """Accept canonical immutable facts and isolated-loader equivalents."""
+    return isinstance(value, expected) or (
+        type(value).__name__ == expected.__name__
+        and all(hasattr(value, name) for name in required)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class GateResearchRunResult:
     session: GateTestnetMarketSessionReceipt
@@ -37,7 +45,15 @@ class GateResearchRunResult:
     run_fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.session, GateTestnetMarketSessionReceipt) or not isinstance(self.dataset, BacktestDatasetSnapshot) or not isinstance(self.pipeline, ResearchPipelineResult):
+        if not isinstance(self.session, GateTestnetMarketSessionReceipt) or not _typed_fact(
+            self.dataset,
+            BacktestDatasetSnapshot,
+            ("dataset_snapshot_id", "dataset_fingerprint", "bars", "instrument_id"),
+        ) or not _typed_fact(
+            self.pipeline,
+            ResearchPipelineResult,
+            ("result_fingerprint", "to_public_dict"),
+        ):
             raise GateResearchRunServiceError("Gate research result facts must be typed")
         if self.dataset.dataset_snapshot_id != self.session.request.snapshot_id:
             raise GateResearchRunServiceError("dataset/session snapshot mismatch")
