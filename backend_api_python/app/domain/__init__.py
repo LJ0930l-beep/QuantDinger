@@ -332,6 +332,13 @@ from .quant_operations_contracts import (
     QuantOperationsStatus,
     derive_quant_operations,
 )
+from .non_live_run_manifest_contracts import (
+    NON_LIVE_RUN_MANIFEST_VERSION,
+    NonLiveRunManifest,
+    NonLiveRunManifestError,
+    NonLiveRunStatus,
+    input_fingerprint,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -711,6 +718,11 @@ __all__ = [
     "QuantOperationsSnapshot",
     "QuantOperationsStatus",
     "derive_quant_operations",
+    "NON_LIVE_RUN_MANIFEST_VERSION",
+    "NonLiveRunManifest",
+    "NonLiveRunManifestError",
+    "NonLiveRunStatus",
+    "input_fingerprint",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",

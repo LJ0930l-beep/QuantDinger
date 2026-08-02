@@ -36,6 +36,7 @@ sys.modules.setdefault("app.services", services_module)
 from app.domain.gate_readonly_adapter_contracts import GateReadonlyAdapter
 from app.domain.gate_readonly_contracts import GateEnvironment, GateMarketType, GateReadCapabilityProfile
 from app.domain.gate_read_transport_contracts import GatePublicReadEndpoint, GateReadResponse
+from app.domain.non_live_run_manifest_contracts import NonLiveRunManifest, NonLiveRunStatus, input_fingerprint
 from app.domain.paper_shadow_contracts import PaperShadowRunFacts, SimulationMode
 from app.domain.portfolio_risk_contracts import PositionSizingRequest
 from app.domain.strategy_library_contracts import StrategyDefinition, StrategyFamily, StrategyParameterFact
@@ -83,7 +84,24 @@ def main() -> int:
         request, strategy, sizing, run, signal_id="smoke-signal",
         request_fingerprint="smoke-request", decided_at=OBSERVED_AT,
     )
+    manifest = NonLiveRunManifest(
+        "smoke-run", GateEnvironment.TESTNET, SimulationMode.SHADOW, NonLiveRunStatus.COMPLETED,
+        input_fingerprint({
+            "snapshot_id": request.snapshot_id,
+            "instrument_id": request.instrument_id,
+            "rule_version": request.rule_version,
+            "strategy_id": strategy.strategy_id,
+            "strategy_version": strategy.version,
+            "sizing_request": sizing.request_fingerprint,
+            "paper_shadow_run": run.run_id,
+        }),
+        result.dataset.dataset_fingerprint,
+        result.pipeline.result_fingerprint,
+        OBSERVED_AT,
+        "offline_fixture_research_complete",
+    )
     output = result.to_public_dict()
+    output["manifest"] = manifest.to_public_dict()
     output["execution_boundary"] = "READ_ONLY_FIXTURE"
     output["network_access"] = False
     output["live_enabled"] = False
