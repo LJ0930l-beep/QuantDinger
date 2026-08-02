@@ -291,6 +291,12 @@ from .backtest_result_contracts import (
     BacktestResultView,
     serialize_backtest_result,
 )
+from .paper_shadow_run_result_contracts import (
+    PAPER_SHADOW_RESULT_CONTRACT_VERSION,
+    PaperShadowRunResult,
+    PaperShadowRunResultError,
+    PaperShadowRunStatus,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -641,6 +647,10 @@ __all__ = [
     "BacktestResultStatus",
     "BacktestResultView",
     "serialize_backtest_result",
+    "PAPER_SHADOW_RESULT_CONTRACT_VERSION",
+    "PaperShadowRunResult",
+    "PaperShadowRunResultError",
+    "PaperShadowRunStatus",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",

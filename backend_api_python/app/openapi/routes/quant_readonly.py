@@ -16,6 +16,10 @@ from app.services.backtest_result_service import (
     BacktestResultServiceError,
     service_from_app as backtest_service_from_app,
 )
+from app.services.paper_shadow_result_service import (
+    PaperShadowResultServiceError,
+    service_from_app as paper_shadow_service_from_app,
+)
 from app.utils.auth import login_required
 
 
@@ -45,6 +49,18 @@ def get_readonly_backtest_result():
     except BacktestResultServiceError:
         return jsonify({"code": 0, "msg": "backtest result unavailable", "data": None}), 503
     return jsonify(response.body), response.http_status
+
+
+@blp.route("/api/quant/paper-shadow/readonly", methods=["GET"])
+@login_required
+def get_readonly_paper_shadow_result():
+    """Return an injected Paper/Shadow run summary without side effects."""
+
+    try:
+        status, body = paper_shadow_service_from_app(current_app).read_response()
+    except PaperShadowResultServiceError:
+        return jsonify({"code": 0, "msg": "paper/shadow result unavailable", "data": None}), 503
+    return jsonify(body), status
 
 
 __all__ = ["blp"]

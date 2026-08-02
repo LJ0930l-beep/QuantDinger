@@ -782,6 +782,26 @@ paths:
       - Dashboard
       operationId: getApiQuantBacktestReadonly
       x-visibility: internal
+  /api/quant/paper-shadow/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return an injected Paper/Shadow run summary.
+      tags:
+      - Dashboard
+      operationId: getApiQuantPaperShadowReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:
