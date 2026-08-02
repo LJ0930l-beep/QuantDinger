@@ -158,6 +158,7 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         from app.services.readonly_projection_summary_service import postgres_projection_summary_provider
         from app.services.readonly_reconciliation_summary_service import postgres_reconciliation_summary_provider
         from app.services.readonly_shadow_summary_service import postgres_shadow_summary_provider
+        from app.services.readonly_backtest_report_service import postgres_backtest_report_provider
 
         app.extensions.setdefault("readonly_strategy_catalog_provider", builtin_strategy_catalog)
         # This provider is SELECT-only and returns UNAVAILABLE when the
@@ -166,6 +167,10 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         app.extensions.setdefault("readonly_projection_summary_provider", postgres_projection_summary_provider)
         app.extensions.setdefault("readonly_reconciliation_summary_provider", postgres_reconciliation_summary_provider)
         app.extensions.setdefault("readonly_shadow_summary_provider", postgres_shadow_summary_provider)
+        # This provider accepts only canonical, fingerprint-verified report
+        # JSON. Legacy result_json rows remain unavailable rather than being
+        # guessed into typed backtest facts.
+        app.extensions.setdefault("readonly_backtest_report_provider", postgres_backtest_report_provider)
     run_startup_hooks(app)
 
     return app

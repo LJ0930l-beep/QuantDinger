@@ -782,6 +782,26 @@ paths:
       - Dashboard
       operationId: getApiQuantBacktestReadonly
       x-visibility: internal
+  /api/quant/backtest/report/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return one authenticated canonical persisted backtest report.
+      tags:
+      - Dashboard
+      operationId: getApiQuantBacktestReportReadonly
+      x-visibility: internal
   /api/quant/paper-shadow/readonly:
     get:
       responses:

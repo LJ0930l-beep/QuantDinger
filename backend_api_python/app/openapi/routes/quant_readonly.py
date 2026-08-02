@@ -18,6 +18,10 @@ from app.services.backtest_result_service import (
     BacktestResultServiceError,
     service_from_app as backtest_service_from_app,
 )
+from app.services.readonly_backtest_report_service import (
+    ReadonlyBacktestReportServiceError,
+    service_from_app as readonly_backtest_report_service_from_app,
+)
 from app.services.paper_shadow_result_service import (
     PaperShadowResultServiceError,
     service_from_app as paper_shadow_service_from_app,
@@ -96,6 +100,21 @@ def get_readonly_backtest_result():
     except BacktestResultServiceError:
         return jsonify({"code": 0, "msg": "backtest result unavailable", "data": None}), 503
     return jsonify(response.body), response.http_status
+
+
+@blp.route("/api/quant/backtest/report/readonly", methods=["GET"])
+@login_required
+def get_readonly_persisted_backtest_report():
+    """Return one authenticated canonical persisted backtest report."""
+
+    try:
+        run_id = int(request.args["run_id"])
+        status, body = readonly_backtest_report_service_from_app(current_app).read_response(
+            user_id=get_current_user_id(), run_id=run_id,
+        )
+    except (KeyError, ValueError, TypeError, ReadonlyBacktestReportServiceError):
+        return jsonify({"status": "UNAVAILABLE", "live_enabled": False}), 503
+    return jsonify(body), status
 
 
 @blp.route("/api/quant/paper-shadow/readonly", methods=["GET"])
