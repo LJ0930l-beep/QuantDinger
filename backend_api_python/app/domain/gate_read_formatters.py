@@ -8,6 +8,7 @@ incomplete payloads fail closed before they can become account/market facts.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Mapping, Sequence, Tuple
 
@@ -72,6 +73,19 @@ def _required(row: Mapping[str, Any], *names: str) -> Any:
         if name in row and row[name] not in (None, ""):
             return row[name]
     raise GateReadPayloadError(f"missing required read field: {names[0]}")
+
+
+def _decimal_value(value: Any, field_name: str, *, non_zero: bool = False) -> Decimal:
+    """Parse a Gate numeric fact without admitting binary floats."""
+    if isinstance(value, (float, bool)):
+        raise GateReadPayloadError(f"{field_name} rejects float/bool input")
+    try:
+        parsed = value if isinstance(value, Decimal) else Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise GateReadPayloadError(f"{field_name} is not decimal") from exc
+    if not parsed.is_finite() or (non_zero and parsed == 0):
+        raise GateReadPayloadError(f"{field_name} must be finite" + (" and non-zero" if non_zero else ""))
+    return parsed
 
 
 def normalize_gate_balances(
@@ -154,7 +168,14 @@ def normalize_gate_orders(
     result = []
     for index, row in enumerate(rows):
         try:
-            side = GateOrderSide(str(_required(row, "side")).lower())
+            raw_size = _required(row, "quantity", "size", "amount")
+            signed_size = _decimal_value(raw_size, "order size", non_zero=True)
+            raw_side = row.get("side")
+            if raw_side in (None, ""):
+                side = GateOrderSide.BUY if signed_size > 0 else GateOrderSide.SELL
+            else:
+                side = GateOrderSide(str(raw_side).lower())
+            quantity = abs(signed_size)
             raw_status = str(_required(row, "status", "state")).lower()
             finish_reason = row.get("finish_as", row.get("finish_reason"))
             if finish_reason not in (None, ""):
@@ -176,15 +197,23 @@ def normalize_gate_orders(
                 status = GateOrderStatus.REJECTED
             else:
                 raise ValueError("unsupported Gate order status")
-        except ValueError as exc:
+        except (ValueError, GateReadPayloadError) as exc:
+            if isinstance(exc, GateReadPayloadError):
+                raise
             raise GateReadPayloadError("order side or status is unsupported") from exc
+        filled_raw = row.get("filled_quantity", row.get("filled_size", row.get("filled", row.get("filled_total"))))
+        if filled_raw in (None, ""):
+            left_raw = row.get("left")
+            filled = quantity - abs(_decimal_value(left_raw, "order left")) if left_raw not in (None, "") else Decimal("0")
+        else:
+            filled = _decimal_value(filled_raw, "filled quantity")
         result.append(GateOrderFact(
             "gate", market_type, account_scope,
-            str(_required(row, "instrument_id", "contract", "symbol")),
+            str(_required(row, "instrument_id", "contract", "currency_pair", "symbol")),
             str(_required(row, "exchange_order_id", "id")),
             (str(row["client_order_id"]) if row.get("client_order_id") not in (None, "") else None),
-            side, status, _required(row, "quantity", "size"),
-            _required(row, "filled_quantity", "filled_size", "filled") ,
+            side, status, quantity,
+            filled,
             (row.get("average_fill_price", row.get("avg_deal_price")) or None),
             observed_at, f"{source_event_prefix}:{index}", raw_status, finish_reason,
         ))
@@ -203,15 +232,20 @@ def normalize_gate_fills(
     result = []
     for index, row in enumerate(rows):
         try:
-            side = GateOrderSide(str(_required(row, "side")).lower())
+            raw_size = _required(row, "quantity", "size")
+            signed_size = _decimal_value(raw_size, "fill size", non_zero=True)
+            raw_side = row.get("side")
+            side = GateOrderSide(str(raw_side).lower()) if raw_side not in (None, "") else (GateOrderSide.BUY if signed_size > 0 else GateOrderSide.SELL)
+        except GateReadPayloadError:
+            raise
         except ValueError as exc:
             raise GateReadPayloadError("fill side is unsupported") from exc
         result.append(GateFillFact(
             "gate", market_type, account_scope,
-            str(_required(row, "instrument_id", "contract", "symbol")),
+            str(_required(row, "instrument_id", "contract", "currency_pair", "symbol")),
             str(_required(row, "exchange_order_id", "order_id")),
             str(_required(row, "venue_fill_id", "trade_id", "id")),
-            side, _required(row, "quantity", "size"), _required(row, "price", "fill_price"),
+            side, abs(signed_size), _required(row, "price", "fill_price"),
             (str(row["fee_asset"]).upper() if row.get("fee_asset") not in (None, "") else None),
             row.get("fee_amount", row.get("fee")), observed_at, f"{source_event_prefix}:{index}",
         ))
