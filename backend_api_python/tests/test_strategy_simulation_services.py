@@ -38,7 +38,8 @@ from app.domain.strategy_library_contracts import (  # noqa: E402
     StrategyFamily,
     StrategyParameterFact,
 )
-from app.services.paper_shadow_service import PaperShadowService  # noqa: E402
+from app.domain.paper_shadow_reducer_contracts import SimulationRecordDisposition  # noqa: E402
+from app.services.paper_shadow_service import PaperShadowCandidate, PaperShadowService  # noqa: E402
 from app.services.portfolio_risk_service import PortfolioRiskService  # noqa: E402
 from app.services.strategy_factory import StrategyFactory, StrategyFactoryError  # noqa: E402
 from app.services.research_pipeline import ResearchPipeline  # noqa: E402
@@ -110,6 +111,23 @@ class StrategySimulationServiceTests(unittest.TestCase):
         )
         self.assertEqual(result.simulation.mode, SimulationMode.SHADOW)
         self.assertEqual(result.signal.strategy.family, StrategyFamily.SMC)
+
+    def test_paper_shadow_batch_replays_and_conflicts_deterministically(self):
+        signal = StrategyFactory().generate_signal(
+            _strategy(StrategyFamily.SMC), _bars(), signal_id="signal-batch", data_snapshot_id="snapshot-1"
+        )
+        request = PositionSizingRequest("request-batch", "BTC-USDT", Decimal("100"), Decimal("1"), Decimal("1000"), Decimal("20000"), Decimal("2"), Decimal("0.5"), datetime.now(UTC))
+        sizing = PortfolioRiskService().evaluate(request)
+        run = PaperShadowRunFacts("run-batch", SimulationMode.PAPER, "dataset-1", "strategy-1", "risk-1", "tolerance-1", datetime.now(UTC))
+        candidate = PaperShadowCandidate(signal, sizing, "request-batch", datetime.now(UTC))
+        service = PaperShadowService()
+        created = service.record_batch(run, (candidate,))
+        self.assertEqual(created.disposition, SimulationRecordDisposition.CREATED)
+        replayed = service.record_batch(run, (candidate,), existing=created.decision_set)
+        self.assertEqual(replayed.disposition, SimulationRecordDisposition.REPLAYED)
+        conflicting = PaperShadowCandidate(signal, sizing, "request-batch", datetime.now(UTC) + timedelta(seconds=1))
+        with self.assertRaises(ValueError):
+            service.record_batch(run, (conflicting,), existing=created.decision_set)
 
 
 if __name__ == "__main__":
