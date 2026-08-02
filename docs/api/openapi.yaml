@@ -902,6 +902,26 @@ paths:
       - Dashboard
       operationId: getApiQuantTestnetRehearsalReadonly
       x-visibility: internal
+  /api/quant/operations/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return composed non-live research and release posture without writes.
+      tags:
+      - Dashboard
+      operationId: getApiQuantOperationsReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:

@@ -325,6 +325,13 @@ from .gate_testnet_rehearsal_contracts import (
     GateTestnetRehearsalSnapshot,
     GateTestnetRehearsalStatus,
 )
+from .quant_operations_contracts import (
+    QUANT_OPERATIONS_CONTRACT_VERSION,
+    QuantOperationsError,
+    QuantOperationsSnapshot,
+    QuantOperationsStatus,
+    derive_quant_operations,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -699,6 +706,11 @@ __all__ = [
     "GateTestnetRehearsalResult",
     "GateTestnetRehearsalSnapshot",
     "GateTestnetRehearsalStatus",
+    "QUANT_OPERATIONS_CONTRACT_VERSION",
+    "QuantOperationsError",
+    "QuantOperationsSnapshot",
+    "QuantOperationsStatus",
+    "derive_quant_operations",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",
