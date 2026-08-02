@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Iterable
 
 from app.domain.deterministic_backtest_contracts import BacktestBar
+from app.domain.backtest_dataset_contracts import BacktestDatasetSnapshot
 from app.domain.paper_shadow_contracts import PaperShadowDecision, PaperShadowRunFacts
 from app.domain.portfolio_risk_contracts import PositionSizingDecision, PositionSizingRequest
 from app.domain.strategy_library_contracts import StrategyDefinition, StrategySignalFact
@@ -67,6 +68,38 @@ class ResearchPipeline:
             decided_at=decided_at,
         )
         return ResearchPipelineResult(signal, sizing, simulation)
+
+    def evaluate_dataset(
+        self,
+        definition: StrategyDefinition,
+        dataset: BacktestDatasetSnapshot,
+        sizing_request: PositionSizingRequest,
+        run: PaperShadowRunFacts,
+        *,
+        signal_id: str,
+        request_fingerprint: str,
+        decided_at: datetime,
+    ) -> ResearchPipelineResult:
+        """Run the same pipeline from a complete point-in-time dataset.
+
+        The dataset owns the snapshot identity and quality proof, so callers
+        cannot silently pass a different bar snapshot under the same run.
+        """
+
+        if not isinstance(dataset, BacktestDatasetSnapshot):
+            raise ResearchPipelineError("dataset must be typed")
+        if run.dataset_snapshot_id != dataset.dataset_snapshot_id:
+            raise ResearchPipelineError("run dataset snapshot does not match dataset")
+        return self.evaluate(
+            definition,
+            dataset.bars,
+            sizing_request,
+            run,
+            signal_id=signal_id,
+            data_snapshot_id=dataset.dataset_snapshot_id,
+            request_fingerprint=request_fingerprint,
+            decided_at=decided_at,
+        )
 
 
 __all__ = ["ResearchPipeline", "ResearchPipelineError", "ResearchPipelineResult"]

@@ -29,6 +29,9 @@ from app.domain.deterministic_backtest_contracts import (  # noqa: E402
     BacktestBar,
     BacktestSide,
 )
+from app.domain.gate_market_payload_contracts import normalize_gate_candles  # noqa: E402
+from app.domain.gate_backtest_dataset_contracts import build_gate_backtest_dataset  # noqa: E402
+from app.domain.multi_asset_capability_contracts import AssetMarketType  # noqa: E402
 from app.domain.paper_shadow_contracts import PaperShadowRunFacts, SimulationMode  # noqa: E402
 from app.domain.portfolio_risk_contracts import (  # noqa: E402
     PositionSizingRequest,
@@ -128,6 +131,30 @@ class StrategySimulationServiceTests(unittest.TestCase):
         conflicting = PaperShadowCandidate(signal, sizing, "request-batch", datetime.now(UTC) + timedelta(seconds=1))
         with self.assertRaises(ValueError):
             service.record_batch(run, (conflicting,), existing=created.decision_set)
+
+    def test_gate_dataset_enters_the_same_strategy_risk_paper_pipeline(self):
+        raw = [
+            [1767225600, "200", "101", "102", "99", "100", "2", True],
+            [1767225660, "202", "102", "103", "99", "101", "2", True],
+            [1767225720, "204", "103", "104", "100", "102", "2", True],
+            [1767225780, "206", "104", "105", "101", "103", "2", True],
+        ]
+        candles = normalize_gate_candles(
+            raw, market_type=AssetMarketType.SPOT, instrument_id="BTC_USDT", interval="1m",
+            observed_at=datetime(2026, 1, 1, 0, 4, tzinfo=UTC), source_event_prefix="fixture",
+            snapshot_id="dataset-gate-1", rule_version="rules-1", evidence_hash_prefix="evidence",
+        )
+        dataset = build_gate_backtest_dataset(
+            candles, dataset_snapshot_id="dataset-gate-1", as_of=datetime(2026, 1, 1, 0, 4, tzinfo=UTC),
+        )
+        request = PositionSizingRequest("request-gate", "BTC_USDT", Decimal("100"), Decimal("1"), Decimal("1000"), Decimal("20000"), Decimal("2"), Decimal("0.5"), datetime.now(UTC))
+        run = PaperShadowRunFacts("run-gate", SimulationMode.SHADOW, "dataset-gate-1", "strategy-1", "risk-1", "tolerance-1", datetime.now(UTC))
+        result = ResearchPipeline().evaluate_dataset(
+            _strategy(StrategyFamily.ICT), dataset, request, run,
+            signal_id="signal-gate", request_fingerprint="request-gate", decided_at=datetime.now(UTC),
+        )
+        self.assertEqual(result.signal.data_snapshot_id, "dataset-gate-1")
+        self.assertEqual(result.simulation.mode, SimulationMode.SHADOW)
 
 
 if __name__ == "__main__":
