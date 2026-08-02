@@ -100,11 +100,11 @@ class StrategySimulationServiceTests(unittest.TestCase):
         self.assertEqual(signal.instrument_id, "BTC-USDT")
         self.assertEqual(signal.strategy.family, StrategyFamily.SMC)
 
-    def test_unsupported_strategy_family_fails_closed(self):
-        with self.assertRaises(StrategyFactoryError):
-            StrategyFactory().generate_signal(
-                _strategy(StrategyFamily.BUY_AND_HOLD), _bars(), signal_id="signal-1", data_snapshot_id="snapshot-1"
-            )
+    def test_buy_and_hold_strategy_family_is_supported(self):
+        signal = StrategyFactory().generate_signal(
+            _strategy(StrategyFamily.BUY_AND_HOLD), _bars(), signal_id="signal-1", data_snapshot_id="snapshot-1"
+        )
+        self.assertEqual(signal.direction.value, "buy")
 
     def test_paper_shadow_service_preserves_risk_disposition(self):
         signal = StrategyFactory().generate_signal(

@@ -32,6 +32,10 @@ class StrategyFactory:
     """Versioned strategy family registry with fail-closed dispatch."""
 
     supported_families: tuple[StrategyFamily, ...] = (
+        StrategyFamily.EMA_ADX_TREND,
+        StrategyFamily.DONCHIAN_ATR,
+        StrategyFamily.BOLLINGER_RSI,
+        StrategyFamily.BUY_AND_HOLD,
         StrategyFamily.SMC,
         StrategyFamily.ICT,
     )
