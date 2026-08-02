@@ -103,6 +103,12 @@ class ReadonlyPaperAccountTests(unittest.TestCase):
         with self.assertRaises(R.ReadonlyPaperAccountRepositoryError):
             R.ReadonlyPaperAccountRepository().read(Connection([("paper-1", "Crypto", "BTC_USDT", "buy", "market", 0.1, None, None, None, "filled", "", NOW)]), user_id=7)
 
+    def test_malformed_identity_row_fails_closed(self):
+        bad = list(row())
+        bad[0] = None
+        with self.assertRaises(R.ReadonlyPaperAccountRepositoryError):
+            R.ReadonlyPaperAccountRepository().read(Connection([tuple(bad)]), user_id=7)
+
     def test_service_returns_unavailable_without_provider(self):
         status, body = S.ReadonlyPaperAccountService().read_response(user_id=7)
         self.assertEqual(status, 503)

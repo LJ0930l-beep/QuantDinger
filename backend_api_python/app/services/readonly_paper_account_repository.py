@@ -63,17 +63,17 @@ class ReadonlyPaperAccountRepository:
             for row in rows:
                 try:
                     orders.append(ReadonlyPaperOrderFact(
-                        order_uid=str(_row(row, 0, "order_uid")),
-                        market=str(_row(row, 1, "market")),
-                        symbol=str(_row(row, 2, "symbol")),
-                        side=str(_row(row, 3, "side")),
-                        order_type=str(_row(row, 4, "order_type")),
+                        order_uid=_row(row, 0, "order_uid"),
+                        market=_row(row, 1, "market"),
+                        symbol=_row(row, 2, "symbol"),
+                        side=_row(row, 3, "side"),
+                        order_type=_row(row, 4, "order_type"),
                         quantity=_row(row, 5, "qty"),
                         limit_price=_row(row, 6, "limit_price"),
                         fill_price=_row(row, 7, "fill_price"),
                         fill_value=_row(row, 8, "fill_value"),
                         status=PaperOrderStatus(str(_row(row, 9, "status")).lower()),
-                        note=str(_row(row, 10, "note") or ""),
+                        note=_row(row, 10, "note") or "",
                         created_at=_utc(_row(row, 11, "created_at")),
                     ))
                 except (ReadonlyPaperAccountError, ValueError, TypeError) as exc:
