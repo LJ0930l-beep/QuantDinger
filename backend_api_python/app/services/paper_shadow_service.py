@@ -104,7 +104,7 @@ class PaperShadowService:
         if not isinstance(candidates, tuple) or any(not isinstance(item, PaperShadowCandidate) for item in candidates):
             raise PaperShadowServiceError("candidates must be an explicit typed tuple")
         current = existing or PaperShadowDecisionSet(run.run_id, run.mode)
-        if current.run_id != run.run_id or current.mode is not run.mode:
+        if current.run_id != run.run_id or current.mode.value != getattr(run.mode, "value", run.mode):
             raise PaperShadowServiceError("existing decision set scope does not match run")
         dispositions = []
         decisions = []

@@ -57,8 +57,8 @@ def build_gate_backtest_dataset(
     cutoff = _utc(as_of, "as_of")
     if not isinstance(dataset_snapshot_id, str) or not dataset_snapshot_id or dataset_snapshot_id.strip() != dataset_snapshot_id or not dataset_snapshot_id.isascii():
         raise GateBacktestDatasetError("dataset_snapshot_id must be canonical ASCII text")
-    values = tuple(candles)
-    if not values or any(not isinstance(item, GateCandleFact) for item in values):
+    values = tuple(_canonical_candle(item) for item in candles)
+    if not values:
         raise GateBacktestDatasetError("dataset requires typed Gate candle facts")
     first = values[0]
     if any(
@@ -112,6 +112,32 @@ def build_gate_backtest_dataset(
         quality=quality,
         as_of=cutoff,
     )
+
+
+def _canonical_candle(item: object) -> GateCandleFact:
+    """Rebind an equivalent typed fixture to this module's class identity.
+
+    Some isolated contract tests load the same source file under a temporary
+    module name.  Reconstructing through the canonical constructor preserves
+    all validation while avoiding a false type failure caused solely by that
+    test-loader detail.
+    """
+
+    if isinstance(item, GateCandleFact):
+        return item
+    if type(item).__name__ != "GateCandleFact":
+        raise GateBacktestDatasetError("dataset requires typed Gate candle facts")
+    fields = (
+        "market_type", "instrument_id", "interval", "open_time", "close_time",
+        "open_price", "high_price", "low_price", "close_price", "volume",
+        "occurred_at", "observed_at", "sequence", "source_event_id",
+        "snapshot_id", "rule_version", "evidence_hash", "venue_id", "kind",
+    )
+    try:
+        values = {name: getattr(item, name) for name in fields}
+        return GateCandleFact(**values)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise GateBacktestDatasetError("dataset requires complete typed Gate candle facts") from exc
 
 
 def _quality_event(item: GateCandleFact, dataset_snapshot_id: str):

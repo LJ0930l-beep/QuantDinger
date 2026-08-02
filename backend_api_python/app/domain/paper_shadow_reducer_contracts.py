@@ -27,6 +27,16 @@ class PaperShadowReducerError(PaperShadowContractError):
     """The supplied decision set violates replay or scope invariants."""
 
 
+def _canonical_mode(value: object) -> SimulationMode:
+    """Accept a reloaded enum fixture only after validating its exact value."""
+
+    if isinstance(value, SimulationMode):
+        return value
+    if type(value).__name__ == "SimulationMode" and getattr(value, "value", None) in {"PAPER", "SHADOW"}:
+        return SimulationMode(value.value)
+    raise PaperShadowReducerError("decision set requires PAPER or SHADOW")
+
+
 class SimulationRecordDisposition(str, Enum):
     CREATED = "CREATED"
     REPLAYED = "REPLAYED"
@@ -41,13 +51,15 @@ class PaperShadowDecisionSet:
     replay_fingerprint: str = ""
 
     def __post_init__(self) -> None:
-        if not isinstance(self.mode, SimulationMode) or self.mode is SimulationMode.DISABLED:
+        mode = _canonical_mode(self.mode)
+        if mode is SimulationMode.DISABLED:
             raise PaperShadowReducerError("decision set requires PAPER or SHADOW")
+        object.__setattr__(self, "mode", mode)
         if not isinstance(self.run_id, str) or not self.run_id or self.run_id.strip() != self.run_id:
             raise PaperShadowReducerError("run_id must be canonical text")
         if not isinstance(self.decisions, tuple) or any(not isinstance(item, PaperShadowDecision) for item in self.decisions):
             raise PaperShadowReducerError("decisions must be an explicit typed tuple")
-        if any(item.run_id != self.run_id or item.mode is not self.mode for item in self.decisions):
+        if any(item.run_id != self.run_id or getattr(item.mode, "value", item.mode) != self.mode.value for item in self.decisions):
             raise PaperShadowReducerError("decision scope does not match the set")
         keys = [item.request_fingerprint for item in self.decisions]
         if len(keys) != len(set(keys)):
