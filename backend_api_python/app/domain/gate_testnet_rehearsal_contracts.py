@@ -87,6 +87,7 @@ class GateTestnetRehearsalResult:
             "snapshot_count": len(self.snapshots),
             "snapshots": [
                 {"snapshot_id": item.snapshot_id, "instrument_id": item.instrument_id,
+                 "session_fingerprint": item.session_fingerprint,
                  "observed_at": item.observed_at.isoformat(), "dataset_fingerprint": item.dataset_fingerprint}
                 for item in self.snapshots
             ],
