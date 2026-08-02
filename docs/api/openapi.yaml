@@ -963,6 +963,26 @@ paths:
       - Dashboard
       operationId: getApiQuantDeploymentReadinessReadonly
       x-visibility: internal
+  /api/quant/projection/generation/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return persisted projection-generation facts without claiming G4-B.
+      tags:
+      - Dashboard
+      operationId: getApiQuantProjectionGenerationReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:
