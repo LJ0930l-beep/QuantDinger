@@ -998,7 +998,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanSuccessEnvelope'
-      summary: Return one authenticated scoped reconciliation checkpoint without writes.
+      summary: Return one authenticated, credential- and instrument-scoped checkpoint.
       tags:
       - Dashboard
       operationId: getApiQuantReconciliationCheckpointReadonly
