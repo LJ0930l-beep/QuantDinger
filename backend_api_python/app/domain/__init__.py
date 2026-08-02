@@ -356,6 +356,17 @@ from .deployment_readiness_contracts import (
     DeploymentReleaseProfile,
     derive_deployment_readiness,
 )
+from .readonly_paper_account_contracts import (
+    PAPER_POSITION_PROJECTION_VERSION,
+    READONLY_PAPER_ACCOUNT_CONTRACT_VERSION,
+    PaperOrderStatus,
+    PaperPositionProjectionError,
+    ReadonlyPaperAccountError,
+    ReadonlyPaperAccountSnapshot,
+    ReadonlyPaperOrderFact,
+    ReadonlyPaperPositionEstimate,
+    project_paper_positions,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -758,6 +769,15 @@ __all__ = [
     "DeploymentReadinessStatus",
     "DeploymentReleaseProfile",
     "derive_deployment_readiness",
+    "PAPER_POSITION_PROJECTION_VERSION",
+    "READONLY_PAPER_ACCOUNT_CONTRACT_VERSION",
+    "PaperOrderStatus",
+    "PaperPositionProjectionError",
+    "ReadonlyPaperAccountError",
+    "ReadonlyPaperAccountSnapshot",
+    "ReadonlyPaperOrderFact",
+    "ReadonlyPaperPositionEstimate",
+    "project_paper_positions",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",
