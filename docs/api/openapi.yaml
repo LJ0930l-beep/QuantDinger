@@ -922,6 +922,26 @@ paths:
       - Dashboard
       operationId: getApiQuantOperationsReadonly
       x-visibility: internal
+  /api/quant/research-run/manifest/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return an injected non-live research run manifest without writes.
+      tags:
+      - Dashboard
+      operationId: getApiQuantResearchRunManifestReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:

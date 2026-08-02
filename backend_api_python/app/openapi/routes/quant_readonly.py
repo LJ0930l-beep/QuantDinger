@@ -44,6 +44,10 @@ from app.services.quant_operations_service import (
     QuantOperationsServiceError,
     service_from_app as quant_operations_service_from_app,
 )
+from app.services.non_live_run_manifest_service import (
+    NonLiveRunManifestServiceError,
+    service_from_app as non_live_manifest_service_from_app,
+)
 from app.utils.auth import login_required
 
 
@@ -156,6 +160,18 @@ def get_readonly_quant_operations():
         status, body = quant_operations_service_from_app(current_app).read_response()
     except QuantOperationsServiceError:
         return jsonify({"code": 0, "msg": "operational posture unavailable", "data": None}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/research-run/manifest/readonly", methods=["GET"])
+@login_required
+def get_readonly_non_live_run_manifest():
+    """Return an injected non-live run manifest without writes or credentials."""
+
+    try:
+        status, body = non_live_manifest_service_from_app(current_app).read_response()
+    except NonLiveRunManifestServiceError:
+        return jsonify({"code": 0, "msg": "non-live run manifest unavailable", "data": None}), 503
     return jsonify(body), status
 
 

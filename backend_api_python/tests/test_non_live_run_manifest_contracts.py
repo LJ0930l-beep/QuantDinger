@@ -20,12 +20,15 @@ def _load():
         "app.domain.gate_readonly_contracts": ROOT / "app/domain/gate_readonly_contracts.py",
         "app.domain.paper_shadow_contracts": ROOT / "app/domain/paper_shadow_contracts.py",
         "app.domain.non_live_run_manifest_contracts": ROOT / "app/domain/non_live_run_manifest_contracts.py",
+        "app.services": None,
+        "app.services.non_live_run_manifest_service": ROOT / "app/services/non_live_run_manifest_service.py",
     }
     old = {name: sys.modules.get(name) for name in names}
     try:
         app = ModuleType("app"); app.__path__ = [str(ROOT / "app")]
         domain = ModuleType("app.domain"); domain.__path__ = [str(ROOT / "app" / "domain")]
-        sys.modules["app"] = app; sys.modules["app.domain"] = domain
+        services = ModuleType("app.services"); services.__path__ = [str(ROOT / "app" / "services")]
+        sys.modules["app"] = app; sys.modules["app.domain"] = domain; sys.modules["app.services"] = services
         for name in (
             "app.domain.decimal_values",
             "app.domain.gate_readonly_contracts",
@@ -34,7 +37,10 @@ def _load():
         ):
             spec = importlib.util.spec_from_file_location(name, names[name])
             module = importlib.util.module_from_spec(spec); sys.modules[name] = module; spec.loader.exec_module(module)
-        return sys.modules["app.domain.non_live_run_manifest_contracts"], sys.modules["app.domain.gate_readonly_contracts"], sys.modules["app.domain.paper_shadow_contracts"]
+        name = "app.services.non_live_run_manifest_service"
+        spec = importlib.util.spec_from_file_location(name, names[name])
+        module = importlib.util.module_from_spec(spec); sys.modules[name] = module; spec.loader.exec_module(module)
+        return sys.modules["app.domain.non_live_run_manifest_contracts"], sys.modules["app.domain.gate_readonly_contracts"], sys.modules["app.domain.paper_shadow_contracts"], sys.modules[name]
     finally:
         for name, original in old.items():
             if original is None:
@@ -43,7 +49,7 @@ def _load():
                 sys.modules[name] = original
 
 
-M, Gate, Paper = _load()
+M, Gate, Paper, Service = _load()
 
 
 class NonLiveRunManifestTests(unittest.TestCase):
@@ -89,6 +95,16 @@ class NonLiveRunManifestTests(unittest.TestCase):
                 M.NonLiveRunStatus.BLOCKED, "c" * 64, None, None,
                 datetime(2026, 1, 1, tzinfo=timezone.utc), "blocked",
             )
+
+    def test_manifest_service_is_read_only_and_typed(self):
+        manifest = self._manifest()
+        status, body = Service.NonLiveRunManifestService(lambda: manifest).read_response()
+        self.assertEqual(status, 200)
+        self.assertEqual(body["status"], "COMPLETED")
+        self.assertFalse(body["live_enabled"])
+        with self.assertRaises(Service.NonLiveRunManifestServiceError):
+            Service.NonLiveRunManifestService(lambda: {"status": "COMPLETED"}).read_response()
+        self.assertEqual(Service.NonLiveRunManifestService().read_response()[0], 503)
 
 
 if __name__ == "__main__":
