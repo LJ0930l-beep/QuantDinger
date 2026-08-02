@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 
-from app.domain.backtest_dataset_contracts import BacktestDatasetSnapshot
+from app.domain.backtest_dataset_contracts import BacktestDatasetSnapshot, coerce_backtest_dataset
 from app.domain.deterministic_backtest_contracts import (
     BacktestContractError,
     BacktestExecutionKind,
@@ -133,6 +133,10 @@ class DeterministicBacktestService:
         order_quantity: Decimal,
         execution_kind: BacktestExecutionKind = BacktestExecutionKind.MARKET,
     ) -> DeterministicStrategyBacktest:
+        try:
+            dataset = coerce_backtest_dataset(dataset)
+        except Exception as exc:
+            raise DeterministicBacktestServiceError("dataset must be typed") from exc
         if not isinstance(run, BacktestRunFacts) or not isinstance(dataset, BacktestDatasetSnapshot):
             raise DeterministicBacktestServiceError("run and dataset must be typed")
         if run.dataset_snapshot_id != dataset.dataset_snapshot_id:

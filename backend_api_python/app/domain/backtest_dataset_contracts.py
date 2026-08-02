@@ -13,7 +13,7 @@ import json
 from typing import Any, Tuple
 
 from app.domain.deterministic_backtest_contracts import BacktestBar
-from app.domain.market_data_quality_contracts import DataQualityAssessment, DataQualityStatus
+from app.domain.market_data_quality_contracts import DataQualityAssessment, DataQualityStatus, MarketDataEventFact
 
 
 BACKTEST_DATASET_CONTRACT_VERSION = "backtest-dataset-v1"
@@ -96,4 +96,38 @@ def dataset_fingerprint(dataset: BacktestDatasetSnapshot) -> str:
     return dataset.dataset_fingerprint
 
 
-__all__ = ["BACKTEST_DATASET_CONTRACT_VERSION", "BacktestDatasetError", "BacktestDatasetSnapshot", "dataset_fingerprint"]
+def coerce_backtest_dataset(value: object) -> BacktestDatasetSnapshot:
+    """Reconstruct an equivalent isolated fixture through local validators."""
+
+    if isinstance(value, BacktestDatasetSnapshot):
+        return value
+    if type(value).__name__ != "BacktestDatasetSnapshot":
+        raise BacktestDatasetError("dataset must be a typed snapshot")
+    try:
+        bars = tuple(BacktestBar(
+            item.instrument_id, item.open_time, item.close_time,
+            item.open_price, item.high_price, item.low_price, item.close_price,
+            item.volume, item.sequence, item.snapshot_id,
+        ) for item in value.bars)
+        quality = value.quality
+        accepted = tuple(MarketDataEventFact(
+            event.event_id, event.source, event.instrument_id, event.occurred_at,
+            event.observed_at, event.sequence, event.dataset_snapshot_id,
+            event.rule_version, event.payload_fingerprint,
+        ) for event in quality.accepted_events)
+        local_quality = DataQualityAssessment(
+            DataQualityStatus(getattr(quality.status, "value", quality.status)),
+            accepted,
+            tuple(quality.rejected_event_ids),
+            quality.as_of,
+            quality.assessment_fingerprint,
+        )
+        return BacktestDatasetSnapshot(
+            value.dataset_snapshot_id, value.venue, value.market_type,
+            value.instrument_id, value.rule_version, bars, local_quality, value.as_of,
+        )
+    except (AttributeError, TypeError, ValueError, BacktestDatasetError) as exc:
+        raise BacktestDatasetError("dataset must be a complete typed snapshot") from exc
+
+
+__all__ = ["BACKTEST_DATASET_CONTRACT_VERSION", "BacktestDatasetError", "BacktestDatasetSnapshot", "coerce_backtest_dataset", "dataset_fingerprint"]

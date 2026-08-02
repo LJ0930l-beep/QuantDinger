@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Iterable
 
 from app.domain.deterministic_backtest_contracts import BacktestBar
-from app.domain.backtest_dataset_contracts import BacktestDatasetSnapshot
+from app.domain.backtest_dataset_contracts import BacktestDatasetSnapshot, coerce_backtest_dataset
 from app.domain.paper_shadow_contracts import PaperShadowDecision, PaperShadowRunFacts, simulation_fingerprint
 from app.domain.portfolio_risk_contracts import CooldownFact, PositionSizingDecision, PositionSizingRequest, portfolio_risk_fingerprint
 from app.domain.strategy_library_contracts import StrategyDefinition, StrategySignalFact, strategy_fingerprint
@@ -140,8 +140,10 @@ class ResearchPipeline:
         cannot silently pass a different bar snapshot under the same run.
         """
 
-        if not isinstance(dataset, BacktestDatasetSnapshot):
-            raise ResearchPipelineError("dataset must be typed")
+        try:
+            dataset = coerce_backtest_dataset(dataset)
+        except Exception as exc:
+            raise ResearchPipelineError("dataset must be typed") from exc
         if run.dataset_snapshot_id != dataset.dataset_snapshot_id:
             raise ResearchPipelineError("run dataset snapshot does not match dataset")
         return self.evaluate(
