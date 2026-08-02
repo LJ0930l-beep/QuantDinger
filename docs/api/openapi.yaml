@@ -842,6 +842,26 @@ paths:
       - Dashboard
       operationId: getApiQuantStrategiesReadonly
       x-visibility: internal
+  /api/quant/research/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return an injected Gate research run without execution side effects.
+      tags:
+      - Dashboard
+      operationId: getApiQuantResearchReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:

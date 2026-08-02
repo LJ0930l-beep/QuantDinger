@@ -54,6 +54,7 @@ from app.domain.gate_read_transport_contracts import GatePublicReadEndpoint, Gat
 from app.services.gate_market_research_service import GateMarketResearchService  # noqa: E402
 from app.services.gate_testnet_market_session_service import GateTestnetMarketSessionRequest, GateTestnetMarketSessionService  # noqa: E402
 from app.services.gate_research_run_service import GateResearchRunService  # noqa: E402
+from app.services.research_run_result_service import ResearchRunResultService, ResearchRunResultServiceError  # noqa: E402
 
 
 UTC = timezone.utc
@@ -203,6 +204,13 @@ class StrategySimulationServiceTests(unittest.TestCase):
         self.assertEqual(result.dataset.venue, "gate")
         self.assertEqual(result.pipeline.simulation.mode, SimulationMode.SHADOW)
         self.assertFalse(result.to_public_dict()["live_enabled"])
+
+    def test_research_run_result_surface_is_read_only_and_fail_closed(self):
+        status, body = ResearchRunResultService().read_response()
+        self.assertEqual(status, 503)
+        self.assertFalse(body["live_enabled"])
+        with self.assertRaises(ResearchRunResultServiceError):
+            ResearchRunResultService(lambda: {"run": "not-typed"}).read_response()
 
 
 if __name__ == "__main__":

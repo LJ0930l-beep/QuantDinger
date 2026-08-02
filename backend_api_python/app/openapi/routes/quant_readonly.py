@@ -28,6 +28,10 @@ from app.services.strategy_catalog_service import (
     StrategyCatalogServiceError,
     service_from_app as strategy_catalog_service_from_app,
 )
+from app.services.research_run_result_service import (
+    ResearchRunResultServiceError,
+    service_from_app as research_run_service_from_app,
+)
 from app.utils.auth import login_required
 
 
@@ -92,6 +96,18 @@ def get_readonly_strategy_catalog():
         status, body = strategy_catalog_service_from_app(current_app).read_response()
     except StrategyCatalogServiceError:
         return jsonify({"code": 0, "msg": "strategy catalog unavailable", "data": None}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/research/readonly", methods=["GET"])
+@login_required
+def get_readonly_research_run():
+    """Return an injected Gate research run without execution side effects."""
+
+    try:
+        status, body = research_run_service_from_app(current_app).read_response()
+    except ResearchRunResultServiceError:
+        return jsonify({"code": 0, "msg": "research run unavailable", "data": None}), 503
     return jsonify(body), status
 
 
