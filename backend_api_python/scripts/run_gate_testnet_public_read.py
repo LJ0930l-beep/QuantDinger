@@ -44,7 +44,7 @@ from app.services.gate_testnet_market_session_service import (
     GateTestnetMarketSessionRequest,
     GateTestnetMarketSessionService,
 )
-from app.services.gate_backtest_dataset_service import GateBacktestDatasetService
+from app.domain.gate_backtest_dataset_contracts import build_gate_backtest_dataset
 
 
 def _observed_at(value: str) -> datetime:
@@ -96,7 +96,11 @@ def main(argv: list[str] | None = None) -> int:
             args.snapshot_id,
             args.rule_version,
         ))
-        dataset = GateBacktestDatasetService().build(receipt.evidence)
+        dataset = build_gate_backtest_dataset(
+            receipt.evidence.candles,
+            dataset_snapshot_id=receipt.request.snapshot_id,
+            as_of=receipt.request.observed_at,
+        )
     except (GateReadHttpTransportError, GateTestnetMarketSessionError, ValueError) as exc:
         print(json.dumps({
             "status": "FAILED",
