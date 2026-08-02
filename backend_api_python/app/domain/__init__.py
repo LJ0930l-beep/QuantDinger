@@ -339,6 +339,14 @@ from .non_live_run_manifest_contracts import (
     NonLiveRunStatus,
     input_fingerprint,
 )
+from .deployment_readiness_contracts import (
+    DEPLOYMENT_READINESS_CONTRACT_VERSION,
+    DeploymentEnvironment,
+    DeploymentReadinessError,
+    DeploymentReadinessStatus,
+    DeploymentReleaseProfile,
+    derive_deployment_readiness,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -723,6 +731,12 @@ __all__ = [
     "NonLiveRunManifestError",
     "NonLiveRunStatus",
     "input_fingerprint",
+    "DEPLOYMENT_READINESS_CONTRACT_VERSION",
+    "DeploymentEnvironment",
+    "DeploymentReadinessError",
+    "DeploymentReadinessStatus",
+    "DeploymentReleaseProfile",
+    "derive_deployment_readiness",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",

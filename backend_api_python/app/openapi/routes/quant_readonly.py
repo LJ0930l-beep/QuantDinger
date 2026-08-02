@@ -48,6 +48,10 @@ from app.services.non_live_run_manifest_service import (
     NonLiveRunManifestServiceError,
     service_from_app as non_live_manifest_service_from_app,
 )
+from app.services.deployment_readiness_service import (
+    DeploymentReadinessServiceError,
+    service_from_app as deployment_readiness_service_from_app,
+)
 from app.utils.auth import login_required
 
 
@@ -172,6 +176,18 @@ def get_readonly_non_live_run_manifest():
         status, body = non_live_manifest_service_from_app(current_app).read_response()
     except NonLiveRunManifestServiceError:
         return jsonify({"code": 0, "msg": "non-live run manifest unavailable", "data": None}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/deployment/readiness/readonly", methods=["GET"])
+@login_required
+def get_readonly_deployment_readiness():
+    """Return artifact and rollback readiness without changing deployment state."""
+
+    try:
+        status, body = deployment_readiness_service_from_app(current_app).read_response()
+    except DeploymentReadinessServiceError:
+        return jsonify({"code": 0, "msg": "deployment readiness unavailable", "data": None}), 503
     return jsonify(body), status
 
 

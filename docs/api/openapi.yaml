@@ -942,6 +942,26 @@ paths:
       - Dashboard
       operationId: getApiQuantResearchRunManifestReadonly
       x-visibility: internal
+  /api/quant/deployment/readiness/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return artifact and rollback readiness without changing deployment state.
+      tags:
+      - Dashboard
+      operationId: getApiQuantDeploymentReadinessReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:
