@@ -777,7 +777,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanSuccessEnvelope'
-      summary: Return an injected deterministic backtest report.
+      summary: Return an injected deterministic backtest report without side effects.
       tags:
       - Dashboard
       operationId: getApiQuantBacktestReadonly
@@ -797,7 +797,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanSuccessEnvelope'
-      summary: Return an injected Paper/Shadow run summary.
+      summary: Return an injected Paper/Shadow run summary without side effects.
       tags:
       - Dashboard
       operationId: getApiQuantPaperShadowReadonly
