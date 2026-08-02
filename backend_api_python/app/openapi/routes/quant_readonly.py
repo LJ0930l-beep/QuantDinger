@@ -78,6 +78,11 @@ from app.services.readonly_gate_account_service import (
     ReadonlyGateAccountServiceError,
     service_from_app as gate_account_service_from_app,
 )
+from app.services.gate_public_market_service import (
+    GatePublicMarketServiceError,
+    service_from_app as gate_public_market_service_from_app,
+)
+from app.domain.gate_readonly_contracts import GateMarketType
 from app.utils.auth import get_current_user_id
 from app.utils.auth import login_required
 
@@ -333,6 +338,35 @@ def get_readonly_gate_account():
             instrument_id=instrument_id, as_of=as_of,
         )
     except (KeyError, ValueError, TypeError, ReadonlyGateAccountServiceError):
+        return jsonify({"status": "UNAVAILABLE", "live_enabled": False}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/gate/market/readonly", methods=["GET"])
+@login_required
+def get_readonly_gate_market():
+    """Return one explicit public Gate TestNet market-evidence bundle.
+
+    The route has no credential or write capability.  It remains unavailable
+    until ``QUANT_GATE_PUBLIC_MARKET_READ_ENABLED=1`` is explicitly set.
+    """
+    try:
+        instrument_id = request.args["instrument_id"]
+        market_type = GateMarketType(request.args.get("market_type", "spot").lower())
+        interval = request.args.get("interval", "1m")
+        candle_limit = request.args.get("candle_limit", default=100, type=int)
+        depth_limit = request.args.get("depth_limit", default=20, type=int)
+        observed_raw = request.args.get("observed_at")
+        observed_at = datetime.fromisoformat(observed_raw.replace("Z", "+00:00")) if observed_raw else datetime.now(timezone.utc)
+        status, body = gate_public_market_service_from_app(current_app).read_response(
+            instrument_id=instrument_id,
+            market_type=market_type,
+            interval=interval,
+            candle_limit=candle_limit,
+            depth_limit=depth_limit,
+            observed_at=observed_at,
+        )
+    except (KeyError, ValueError, TypeError, GatePublicMarketServiceError):
         return jsonify({"status": "UNAVAILABLE", "live_enabled": False}), 503
     return jsonify(body), status
 

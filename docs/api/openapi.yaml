@@ -1084,6 +1084,29 @@ paths:
       - Dashboard
       operationId: getApiQuantGateAccountReadonly
       x-visibility: internal
+  /api/quant/gate/market/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return one explicit public Gate TestNet market-evidence bundle.
+      description: 'The route has no credential or write capability.  It remains unavailable
+
+        until ``QUANT_GATE_PUBLIC_MARKET_READ_ENABLED=1`` is explicitly set.'
+      tags:
+      - Dashboard
+      operationId: getApiQuantGateMarketReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:

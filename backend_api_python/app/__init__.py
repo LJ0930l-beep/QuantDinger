@@ -161,6 +161,7 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         from app.services.readonly_backtest_report_service import postgres_backtest_report_provider
         from app.services.readonly_paper_account_service import postgres_paper_account_provider
         from app.services.gate_testnet_rehearsal_file_provider import provider_from_path as gate_rehearsal_provider_from_path
+        from app.services.gate_public_market_provider import provider_from_network as gate_public_market_provider_from_network
         from app.services.deployment_readiness_file_provider import provider_from_path as deployment_readiness_provider_from_path
 
         app.extensions.setdefault("readonly_strategy_catalog_provider", builtin_strategy_catalog)
@@ -184,6 +185,11 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         rehearsal_path = os.environ.get("QUANT_TESTNET_REHEARSAL_EVIDENCE_PATH", "").strip()
         if rehearsal_path:
             app.extensions.setdefault("readonly_gate_testnet_rehearsal_provider", gate_rehearsal_provider_from_path(rehearsal_path))
+        # Public Gate TestNet market reads are opt-in and GET-only.  The
+        # default remains unavailable so starting the API never opens a
+        # network connection unexpectedly.
+        if os.getenv("QUANT_GATE_PUBLIC_MARKET_READ_ENABLED", "0").strip() == "1":
+            app.extensions.setdefault("readonly_gate_public_market_provider", gate_public_market_provider_from_network())
     run_startup_hooks(app)
 
     return app
