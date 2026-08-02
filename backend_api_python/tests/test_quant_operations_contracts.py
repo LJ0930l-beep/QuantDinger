@@ -22,12 +22,15 @@ def _load():
         "app.domain.production_readiness_contracts": ROOT / "app/domain/production_readiness_contracts.py",
         "app.domain.gate_testnet_rehearsal_contracts": ROOT / "app/domain/gate_testnet_rehearsal_contracts.py",
         "app.domain.quant_operations_contracts": ROOT / "app/domain/quant_operations_contracts.py",
+        "app.services": None,
+        "app.services.quant_operations_service": ROOT / "app/services/quant_operations_service.py",
     }
     old = {name: sys.modules.get(name) for name in names}
     try:
         app = ModuleType("app"); app.__path__ = [str(ROOT / "app")]
         domain = ModuleType("app.domain"); domain.__path__ = [str(ROOT / "app" / "domain")]
-        sys.modules["app"] = app; sys.modules["app.domain"] = domain
+        services = ModuleType("app.services"); services.__path__ = [str(ROOT / "app" / "services")]
+        sys.modules["app"] = app; sys.modules["app.domain"] = domain; sys.modules["app.services"] = services
         class BacktestStatus(str, Enum):
             READY = "READY"; UNAVAILABLE = "UNAVAILABLE"; UNAUTHORIZED = "UNAUTHORIZED"
         class PaperStatus(str, Enum):
@@ -45,7 +48,10 @@ def _load():
         ):
             spec = importlib.util.spec_from_file_location(name, names[name])
             module = importlib.util.module_from_spec(spec); sys.modules[name] = module; spec.loader.exec_module(module)
-        return sys.modules["app.domain.quant_operations_contracts"], sys.modules["app.domain.research_readiness_contracts"], sys.modules["app.domain.gate_testnet_readiness_contracts"], sys.modules["app.domain.production_readiness_contracts"], sys.modules["app.domain.gate_testnet_rehearsal_contracts"], BacktestStatus, PaperStatus
+        name = "app.services.quant_operations_service"
+        spec = importlib.util.spec_from_file_location(name, names[name])
+        module = importlib.util.module_from_spec(spec); sys.modules[name] = module; spec.loader.exec_module(module)
+        return sys.modules["app.domain.quant_operations_contracts"], sys.modules["app.domain.research_readiness_contracts"], sys.modules["app.domain.gate_testnet_readiness_contracts"], sys.modules["app.domain.production_readiness_contracts"], sys.modules["app.domain.gate_testnet_rehearsal_contracts"], sys.modules[name], BacktestStatus, PaperStatus
     finally:
         for name, original in old.items():
             if original is None:
@@ -54,7 +60,7 @@ def _load():
                 sys.modules[name] = original
 
 
-M, Research, Gate, Production, Rehearsal, BacktestStatus, PaperStatus = _load()
+M, Research, Gate, Production, Rehearsal, Service, BacktestStatus, PaperStatus = _load()
 
 
 def _facts(*, rehearsal_status=None, production_overrides=None):
@@ -99,6 +105,16 @@ class QuantOperationsContractTests(unittest.TestCase):
     def test_invalid_live_evidence_fails_closed(self):
         with self.assertRaises(Production.ProductionReadinessError):
             _facts(production_overrides={"live_enabled": True})
+
+    def test_service_is_read_only_and_typed(self):
+        snapshot = M.derive_quant_operations(*_facts())
+        status, body = Service.QuantOperationsService(lambda: snapshot).read_response()
+        self.assertEqual(status, 200)
+        self.assertEqual(body["status"], "PRODUCTION_READY")
+        self.assertFalse(body["live_enabled"])
+        with self.assertRaises(Service.QuantOperationsServiceError):
+            Service.QuantOperationsService(lambda: {"live_enabled": True}).read_response()
+        self.assertEqual(Service.QuantOperationsService().read_response()[0], 503)
 
 
 if __name__ == "__main__":
