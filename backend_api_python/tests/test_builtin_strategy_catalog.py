@@ -38,8 +38,8 @@ class BuiltinStrategyCatalogTests(unittest.TestCase):
         first = module.builtin_strategy_catalog()
         second = module.builtin_strategy_catalog()
         self.assertEqual(first, second)
-        self.assertEqual([item.family.value for item in first], ["smc", "ict"])
-        self.assertEqual(len({item.strategy_id for item in first}), 2)
+        self.assertEqual([item.family.value for item in first], ["ema_adx_trend", "donchian_atr", "bollinger_rsi", "buy_and_hold", "smc", "ict"])
+        self.assertEqual(len({item.strategy_id for item in first}), 6)
 
     def test_catalog_contains_no_execution_or_credential_authority(self):
         source = module_path.read_text(encoding="utf-8")
