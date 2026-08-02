@@ -305,6 +305,12 @@ from .research_readiness_contracts import (
     ResearchReadinessView,
     derive_research_readiness,
 )
+from .strategy_catalog_contracts import (
+    STRATEGY_CATALOG_CONTRACT_VERSION,
+    StrategyCatalogError,
+    StrategyCatalogStatus,
+    StrategyCatalogView,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -665,6 +671,10 @@ __all__ = [
     "ResearchReadinessStatus",
     "ResearchReadinessView",
     "derive_research_readiness",
+    "STRATEGY_CATALOG_CONTRACT_VERSION",
+    "StrategyCatalogError",
+    "StrategyCatalogStatus",
+    "StrategyCatalogView",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",

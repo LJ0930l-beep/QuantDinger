@@ -822,6 +822,26 @@ paths:
       - Dashboard
       operationId: getApiQuantReadiness
       x-visibility: internal
+  /api/quant/strategies/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return injected strategy definitions without execution authority.
+      tags:
+      - Dashboard
+      operationId: getApiQuantStrategiesReadonly
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:
