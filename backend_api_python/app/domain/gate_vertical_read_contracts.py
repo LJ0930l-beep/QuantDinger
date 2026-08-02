@@ -50,6 +50,19 @@ class GatePositionSide(str, Enum):
     NET = "net"
 
 
+class GateOrderStatus(str, Enum):
+    OPEN = "open"
+    PARTIALLY_FILLED = "partially_filled"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+
+
+class GateOrderSide(str, Enum):
+    BUY = "buy"
+    SELL = "sell"
+
+
 def _decimal(value: Any, field: str, *, non_negative: bool = False, positive: bool = False) -> Decimal:
     if isinstance(value, float):
         raise GateVerticalContractError(f"{field} rejects float input")
@@ -220,6 +233,82 @@ class GatePositionFact:
         _text(self.source_event_id, "source_event_id")
 
 
+@dataclass(frozen=True)
+class GateOrderFact:
+    """Read-only normalized order evidence; never authorizes a write."""
+
+    venue_id: str
+    market_type: AssetMarketType
+    account_scope: str
+    instrument_id: str
+    exchange_order_id: str
+    client_order_id: str | None
+    side: GateOrderSide
+    status: GateOrderStatus
+    quantity: Decimal
+    filled_quantity: Decimal
+    average_fill_price: Decimal | None
+    observed_at: datetime
+    source_event_id: str
+
+    def __post_init__(self) -> None:
+        if _text(self.venue_id, "venue_id", lower=True) != "gate" or not isinstance(self.market_type, AssetMarketType):
+            raise GateVerticalContractError("order venue and market_type must be typed")
+        if not isinstance(self.side, GateOrderSide) or not isinstance(self.status, GateOrderStatus):
+            raise GateVerticalContractError("order side and status must be typed")
+        for field in ("account_scope", "instrument_id", "exchange_order_id", "source_event_id"):
+            _text(getattr(self, field), field)
+        if self.client_order_id is not None:
+            _text(self.client_order_id, "client_order_id")
+        quantity = _decimal(self.quantity, "quantity", positive=True)
+        filled = _decimal(self.filled_quantity, "filled_quantity", non_negative=True)
+        if filled > quantity:
+            raise GateVerticalContractError("filled_quantity cannot exceed quantity")
+        object.__setattr__(self, "quantity", quantity)
+        object.__setattr__(self, "filled_quantity", filled)
+        if self.average_fill_price is not None:
+            object.__setattr__(self, "average_fill_price", _decimal(self.average_fill_price, "average_fill_price", positive=True))
+        object.__setattr__(self, "observed_at", _utc(self.observed_at))
+
+
+@dataclass(frozen=True)
+class GateFillFact:
+    """Stable venue fill evidence; missing venue fill IDs fail closed."""
+
+    venue_id: str
+    market_type: AssetMarketType
+    account_scope: str
+    instrument_id: str
+    exchange_order_id: str
+    venue_fill_id: str
+    side: GateOrderSide
+    quantity: Decimal
+    price: Decimal
+    fee_asset: str | None
+    fee_amount: Decimal | None
+    observed_at: datetime
+    source_event_id: str
+
+    def __post_init__(self) -> None:
+        if _text(self.venue_id, "venue_id", lower=True) != "gate" or not isinstance(self.market_type, AssetMarketType):
+            raise GateVerticalContractError("fill venue and market_type must be typed")
+        if not isinstance(self.side, GateOrderSide):
+            raise GateVerticalContractError("fill side must be typed")
+        for field in ("account_scope", "instrument_id", "exchange_order_id", "venue_fill_id", "source_event_id"):
+            _text(getattr(self, field), field)
+        object.__setattr__(self, "quantity", _decimal(self.quantity, "quantity", positive=True))
+        object.__setattr__(self, "price", _decimal(self.price, "price", positive=True))
+        if self.fee_asset is None:
+            if self.fee_amount is not None:
+                raise GateVerticalContractError("fee_amount requires fee_asset")
+        else:
+            asset = _text(self.fee_asset, "fee_asset").upper()
+            amount = _decimal(self.fee_amount, "fee_amount", non_negative=True)
+            object.__setattr__(self, "fee_asset", asset)
+            object.__setattr__(self, "fee_amount", amount)
+        object.__setattr__(self, "observed_at", _utc(self.observed_at))
+
+
 def gate_read_fingerprint(value: Any) -> str:
     """Return a stable SHA-256 fingerprint for supplied typed evidence."""
 
@@ -278,6 +367,10 @@ __all__ = [
     "GateAuthFacts",
     "GateBalanceFact",
     "GateInstrumentRuleSnapshot",
+    "GateFillFact",
+    "GateOrderFact",
+    "GateOrderSide",
+    "GateOrderStatus",
     "GateMarginMode",
     "GatePermission",
     "GatePositionFact",

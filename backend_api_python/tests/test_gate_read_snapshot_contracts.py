@@ -68,6 +68,14 @@ def _candle(market_type=C.multi.AssetMarketType.SPOT, observed_at=NOW):
     return C.market.GateCandleFact(market_type, "BTC_USDT", "1m", NOW - timedelta(minutes=1), NOW, Decimal("100"), Decimal("101"), Decimal("99"), Decimal("100.5"), Decimal("10"), NOW, observed_at, 1, "candle-1", "snapshot-1", "rules-v1", "f" * 64)
 
 
+def _order():
+    return C.vertical.GateOrderFact("gate", C.multi.AssetMarketType.PERPETUAL, "paper-main", "BTC_USDT", "order-1", "client-1", C.vertical.GateOrderSide.BUY, C.vertical.GateOrderStatus.OPEN, Decimal("2"), Decimal("1"), Decimal("100"), NOW, "order-event-1")
+
+
+def _fill():
+    return C.vertical.GateFillFact("gate", C.multi.AssetMarketType.PERPETUAL, "paper-main", "BTC_USDT", "order-1", "fill-1", C.vertical.GateOrderSide.BUY, Decimal("1"), Decimal("100"), "USDT", Decimal("0.1"), NOW, "fill-event-1")
+
+
 class GateReadSnapshotContractTests(unittest.TestCase):
     def test_assembles_scoped_immutable_snapshot_and_safe_public_summary(self):
         snapshot = C.snapshot.build_gate_read_snapshot(_auth(), (_balance(),), market_facts=(_candle(),), observed_at=NOW)
@@ -90,6 +98,14 @@ class GateReadSnapshotContractTests(unittest.TestCase):
         changed = C.snapshot.build_gate_read_snapshot(_auth(), (_balance(),), market_facts=(_candle(observed_at=NOW),), observed_at=NOW.replace(second=1))
         self.assertEqual(first.snapshot_fingerprint, second.snapshot_fingerprint)
         self.assertNotEqual(first.snapshot_fingerprint, changed.snapshot_fingerprint)
+
+    def test_orders_and_fills_are_scoped_and_fingerprinted(self):
+        auth = _auth(C.multi.AssetMarketType.PERPETUAL)
+        first = C.snapshot.build_gate_read_snapshot(auth, positions=(), orders=(_order(),), fills=(_fill(),), observed_at=NOW)
+        second = C.snapshot.build_gate_read_snapshot(auth, positions=(), orders=(_order(),), fills=(_fill(),), observed_at=NOW)
+        self.assertEqual(first.snapshot_fingerprint, second.snapshot_fingerprint)
+        self.assertEqual(first.to_public_dict()["order_count"], 1)
+        self.assertEqual(first.to_public_dict()["fill_count"], 1)
 
 
 if __name__ == "__main__":

@@ -70,6 +70,10 @@ from app.services.readonly_shadow_summary_service import (
     ReadonlyShadowSummaryServiceError,
     service_from_app as shadow_summary_service_from_app,
 )
+from app.services.readonly_gate_account_service import (
+    ReadonlyGateAccountServiceError,
+    service_from_app as gate_account_service_from_app,
+)
 from app.utils.auth import get_current_user_id
 from app.utils.auth import login_required
 
@@ -288,6 +292,28 @@ def get_readonly_shadow_summary():
             as_of=as_of,
         )
     except (KeyError, ValueError, TypeError, ReadonlyShadowSummaryServiceError):
+        return jsonify({"status": "UNAVAILABLE", "live_enabled": False}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/gate/account/readonly", methods=["GET"])
+@login_required
+def get_readonly_gate_account():
+    """Return injected, sanitized Gate balances/orders/fills evidence."""
+
+    try:
+        credential_id = int(request.args["credential_id"])
+        market_type = request.args["market_type"]
+        account_scope = request.args["account_scope"]
+        instrument_id = request.args.get("instrument_id", "")
+        observed_at = request.args.get("as_of")
+        as_of = datetime.fromisoformat(observed_at.replace("Z", "+00:00")) if observed_at else datetime.now(timezone.utc)
+        status, body = gate_account_service_from_app(current_app).read_response(
+            user_id=get_current_user_id(), credential_id=credential_id,
+            market_type=market_type, account_scope=account_scope,
+            instrument_id=instrument_id, as_of=as_of,
+        )
+    except (KeyError, ValueError, TypeError, ReadonlyGateAccountServiceError):
         return jsonify({"status": "UNAVAILABLE", "live_enabled": False}), 503
     return jsonify(body), status
 

@@ -52,5 +52,22 @@ class GateReadFormatterTests(unittest.TestCase):
         self.assertEqual(M.classify_gate_response_error(400), M.GateReadErrorKind.INVALID_RESPONSE)
         with self.assertRaises(M.GateReadPayloadError): M.classify_gate_response_error("401")
 
+    def test_order_and_fill_formatters_require_stable_ids_and_preserve_decimal_facts(self):
+        orders = M.normalize_gate_orders([{
+            "contract": "BTC_USDT", "id": "order-1", "client_order_id": "paper-1",
+            "side": "buy", "status": "open", "size": "2.000", "filled": "1.0",
+            "avg_deal_price": "100",
+        }], market_type=C.AssetMarketType.PERPETUAL, account_scope="paper", observed_at=NOW, source_event_prefix="order")
+        self.assertEqual(orders[0].exchange_order_id, "order-1")
+        self.assertEqual(orders[0].filled_quantity, Decimal("1"))
+        fills = M.normalize_gate_fills([{
+            "contract": "BTC_USDT", "order_id": "order-1", "trade_id": "fill-1",
+            "side": "buy", "size": "1.000", "price": "100", "fee": "0.1", "fee_asset": "usdt",
+        }], market_type=C.AssetMarketType.PERPETUAL, account_scope="paper", observed_at=NOW, source_event_prefix="fill")
+        self.assertEqual(fills[0].venue_fill_id, "fill-1")
+        self.assertEqual(fills[0].fee_asset, "USDT")
+        with self.assertRaises(M.GateReadPayloadError):
+            M.normalize_gate_fills([{"contract": "BTC_USDT", "order_id": "order-1", "side": "buy", "size": "1", "price": "100"}], market_type=C.AssetMarketType.PERPETUAL, account_scope="paper", observed_at=NOW, source_event_prefix="fill")
+
 
 if __name__ == "__main__": unittest.main()

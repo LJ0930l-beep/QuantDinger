@@ -13,10 +13,14 @@ from typing import Any, Mapping, Sequence, Tuple
 
 from app.domain.gate_vertical_read_contracts import (
     GateBalanceFact,
+    GateFillFact,
     GateInstrumentRuleSnapshot,
     GateMarginMode,
     GatePositionFact,
     GatePositionSide,
+    GateOrderFact,
+    GateOrderSide,
+    GateOrderStatus,
     GateVerticalContractError,
 )
 from app.domain.multi_asset_capability_contracts import AssetMarketType
@@ -138,4 +142,60 @@ def normalize_gate_instruments(payload: Any, *, market_type: AssetMarketType, ob
     return tuple(result)
 
 
-__all__ = ["GATE_READ_FORMATTER_VERSION", "GateReadErrorKind", "GateReadPayloadError", "classify_gate_response_error", "normalize_gate_balances", "normalize_gate_instruments", "normalize_gate_positions"]
+def normalize_gate_orders(
+    payload: Any,
+    *,
+    market_type: AssetMarketType,
+    account_scope: str,
+    observed_at: datetime,
+    source_event_prefix: str,
+) -> Tuple[GateOrderFact, ...]:
+    rows = _rows(payload, "orders")
+    result = []
+    for index, row in enumerate(rows):
+        try:
+            side = GateOrderSide(str(_required(row, "side")).lower())
+            status = GateOrderStatus(str(_required(row, "status", "state")).lower())
+        except ValueError as exc:
+            raise GateReadPayloadError("order side or status is unsupported") from exc
+        result.append(GateOrderFact(
+            "gate", market_type, account_scope,
+            str(_required(row, "instrument_id", "contract", "symbol")),
+            str(_required(row, "exchange_order_id", "id")),
+            (str(row["client_order_id"]) if row.get("client_order_id") not in (None, "") else None),
+            side, status, _required(row, "quantity", "size"),
+            _required(row, "filled_quantity", "filled_size", "filled") ,
+            (row.get("average_fill_price", row.get("avg_deal_price")) or None),
+            observed_at, f"{source_event_prefix}:{index}",
+        ))
+    return tuple(result)
+
+
+def normalize_gate_fills(
+    payload: Any,
+    *,
+    market_type: AssetMarketType,
+    account_scope: str,
+    observed_at: datetime,
+    source_event_prefix: str,
+) -> Tuple[GateFillFact, ...]:
+    rows = _rows(payload, "fills")
+    result = []
+    for index, row in enumerate(rows):
+        try:
+            side = GateOrderSide(str(_required(row, "side")).lower())
+        except ValueError as exc:
+            raise GateReadPayloadError("fill side is unsupported") from exc
+        result.append(GateFillFact(
+            "gate", market_type, account_scope,
+            str(_required(row, "instrument_id", "contract", "symbol")),
+            str(_required(row, "exchange_order_id", "order_id")),
+            str(_required(row, "venue_fill_id", "trade_id", "id")),
+            side, _required(row, "quantity", "size"), _required(row, "price", "fill_price"),
+            (str(row["fee_asset"]).upper() if row.get("fee_asset") not in (None, "") else None),
+            row.get("fee_amount", row.get("fee")), observed_at, f"{source_event_prefix}:{index}",
+        ))
+    return tuple(result)
+
+
+__all__ = ["GATE_READ_FORMATTER_VERSION", "GateReadErrorKind", "GateReadPayloadError", "classify_gate_response_error", "normalize_gate_balances", "normalize_gate_fills", "normalize_gate_instruments", "normalize_gate_orders", "normalize_gate_positions"]
