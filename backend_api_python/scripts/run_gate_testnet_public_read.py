@@ -45,6 +45,11 @@ from app.services.gate_testnet_market_session_service import (
     GateTestnetMarketSessionService,
 )
 from app.domain.gate_backtest_dataset_contracts import build_gate_backtest_dataset
+from app.domain.gate_testnet_rehearsal_contracts import (
+    GateTestnetRehearsalResult,
+    GateTestnetRehearsalSnapshot,
+    GateTestnetRehearsalStatus,
+)
 
 
 def _observed_at(value: str) -> datetime:
@@ -110,19 +115,26 @@ def main(argv: list[str] | None = None) -> int:
         }, sort_keys=True))
         return 1
 
-    print(json.dumps({
-        "status": "READY",
-        "session_fingerprint": receipt.session_fingerprint,
-        "snapshot_id": receipt.request.snapshot_id,
-        "instrument_id": receipt.request.instrument_id,
+    rehearsal = GateTestnetRehearsalResult(
+        GateTestnetRehearsalStatus.READY,
+        (GateTestnetRehearsalSnapshot(
+            receipt.request.snapshot_id,
+            receipt.session_fingerprint,
+            receipt.request.instrument_id,
+            receipt.request.observed_at,
+            dataset.dataset_fingerprint,
+        ),),
+        "public_market_read_rehearsal_complete",
+    )
+    output = rehearsal.to_public_dict()
+    output.update({
         "evidence_fingerprint": receipt.evidence.bundle_fingerprint,
         "dataset_snapshot_id": dataset.dataset_snapshot_id,
-        "dataset_fingerprint": dataset.dataset_fingerprint,
         "dataset_bar_count": len(dataset.bars),
         "network_access": True,
-        "live_enabled": False,
         "execution_boundary": "PUBLIC_MARKET_READ_ONLY",
-    }, sort_keys=True, indent=2))
+    })
+    print(json.dumps(output, sort_keys=True, indent=2))
     return 0
 
 
