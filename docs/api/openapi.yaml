@@ -937,7 +937,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HumanSuccessEnvelope'
-      summary: Return an injected non-live research run manifest without writes.
+      summary: Return an injected non-live run manifest without writes or credentials.
       tags:
       - Dashboard
       operationId: getApiQuantResearchRunManifestReadonly
