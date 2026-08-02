@@ -37,6 +37,14 @@ GATE_MARKET_SERVICE = load("app.services.gate_market_research_service", "service
 GATE_READY = load("app.services.gate_testnet_readiness_service", "services/gate_testnet_readiness_service.py")
 SESSION = load("app.services.gate_testnet_market_session_service", "services/gate_testnet_market_session_service.py")
 SERVICE = load("app.services.gate_deterministic_backtest_service", "services/gate_deterministic_backtest_service.py")
+load("app.domain.paper_shadow_contracts", "domain/paper_shadow_contracts.py")
+load("app.domain.portfolio_risk_contracts", "domain/portfolio_risk_contracts.py")
+load("app.services.paper_shadow_service", "services/paper_shadow_service.py")
+load("app.services.portfolio_risk_service", "services/portfolio_risk_service.py")
+load("app.services.research_pipeline", "services/research_pipeline.py")
+ORCHESTRATOR = load("app.services.gate_non_live_research_orchestrator", "services/gate_non_live_research_orchestrator.py")
+PAPER = sys.modules["app.domain.paper_shadow_contracts"]
+RISK = sys.modules["app.domain.portfolio_risk_contracts"]
 
 START = datetime(2026, 1, 1, 0, 10, tzinfo=timezone.utc)
 
@@ -78,6 +86,30 @@ class GateDeterministicBacktestServiceTests(unittest.TestCase):
     def test_run_rejects_snapshot_mismatch_before_read(self):
         with self.assertRaises(SERVICE.GateDeterministicBacktestError):
             SERVICE.GateDeterministicBacktestService().run(None, helper._run(), helper._strategy(), order_quantity=helper.Decimal("1"))
+
+    def test_orchestrator_uses_one_dataset_for_pipeline_and_backtest(self):
+        adapter = GATE_ADAPTER.GateReadonlyAdapter(profile(), payloads)
+        session_service = SESSION.GateTestnetMarketSessionService(
+            GATE_MARKET_SERVICE.GateMarketResearchService(adapter, "fixture", "evidence")
+        )
+        strategy = helper._strategy()
+        sizing = RISK.PositionSizingRequest(
+            "request-1", "BTC_USDT", helper.Decimal("100"), helper.Decimal("1"),
+            helper.Decimal("1000"), helper.Decimal("1000"), helper.Decimal("2"),
+            helper.Decimal("0.5"), START,
+        )
+        paper_run = PAPER.PaperShadowRunFacts(
+            "paper-run", PAPER.SimulationMode.SHADOW, "dataset-1", "strategy-1",
+            "risk-1", "tolerance-1", START,
+        )
+        result = ORCHESTRATOR.GateNonLiveResearchOrchestrator(session_service).run(
+            SESSION.GateTestnetMarketSessionRequest("BTC_USDT", START, "dataset-1", "rules-v1"),
+            strategy, sizing, paper_run, helper._run(), signal_id="signal-1",
+            request_fingerprint="request-1", decided_at=START, order_quantity=helper.Decimal("1"),
+        )
+        self.assertEqual(result.dataset.dataset_fingerprint, result.deterministic_backtest.dataset.dataset_fingerprint)
+        self.assertEqual(result.pipeline.simulation.run_id, "paper-run")
+        self.assertFalse(result.to_public_dict()["live_enabled"])
 
 
 if __name__ == "__main__":
