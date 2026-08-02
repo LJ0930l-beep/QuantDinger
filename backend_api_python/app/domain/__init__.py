@@ -297,6 +297,14 @@ from .paper_shadow_run_result_contracts import (
     PaperShadowRunResultError,
     PaperShadowRunStatus,
 )
+from .gate_testnet_readiness_contracts import GateTestnetReadinessStatus
+from .research_readiness_contracts import (
+    RESEARCH_READINESS_CONTRACT_VERSION,
+    ResearchReadinessError,
+    ResearchReadinessStatus,
+    ResearchReadinessView,
+    derive_research_readiness,
+)
 from .backtest_dataset_contracts import (
     BACKTEST_DATASET_CONTRACT_VERSION,
     BacktestDatasetError,
@@ -651,6 +659,12 @@ __all__ = [
     "PaperShadowRunResult",
     "PaperShadowRunResultError",
     "PaperShadowRunStatus",
+    "GateTestnetReadinessStatus",
+    "RESEARCH_READINESS_CONTRACT_VERSION",
+    "ResearchReadinessError",
+    "ResearchReadinessStatus",
+    "ResearchReadinessView",
+    "derive_research_readiness",
     "BACKTEST_DATASET_CONTRACT_VERSION",
     "BacktestDatasetError",
     "BacktestDatasetSnapshot",

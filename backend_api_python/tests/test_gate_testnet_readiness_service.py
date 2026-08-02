@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def load():
     names = [
-        "app", "app.domain", "app.domain.decimal_values", "app.domain.gate_readonly_contracts",
+        "app", "app.domain", "app.domain.decimal_values", "app.domain.gate_testnet_readiness_contracts", "app.domain.gate_readonly_contracts",
         "app.domain.gate_read_formatters", "app.domain.gate_read_transport_contracts",
         "app.domain.gate_readonly_adapter_contracts", "app.services",
         "app.services.gate_testnet_readiness_service",
@@ -23,16 +23,17 @@ def load():
         sys.modules["app"] = app; sys.modules["app.domain"] = domain; sys.modules["app.services"] = services
         paths = {
             names[2]: ROOT / "app/domain/decimal_values.py",
-            names[3]: ROOT / "app/domain/gate_readonly_contracts.py",
-            names[4]: ROOT / "app/domain/gate_read_formatters.py",
-            names[5]: ROOT / "app/domain/gate_read_transport_contracts.py",
-            names[6]: ROOT / "app/domain/gate_readonly_adapter_contracts.py",
-            names[8]: ROOT / "app/services/gate_testnet_readiness_service.py",
+            names[3]: ROOT / "app/domain/gate_testnet_readiness_contracts.py",
+            names[4]: ROOT / "app/domain/gate_readonly_contracts.py",
+            names[5]: ROOT / "app/domain/gate_read_formatters.py",
+            names[6]: ROOT / "app/domain/gate_read_transport_contracts.py",
+            names[7]: ROOT / "app/domain/gate_readonly_adapter_contracts.py",
+            names[9]: ROOT / "app/services/gate_testnet_readiness_service.py",
         }
-        for name in (names[2], names[3], names[4], names[5], names[6], names[8]):
+        for name in (names[2], names[3], names[4], names[5], names[6], names[7], names[9]):
             spec = importlib.util.spec_from_file_location(name, paths[name])
             module = importlib.util.module_from_spec(spec); sys.modules[name] = module; spec.loader.exec_module(module)
-        return sys.modules[names[8]], sys.modules[names[6]], sys.modules[names[3]], sys.modules[names[5]]
+        return sys.modules[names[9]], sys.modules[names[7]], sys.modules[names[4]], sys.modules[names[6]]
     finally:
         for name in reversed(names):
             if old[name] is None: sys.modules.pop(name, None)

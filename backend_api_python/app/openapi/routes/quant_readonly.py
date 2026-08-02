@@ -20,6 +20,10 @@ from app.services.paper_shadow_result_service import (
     PaperShadowResultServiceError,
     service_from_app as paper_shadow_service_from_app,
 )
+from app.services.research_readiness_service import (
+    ResearchReadinessServiceError,
+    service_from_app as readiness_service_from_app,
+)
 from app.utils.auth import login_required
 
 
@@ -60,6 +64,18 @@ def get_readonly_paper_shadow_result():
         status, body = paper_shadow_service_from_app(current_app).read_response()
     except PaperShadowResultServiceError:
         return jsonify({"code": 0, "msg": "paper/shadow result unavailable", "data": None}), 503
+    return jsonify(body), status
+
+
+@blp.route("/api/quant/readiness", methods=["GET"])
+@login_required
+def get_research_readiness():
+    """Return Gate/backtest/Paper readiness without side effects."""
+
+    try:
+        status, body = readiness_service_from_app(current_app).read_response()
+    except ResearchReadinessServiceError:
+        return jsonify({"code": 0, "msg": "research readiness unavailable", "data": None}), 503
     return jsonify(body), status
 
 

@@ -14,7 +14,7 @@ UTC = datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc)
 
 def load():
     names = [
-        "app", "app.domain", "app.domain.multi_asset_capability_contracts",
+        "app", "app.domain", "app.domain.multi_asset_capability_contracts", "app.domain.gate_testnet_readiness_contracts",
         "app.domain.gate_readonly_contracts", "app.domain.gate_read_formatters",
         "app.domain.gate_read_transport_contracts", "app.domain.gate_readonly_adapter_contracts",
         "app.domain.gate_market_read_contracts", "app.domain.gate_market_payload_contracts",
@@ -29,21 +29,22 @@ def load():
         sys.modules["app"] = app; sys.modules["app.domain"] = domain; sys.modules["app.services"] = services
         paths = {
             names[2]: ROOT / "app/domain/multi_asset_capability_contracts.py",
-            names[3]: ROOT / "app/domain/gate_readonly_contracts.py",
-            names[4]: ROOT / "app/domain/gate_read_formatters.py",
-            names[5]: ROOT / "app/domain/gate_read_transport_contracts.py",
-            names[6]: ROOT / "app/domain/gate_readonly_adapter_contracts.py",
-            names[7]: ROOT / "app/domain/gate_market_read_contracts.py",
-            names[8]: ROOT / "app/domain/gate_market_payload_contracts.py",
-            names[10]: ROOT / "app/services/gate_market_research_service.py",
-            names[11]: ROOT / "app/services/gate_testnet_readiness_service.py",
-            names[12]: ROOT / "app/services/gate_testnet_market_session_service.py",
+            names[3]: ROOT / "app/domain/gate_testnet_readiness_contracts.py",
+            names[4]: ROOT / "app/domain/gate_readonly_contracts.py",
+            names[5]: ROOT / "app/domain/gate_read_formatters.py",
+            names[6]: ROOT / "app/domain/gate_read_transport_contracts.py",
+            names[7]: ROOT / "app/domain/gate_readonly_adapter_contracts.py",
+            names[8]: ROOT / "app/domain/gate_market_read_contracts.py",
+            names[9]: ROOT / "app/domain/gate_market_payload_contracts.py",
+            names[11]: ROOT / "app/services/gate_market_research_service.py",
+            names[12]: ROOT / "app/services/gate_testnet_readiness_service.py",
+            names[13]: ROOT / "app/services/gate_testnet_market_session_service.py",
         }
-        order = [names[2], names[7], names[3], names[4], names[5], names[6], names[8], names[10], names[11], names[12]]
+        order = [names[2], names[3], names[8], names[4], names[5], names[6], names[7], names[9], names[11], names[12], names[13]]
         for name in order:
             spec = importlib.util.spec_from_file_location(name, paths[name])
             module = importlib.util.module_from_spec(spec); sys.modules[name] = module; spec.loader.exec_module(module)
-        return tuple(sys.modules[name] for name in (names[3], names[5], names[6], names[10], names[12]))
+        return tuple(sys.modules[name] for name in (names[4], names[6], names[7], names[11], names[13]))
     finally:
         for name in reversed(names):
             if old[name] is None: sys.modules.pop(name, None)

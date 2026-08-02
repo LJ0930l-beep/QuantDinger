@@ -802,6 +802,26 @@ paths:
       - Dashboard
       operationId: getApiQuantPaperShadowReadonly
       x-visibility: internal
+  /api/quant/readiness:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return Gate, backtest, and Paper/Shadow readiness without side effects.
+      tags:
+      - Dashboard
+      operationId: getApiQuantReadiness
+      x-visibility: internal
   /api/policy/broker-market:
     get:
       responses:

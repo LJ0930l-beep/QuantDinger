@@ -14,6 +14,7 @@ import json
 
 from app.domain.gate_readonly_adapter_contracts import GateReadonlyAdapter
 from app.domain.gate_readonly_contracts import GateEnvironment, GateMarketType, validate_gate_readonly_profile
+from app.domain.gate_testnet_readiness_contracts import GateTestnetReadinessStatus
 
 
 GATE_TESTNET_READINESS_VERSION = "gate-testnet-readiness-v1"
@@ -21,11 +22,6 @@ GATE_TESTNET_READINESS_VERSION = "gate-testnet-readiness-v1"
 
 class GateTestnetReadinessError(ValueError):
     """The supplied Gate TestNet profile is not safe for read-only research."""
-
-
-class GateTestnetReadinessStatus(str, Enum):
-    READY = "READY"
-    BLOCKED = "BLOCKED"
 
 
 @dataclass(frozen=True, slots=True)
