@@ -14,10 +14,9 @@ STRATEGY_CODE = r'''
 # @param target_pct float 0.85 range=0.1:1:0.1
 
 def initialize(context):
-    context.set_universe([str(context.params.get("symbol", "Crypto:BTC/USDT@spot"))])
-    context.subscribe(frequency=str(context.params.get("frequency", "15m")))
+    context.set_universe(["Crypto:BTC/USDT@spot"])
+    context.subscribe(frequency="15m")
     context.set_warmup(100)
-
 def handle_data(context, data):
     symbol = str(context.params.get("symbol", "Crypto:BTC/USDT@spot"))
     fast = int(context.params.get("fast", 12)); slow = int(context.params.get("slow", 26))

@@ -14,10 +14,9 @@ STRATEGY_CODE = r'''
 # @param target_pct float 0.9 range=0.1:1:0.1
 
 def initialize(context):
-    context.set_universe([str(context.params.get("symbol", "Crypto:BTC/USDT@spot"))])
-    context.subscribe(frequency=str(context.params.get("frequency", "15m")))
-    context.set_warmup(100); g.st_prev = None
-
+    context.set_universe(["Crypto:BTC/USDT@spot"])
+    context.subscribe(frequency="15m")
+    context.set_warmup(100)
 def handle_data(context, data):
     symbol = str(context.params.get("symbol", "Crypto:BTC/USDT@spot"))
     p = int(context.params.get("st_period", 10)); m = float(context.params.get("st_mult", 3.0))
@@ -40,7 +39,9 @@ def _st(high, low, close, period, mult):
     n = len(close); st = [0] * n
     if n < period + 1: return 0
     tr = [max(float(high.iloc[i]) - float(low.iloc[i]), abs(float(high.iloc[i]) - float(close.iloc[i-1])), abs(float(low.iloc[i]) - float(close.iloc[i-1]))) for i in range(1, n)]
-    atr = tr[:]; [atr.__setitem__(i, (atr[i-1] * (period - 1) + tr[i]) / period) for i in range(period, len(tr))]
+    atr = list(tr)
+    for i in range(period, len(tr)):
+        atr[i] = (atr[i-1] * (period - 1) + tr[i]) / period
     for i in range(period, n):
         hl2 = (float(high.iloc[i]) + float(low.iloc[i])) / 2
         up = hl2 + mult * atr[i-1]; lo = hl2 - mult * atr[i-1]
