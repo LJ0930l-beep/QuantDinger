@@ -785,6 +785,8 @@ class TradingExecutor:
         )
         if request.execution_mode.strip().lower() == "paper":
             return self._persist_paper_signal(request)
+        if request.execution_mode.strip().lower() == "live":
+            return self._submit_live_order(request, values)
         pending_id = self.order_gateway.submit(request)
         if pending_id:
             append_strategy_log(
@@ -793,6 +795,64 @@ class TradingExecutor:
                 f"Order queued: {request.action} {request.symbol} quantity={request.quantity:.12f}",
             )
         return bool(pending_id)
+
+    def _submit_live_order(self, request: LiveOrderRequest, values: Dict[str, Any]) -> bool:
+        """Submit a LIVE order through the native exchange client.
+
+        SC-15: the legacy StrategyV2OrderGateway queue is permanently retired.
+        This method routes live signals directly to the exchange via
+        ``create_client`` + ``place_order_from_signal``.
+
+        Security: exchange_config is already resolved (credentials decrypted) by
+        ``_run_strategy_loop`` before reaching this point.
+        """
+        from app.services.live_trading.execution import place_order_from_signal
+        from app.services.live_trading.factory import create_client
+
+        strategy_id = request.strategy_id
+        exchange_config = values.get("exchange_config") or {}
+        if not exchange_config:
+            append_strategy_log(strategy_id, "error", "Live order rejected: no exchange config")
+            return False
+
+        try:
+            client = create_client(exchange_config, market_type=request.market_type)
+        except Exception as exc:
+            logger.exception("Strategy %s cannot create live client", strategy_id)
+            append_strategy_log(strategy_id, "error", f"Live client creation failed: {exc}")
+            return False
+
+        try:
+            result = place_order_from_signal(
+                client=client,
+                signal_type=request.action,
+                symbol=request.symbol,
+                amount=request.quantity,
+                market_type=request.market_type,
+                exchange_config=exchange_config,
+            )
+        except Exception as exc:
+            logger.exception("Strategy %s live order failed", strategy_id)
+            append_strategy_log(strategy_id, "error", f"Live order execution failed: {exc}")
+            return False
+
+        if getattr(result, "success", False):
+            order_id = getattr(result, "exchange_order_id", "") or ""
+            append_strategy_log(
+                strategy_id,
+                "trade",
+                f"Live order filled: {request.action} {request.symbol} "
+                f"qty={request.quantity:.6f} order_id={order_id}",
+            )
+            return True
+
+        append_strategy_log(
+            strategy_id,
+            "error",
+            f"Live order rejected: {request.action} {request.symbol} "
+            f"raw={getattr(result, 'raw', {})}",
+        )
+        return False
 
     def _persist_paper_signal(self, request: LiveOrderRequest) -> bool:
         """Persist a PAPER signal through Admission on one caller-owned tx."""
