@@ -6,22 +6,23 @@ STRATEGY_CODE = r'''
 适用市场: 加密货币 / 美股
 建议周期: 15m / 1h
 """
-# @param symbol str Crypto:BTC/USDT@spot
-# @param frequency str 15m
 # @param fast int 5 range=3:15:1
 # @param slow int 20 range=10:50:5
 # @param vol_factor float 1.5 range=1.0:3.0:0.25
 # @param target_pct float 0.85 range=0.1:1:0.1
 
 def initialize(context):
+    # Placeholder — runtime overrides from deployment config
     context.set_universe(["Crypto:BTC/USDT@spot"])
     context.subscribe(frequency="15m")
-    context.set_warmup(100)
+    context.set_warmup(100); g.prev_f = None; g.prev_s = None
+
 def handle_data(context, data):
-    symbol = str(context.params.get("symbol", "Crypto:BTC/USDT@spot"))
+    symbol = context.instruments[0] if context.instruments else "Crypto:BTC/USDT@spot"
+    freq = context.subscriptions[0].frequency if context.subscriptions else "15m"
     fast = int(context.params.get("fast", 5)); slow = int(context.params.get("slow", 20))
     vf = float(context.params.get("vol_factor", 1.5)); tp = float(context.params.get("target_pct", 0.85))
-    bars = get_history(slow + 30, str(context.params.get("frequency", "15m")), ["close", "volume"], symbol)
+    bars = get_history(slow + 30, freq, ["close", "volume"], symbol)
     if len(bars) < slow + 5: return
     c = bars["close"]; v = bars["volume"]
     fe = float(c.ewm(span=fast, adjust=False).mean().iloc[-1])

@@ -6,8 +6,6 @@ STRATEGY_CODE = r'''
 适用市场: 加密货币 / 美股
 建议周期: 15m / 1h
 """
-# @param symbol str Crypto:BTC/USDT@spot 标的
-# @param frequency str 15m 周期
 # @param bb_window int 20 range=10:50:5
 # @param bb_std float 2.0 range=1.0:3.0:0.25
 # @param rsi_period int 14 range=7:30:1
@@ -16,22 +14,20 @@ STRATEGY_CODE = r'''
 # @param target_pct float 0.95 range=0.1:1:0.1
 
 def initialize(context):
+    # Universe and frequency injected at runtime from deployment config
     context.set_universe(["Crypto:BTC/USDT@spot"])
     context.subscribe(frequency="15m")
     context.set_warmup(100)
+
 def handle_data(context, data):
-    symbol = str(context.params.get("symbol", "Crypto:BTC/USDT@spot"))
-    freq = str(context.params.get("frequency", "15m"))
-    w = int(context.params.get("bb_window", 20))
-    std = float(context.params.get("bb_std", 2.0))
-    rp = int(context.params.get("rsi_period", 14))
-    rl = int(context.params.get("rsi_low", 30))
-    rh = int(context.params.get("rsi_high", 70))
-    tp = float(context.params.get("target_pct", 0.95))
+    symbol = context.instruments[0] if context.instruments else "Crypto:BTC/USDT@spot"
+    freq = context.subscriptions[0].frequency if context.subscriptions else "15m"
+    w = int(context.params.get("bb_window", 20)); std = float(context.params.get("bb_std", 2.0))
+    rp = int(context.params.get("rsi_period", 14)); rl = int(context.params.get("rsi_low", 30))
+    rh = int(context.params.get("rsi_high", 70)); tp = float(context.params.get("target_pct", 0.95))
     bars = get_history(max(w, rp) + 10, freq, ["close"], symbol)
     if len(bars) < w + 5: return
-    c = bars["close"]
-    sma = float(c.tail(w).mean()); st = float(c.tail(w).std())
+    c = bars["close"]; sma = float(c.tail(w).mean()); st = float(c.tail(w).std())
     lower = sma - std * st; upper = sma + std * st
     price = float(c.iloc[-1]); rsi = _rsi(c, rp)
     pos = get_position(symbol); amt = float(pos.amount or 0.0)

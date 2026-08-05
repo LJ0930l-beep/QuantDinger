@@ -329,6 +329,38 @@ class TradingExecutor:
 
             service = StrategyV2BacktestService()
             now = datetime.now(timezone.utc)
+
+            # Inject symbol/timeframe from deployment config.
+            # Strategies declare a placeholder universe; the user's
+            # deployment config overrides it at runtime.
+            # StrategyManifest is frozen — use dataclasses.replace() to produce
+            # an updated manifest + bind it back onto the CompiledStrategyV2.
+            db_symbol = str(strategy.get("symbol") or "").strip()
+            db_timeframe = str(strategy.get("timeframe") or "").strip()
+            if db_symbol or db_timeframe:
+                from dataclasses import replace
+
+                from app.services.strategy_v2.contract import _parse_many
+
+                manifest = program.manifest
+                if db_symbol:
+                    parsed = _parse_many([db_symbol])
+                    if parsed:
+                        new_instruments = tuple(parsed)
+                        new_universe = replace(manifest.universe, instruments=new_instruments)
+                        new_subscriptions = tuple(
+                            replace(sub, instruments=new_instruments)
+                            for sub in manifest.subscriptions
+                        )
+                        manifest = replace(manifest, universe=new_universe, subscriptions=new_subscriptions)
+                if db_timeframe:
+                    new_subscriptions = tuple(
+                        replace(sub, frequency=db_timeframe)
+                        for sub in manifest.subscriptions
+                    )
+                    manifest = replace(manifest, subscriptions=new_subscriptions)
+                program.manifest = manifest
+
             candidates, universe_id = service.resolve_candidates(
                 user_id=user_id,
                 manifest=program.manifest,

@@ -6,24 +6,25 @@ STRATEGY_CODE = r'''
 适用市场: 加密货币 / 美股
 建议周期: 1h / 4h
 """
-# @param symbol str Crypto:BTC/USDT@spot
-# @param frequency str 1h
 # @param tema_period int 9 range=5:30:1
 # @param trend_ema int 50 range=20:200:10
 # @param target_pct float 0.9 range=0.1:1:0.1
 
 def initialize(context):
+    # Placeholder — runtime overrides from deployment config
     context.set_universe(["Crypto:BTC/USDT@spot"])
-    context.subscribe(frequency="1h")
+    context.subscribe(frequency="15m")
     context.set_warmup(100)
+
 def handle_data(context, data):
-    symbol = str(context.params.get("symbol", "Crypto:BTC/USDT@spot"))
-    tp = int(context.params.get("tema_period", 9)); te = int(context.params.get("trend_ema", 50))
+    symbol = context.instruments[0] if context.instruments else "Crypto:BTC/USDT@spot"
+    freq = context.subscriptions[0].frequency if context.subscriptions else "1h"
+    tp_p = int(context.params.get("tema_period", 9)); te = int(context.params.get("trend_ema", 50))
     target = float(context.params.get("target_pct", 0.9))
-    bars = get_history(te + 30, str(context.params.get("frequency", "1h")), ["close"], symbol)
+    bars = get_history(te + 30, freq, ["close"], symbol)
     if len(bars) < te + 5: return
     c = bars["close"]
-    tema = _tema(c, tp); ema_trend = float(c.ewm(span=te, adjust=False).mean().iloc[-1])
+    tema = _tema(c, tp_p); ema_trend = float(c.ewm(span=te, adjust=False).mean().iloc[-1])
     price = float(c.iloc[-1])
     pos = get_position(symbol); amt = float(pos.amount or 0.0)
     if price > tema and price > ema_trend and amt <= 0:

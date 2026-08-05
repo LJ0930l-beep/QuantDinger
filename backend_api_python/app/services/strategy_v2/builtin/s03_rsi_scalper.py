@@ -2,26 +2,27 @@
 STRATEGY_CODE = r'''
 """
 稳妥3: RSI 超卖反弹
-纯RSI均值回归，严格超卖买入超卖卖出。
+纯RSI均值回归，严格超卖买入超买卖出。
 适用市场: 加密货币 / 美股
 建议周期: 5m / 15m
 """
-# @param symbol str Crypto:BTC/USDT@spot
-# @param frequency str 5m
 # @param rsi_period int 14 range=7:30:1
 # @param rsi_low int 25 range=15:35:5
 # @param rsi_high int 75 range=65:85:5
 # @param target_pct float 1.0 range=0.1:1:0.1
 
 def initialize(context):
+    # Placeholder — runtime overrides from deployment config
     context.set_universe(["Crypto:BTC/USDT@spot"])
-    context.subscribe(frequency="5m")
+    context.subscribe(frequency="15m")
     context.set_warmup(100)
+
 def handle_data(context, data):
-    symbol = str(context.params.get("symbol", "Crypto:BTC/USDT@spot"))
+    symbol = context.instruments[0] if context.instruments else "Crypto:BTC/USDT@spot"
+    freq = context.subscriptions[0].frequency if context.subscriptions else "5m"
     rp = int(context.params.get("rsi_period", 14)); rl = int(context.params.get("rsi_low", 25))
     rh = int(context.params.get("rsi_high", 75)); tp = float(context.params.get("target_pct", 1.0))
-    bars = get_history(rp + 10, str(context.params.get("frequency", "5m")), ["close"], symbol)
+    bars = get_history(rp + 10, freq, ["close"], symbol)
     if len(bars) < rp + 5: return
     c = bars["close"]; rsi = _rsi(c, rp)
     pos = get_position(symbol); amt = float(pos.amount or 0.0)

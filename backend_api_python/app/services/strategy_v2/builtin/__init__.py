@@ -1,4 +1,6 @@
-"""15 optimized strategies — no symbol/timeframe restrictions, 稳妥/激进 naming."""
+"""15 optimized strategies — symbol/timeframe agnostic.
+Universe and frequency are injected at runtime from qd_strategies_trading.symbol/timeframe.
+"""
 from __future__ import annotations
 
 # Conservative (稳妥 1-5)
@@ -22,13 +24,10 @@ from . import a10_atr_breakout as a10
 ALL_STRATEGIES = [c01, c02, c03, c04, c05, a01, a02, a03, a04, a05, a06, a07, a08, a09, a10]
 
 BUILTIN_DSL_SOURCES = {}
-for mod in ALL_STRATEGIES:
-    key = mod.__name__.split(".")[-1]
-    BUILTIN_DSL_SOURCES[key] = mod.STRATEGY_CODE
-
 STRATEGY_META = {}
 for mod in ALL_STRATEGIES:
     key = mod.__name__.split(".")[-1]
+    BUILTIN_DSL_SOURCES[key] = mod.STRATEGY_CODE
     STRATEGY_META[key] = {
         "name": mod.__doc__.split("\n")[0].strip() if mod.__doc__ else key,
         "market": getattr(mod, "MARKET_SUITABLE", ["crypto"]),

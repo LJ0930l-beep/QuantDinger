@@ -6,21 +6,22 @@ SAR翻转+EMA趋势过滤，顺势开仓。
 适用市场: 加密货币 / 美股
 建议周期: 15m / 1h
 """
-# @param symbol str Crypto:BTC/USDT@spot
-# @param frequency str 15m
 # @param sar_step float 0.02 range=0.01:0.05:0.005
 # @param sar_max float 0.2 range=0.1:0.5:0.05
 # @param target_pct float 0.85 range=0.1:1:0.1
 
 def initialize(context):
+    # Placeholder — runtime overrides from deployment config
     context.set_universe(["Crypto:BTC/USDT@spot"])
     context.subscribe(frequency="15m")
     context.set_warmup(100)
+
 def handle_data(context, data):
-    symbol = str(context.params.get("symbol", "Crypto:BTC/USDT@spot"))
+    symbol = context.instruments[0] if context.instruments else "Crypto:BTC/USDT@spot"
+    freq = context.subscriptions[0].frequency if context.subscriptions else "15m"
     step = float(context.params.get("sar_step", 0.02)); mx = float(context.params.get("sar_max", 0.2))
     tp = float(context.params.get("target_pct", 0.85))
-    bars = get_history(80, str(context.params.get("frequency", "15m")), ["high", "low", "close"], symbol)
+    bars = get_history(80, freq, ["high", "low", "close"], symbol)
     if len(bars) < 50: return
     h = bars["high"]; l = bars["low"]; c = bars["close"]
     sar = _sar(h, l, step, mx); price = float(c.iloc[-1])
