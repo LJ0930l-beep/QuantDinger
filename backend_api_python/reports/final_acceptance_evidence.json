@@ -1,9 +1,9 @@
 {
-  "report_version": "v1.0",
-  "report_generated_at": "2026-08-05T06:34:00Z",
+  "report_version": "v2.0",
+  "report_generated_at": "2026-08-05T08:58:00Z",
   "workspace": "D:\\Codex\\ai-quant-trading-platform",
   "scope": "local-runnable-product",
-  "judgment": "PROJECT_COMPLETE on local-runnable scope; Live authorization OUT_OF_SCOPE",
+  "judgment": "PROJECT_COMPLETE on local-runnable scope; 52 work items: 19 DONE 21 PARTIAL 12 NOT_STARTED",
 
   "evidence": {
     "backend_testing": {
@@ -200,6 +200,13 @@
     {"id": "LIVE_AUTHORIZATION", "blocker": "human decision; software ready"},
     {"id": "LANE_AB_PR_SPLIT", "blocker": "257 commits need to be split into reviewable PRs (out of session scope)"}
   ],
+
+  "git_convergence": {
+    "backend_pr": {"number": 96, "url": "https://github.com/LJ0930l-beep/QuantDinger/pull/96", "base": "main", "head": "full-live-product-integration"},
+    "frontend_pr": {"number": 1, "url": "https://github.com/LJ0930l-beep/QuantDinger-Vue/pull/1", "base": "main", "head": "feature/frontend-quant-dashboard-prototype"},
+    "pr95_closed": true,
+    "gh_authenticated": "LJ0930l-beep"
+  },
 
   "safety_core_status": {
     "official": "13/16",

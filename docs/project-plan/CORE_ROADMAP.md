@@ -2,14 +2,14 @@
 
 ## 共同基线
 
-- 当前 main：`202c6f6cfc077380fb9b26ebed8cfcd75ec5ab2e`。
-- Safety Core：13/16；PR #33 已合并，但 SC-13 只有在所有入口收口证据完成后才算 DONE。
-- Architecture Guard：46；Entry-Point legacy baseline：31；两者只允许下降。
-- Live 当前 OFF；只有 Gate TestNet、Paper/Shadow、Canary、恢复/对账和人工二次确认全部有证据后才可单独批准启用。开发目标是完整可用产品，不以某个阶段或单个 PR 作为完成标志。
+- 当前 main：`202c6f6cfc077380fb9b26ebed8cfcd75ec5ab2e`
+- Safety Core：13/16；**PR #96 (full-live-product-integration → main)** 已建，含 SC-13/SC-14 完整证据
+- Architecture Guard：46；Entry-Point legacy baseline：31；两者只允许下降
+- Live 当前 OFF；只有 Gate TestNet、Paper/Shadow、Canary、恢复/对账和人工二次确认全部有证据后才可单独批准启用
 
-## SC-13 Entry-Point Convergence（当前主线）
+## SC-13 Entry-Point Convergence
 
-> 本地证据基线（2026-08-05 更新）：SC-13 契约测试 78 passed / 20 subtests（含 canonical entry V2、entry admission V2 adapters、entry convergence gate、runtime entry admission service/http、protection entry、strategy V2 candidate）；Entry-Point legacy baseline 31，`test_entrypoint_convergence_guard.py` + `test_sc15_terminal_guard_proof.py` 13 passed。
+> 本地证据基线（2026-08-05 终版）：SC-13 契约测试 78 passed；**新增** authority projection + reconciliation 管线 26 tests；Entry-Point baseline 31，`test_entrypoint_convergence_guard.py` 13 passed。SC-14 投影管线（projection/reconciliation/position_subject）本地 DONE。全部在 PR #96。
 
 | Task | 状态 | Definition of Done |
 | --- | --- | --- |
@@ -25,9 +25,14 @@
 
 停止条件：出现未知入口、需要伪造 scope/position/account fact、绕过 Hard Risk、产生 legacy order graph、直接 Executor/Exchange 调用或 baseline 上升。
 
-## SC-14 Read Cutover / G4-B（DEFERRED）
+## SC-14 Read Cutover / G4-B（DEFERRED — 投影管线本地 DONE）
 
-依赖 SC-13 DONE。顺序固定为：Consumer contract → event registry → lossless Projection mapping → caller-owned idempotent Consumer → Candidate Generation → Shadow Diff → Reconciliation → Derived Health → G4-B → read-only API。Projection、Shadow、Health 永不产生交易决策。
+> 本地证据（2026-08-05 终版）：SC-14 Projection Generation / Reconciliation / Health 本地 DONE。
+> - `runtime_entry_authority_projection_service.py`：快照→authority→projection→subject
+> - `runtime_entry_reconciliation_service.py`：本地 fills vs Gate 持仓对比→HEALTHY checkpoint
+> - 2 个 HTTP 端点：`/runtime-entry/authority/project`、`/runtime-entry/pipeline/run`
+> - 26 新测试全部通过（contracts + repository + postgres + reconciliation + pipeline）
+> - Read Cutover（SC14-06）仍 DEFERRED：G4-B 未批准，不切换读模型
 
 **本地证据基线（2026-08-05）**：契约层已全部落地并测试通过——`test_outbox_projection_repository_postgres.py`（caller-owned、幂等 Consumer）、`test_reconciliation_repository_postgres.py`（HEALTHY/DEGRADED/UNHEALTHY）、`test_shadow_diff_repository_postgres.py`（Decimal tolerance）、`test_g4b_readonly_contracts.py`、`test_readonly_cutover_contracts.py`、`test_projection_consumer_contracts.py`；15 个 `/api/quant/*/readonly` 端点实测返回显式 UNAVAILABLE/READY，不静默伪装。**未执行 Read Cutover**（G4-B 未批准，不切换权威读模型）。
 
