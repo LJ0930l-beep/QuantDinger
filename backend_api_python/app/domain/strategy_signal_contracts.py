@@ -31,6 +31,7 @@ class SignalPattern(str, Enum):
     DONCHIAN_BREAKOUT = "donchian_breakout"
     BOLLINGER_RSI_REVERSION = "bollinger_rsi_reversion"
     DUAL_THRUST_BREAKOUT = "dual_thrust_breakout"
+    SUPERTREND_TREND = "supertrend_trend"
     BUY_AND_HOLD_ENTRY = "buy_and_hold_entry"
 
 
@@ -246,6 +247,124 @@ def detect_dual_thrust(
     return StrategyStructureEvent(SignalDirection.FLAT, SignalPattern.NONE, current.sequence, current.close_price, None, None)
 
 
+def detect_supertrend_ema_adx(
+    values: Iterable[BacktestBar],
+    *,
+    atr_period: int = 10,
+    atr_multiplier: int = 3,
+    ema_fast: int = 12,
+    ema_slow: int = 50,
+    adx_period: int = 14,
+    adx_min: int = 20,
+) -> StrategyStructureEvent:
+    """Deterministic SuperTrend + EMA + ADX trend signal from closed bars.
+
+    SuperTrend is computed from ATR-based bands that flip direction.
+    EMA crossover confirms trend direction. ADX gates entry strength.
+    """
+    min_len = max(atr_period, ema_slow, adx_period) + 1
+    bars = _bars(values, min_len)
+    if atr_period < 1 or atr_multiplier < 1 or ema_fast < 1 or ema_slow < 1 or adx_period < 1 or adx_min < 1:
+        raise StrategySignalContractError("SuperTrend/EMA/ADX periods must be positive")
+    if ema_fast >= ema_slow:
+        raise StrategySignalContractError("fast EMA must be shorter than slow EMA")
+
+    closes = tuple(item.close_price for item in bars)
+    highs = tuple(item.high_price for item in bars)
+    lows = tuple(item.low_price for item in bars)
+
+    # ── ATR ──────────────────────────────────────────────────
+    atr = _atr(bars, atr_period)
+
+    # ── SuperTrend band flip detection ───────────────────────
+    src = tuple((h + l) / Decimal("2") for h, l in zip(highs, lows))
+    upper_bands = []
+    lower_bands = []
+    trends = []
+    mult = Decimal(str(atr_multiplier))
+    for i in range(atr_period, len(closes)):
+        mid = src[i]
+        if i == atr_period:
+            upper_bands.append(mid + mult * atr)
+            lower_bands.append(mid - mult * atr)
+            trends.append(True)
+        else:
+            prev_close = closes[i - 1]
+            prev_upper = upper_bands[-1]
+            prev_lower = lower_bands[-1]
+            nu = mid + mult * atr
+            nl = mid - mult * atr
+            if prev_close > prev_upper:
+                au = nu
+            else:
+                au = min(nu, prev_upper)
+            if prev_close < prev_lower:
+                al = nl
+            else:
+                al = max(nl, prev_lower)
+            upper_bands.append(au)
+            lower_bands.append(al)
+            if prev_close > prev_lower:
+                trends.append(True)
+            elif prev_close < prev_upper:
+                trends.append(False)
+            else:
+                trends.append(trends[-1])
+
+    st_bull = trends[-1]
+    st_bull_prev = trends[-2] if len(trends) >= 2 else st_bull
+    flips_bull = st_bull and not st_bull_prev
+    flips_bear = not st_bull and st_bull_prev
+
+    # ── EMA ──────────────────────────────────────────────────
+    fast = _ema(closes, ema_fast)
+    slow = _ema(closes, ema_slow)
+    ema_bull = fast > slow
+    ema_bear = fast < slow
+
+    # ── ADX ──────────────────────────────────────────────────
+    trs, pd, nd = [], [], []
+    for prev, cur in zip(bars[-adx_period - 1:-1], bars[-adx_period:]):
+        up = cur.high_price - prev.high_price
+        down = prev.low_price - cur.low_price
+        trs.append(max(
+            cur.high_price - cur.low_price,
+            abs(cur.high_price - prev.close_price),
+            abs(cur.low_price - prev.close_price),
+        ))
+        pd.append(up if up > down and up > Decimal("0") else Decimal("0"))
+        nd.append(down if down > up and down > Decimal("0") else Decimal("0"))
+    tr_sum = sum(trs, Decimal("0"))
+    if tr_sum <= Decimal("0"):
+        return StrategyStructureEvent(SignalDirection.FLAT, SignalPattern.NONE, bars[-1].sequence, bars[-1].close_price, None, None)
+    pdi = sum(pd, Decimal("0")) / tr_sum
+    ndi = sum(nd, Decimal("0")) / tr_sum
+    dx = abs(pdi - ndi) / max(pdi + ndi, Decimal("1e-18"))
+    adx_val = dx * Decimal("100")
+    strong = adx_val >= Decimal(str(adx_min))
+
+    current = bars[-1]
+
+    # ── Signal logic ─────────────────────────────────────────
+    # LONG: SuperTrend flips bull + EMA bull + ADX strong
+    if flips_bull and ema_bull and strong:
+        stop = current.close_price - atr * Decimal("2")
+        target = current.close_price + atr * Decimal("3")
+        return StrategyStructureEvent(
+            SignalDirection.BUY, SignalPattern.SUPERTREND_TREND,
+            current.sequence, current.close_price, stop, target,
+        )
+    # SHORT: SuperTrend flips bear + EMA bear + ADX strong
+    if flips_bear and ema_bear and strong:
+        stop = current.close_price + atr * Decimal("2")
+        target = current.close_price - atr * Decimal("3")
+        return StrategyStructureEvent(
+            SignalDirection.SELL, SignalPattern.SUPERTREND_TREND,
+            current.sequence, current.close_price, stop, target,
+        )
+    return StrategyStructureEvent(SignalDirection.FLAT, SignalPattern.NONE, current.sequence, current.close_price, None, None)
+
+
 def detect_buy_and_hold(values: Iterable[BacktestBar]) -> StrategyStructureEvent:
     bars = _bars(values, 1)
     current = bars[-1]
@@ -293,6 +412,16 @@ def build_strategy_signal(strategy: StrategyDefinition, values: Iterable[Backtes
         event = detect_liquidity_sweep(bars)
     elif strategy.family is StrategyFamily.ICT:
         event = detect_displacement(bars)
+    elif strategy.family is StrategyFamily.SUPERTREND_EMA_ADX:
+        event = detect_supertrend_ema_adx(
+            bars,
+            atr_period=_positive_int(_parameter(strategy, "atr_period", "10"), "atr_period", 10),
+            atr_multiplier=_positive_int(_parameter(strategy, "atr_multiplier", "3"), "atr_multiplier", 3),
+            ema_fast=_positive_int(_parameter(strategy, "ema_fast", "12"), "ema_fast", 12),
+            ema_slow=_positive_int(_parameter(strategy, "ema_slow", "50"), "ema_slow", 50),
+            adx_period=_positive_int(_parameter(strategy, "adx_period", "14"), "adx_period", 14),
+            adx_min=_positive_int(_parameter(strategy, "adx_min", "20"), "adx_min", 20),
+        )
     else:
         raise StrategySignalContractError("strategy family is not supported")
     bar = bars[-1]
@@ -302,5 +431,5 @@ def build_strategy_signal(strategy: StrategyDefinition, values: Iterable[Backtes
 __all__ = [
     "STRATEGY_SIGNAL_CONTRACT_VERSION", "SignalPattern", "StrategySignalContractError", "StrategyStructureEvent",
     "build_strategy_signal", "detect_displacement", "detect_liquidity_sweep", "detect_ema_adx_trend",
-    "detect_donchian_atr", "detect_bollinger_rsi", "detect_dual_thrust", "detect_buy_and_hold",
+    "detect_donchian_atr", "detect_bollinger_rsi", "detect_dual_thrust", "detect_supertrend_ema_adx", "detect_buy_and_hold",
 ]

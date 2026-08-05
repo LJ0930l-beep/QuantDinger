@@ -31,6 +31,7 @@ class StrategyFamily(str, Enum):
     DUAL_THRUST = "dual_thrust"
     SMC = "smc"
     ICT = "ict"
+    SUPERTREND_EMA_ADX = "supertrend_ema_adx"
 
 
 _SUPPORTED_TIMEFRAMES = frozenset({"1m", "5m", "15m", "30m", "1h", "4h", "1d"})
