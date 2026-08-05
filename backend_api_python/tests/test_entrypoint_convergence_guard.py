@@ -47,9 +47,9 @@ class EntrypointConvergenceGuardTests(unittest.TestCase):
         comparison = compare_with_baseline(current, load_baseline(self.manifest))
         self.assertTrue(comparison.passed, comparison.new_violations)
         self.assertEqual(len(current), len(self.manifest["legacy_bypass_baseline"]))
-        # SC-15 Tier 1+2 retired quick_trade.py and quick_trade/orders.py bypass bodies.
-        # Remaining 9 records are legacy worker internals; may only decrease further.
-        self.assertEqual(len(current), 9)
+        # SC-15 Tier 3 retired pending_order_worker sub-method bodies.
+        # Only module-level import remains as legacy baseline (1 entry).
+        self.assertEqual(len(current), 1)
         for item in self.manifest["legacy_bypass_baseline"]:
             self.assertNotIn("*", item["path"])
             self.assertNotIn("*", item["symbol"])

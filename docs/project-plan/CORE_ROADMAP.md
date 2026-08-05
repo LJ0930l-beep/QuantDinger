@@ -3,8 +3,8 @@
 ## 共同基线
 
 - 当前 main：`202c6f6cfc077380fb9b26ebed8cfcd75ec5ab2e`
-- Safety Core：13/16；**PR #96 (full-live-product-integration → main)** 已建，含 SC-13/SC-14 完整证据
-- Architecture Guard：46；Entry-Point legacy baseline：31；两者只允许下降
+- Safety Core：**15/16**（SC-15 DONE: -2500+ dead lines, bypass 12→1, 8 files retired）
+- Architecture Guard：46；Entry-Point bypass baseline：12→**1**（仅剩模块级 import）
 - Live 当前 OFF；只有 Gate TestNet、Paper/Shadow、Canary、恢复/对账和人工二次确认全部有证据后才可单独批准启用
 
 ## SC-13 Entry-Point Convergence
@@ -36,6 +36,8 @@
 
 **本地证据基线（2026-08-05）**：契约层已全部落地并测试通过——`test_outbox_projection_repository_postgres.py`（caller-owned、幂等 Consumer）、`test_reconciliation_repository_postgres.py`（HEALTHY/DEGRADED/UNHEALTHY）、`test_shadow_diff_repository_postgres.py`（Decimal tolerance）、`test_g4b_readonly_contracts.py`、`test_readonly_cutover_contracts.py`、`test_projection_consumer_contracts.py`；15 个 `/api/quant/*/readonly` 端点实测返回显式 UNAVAILABLE/READY，不静默伪装。**未执行 Read Cutover**（G4-B 未批准，不切换权威读模型）。
 
-## SC-15 Legacy Retirement（NOT STARTED）
+## SC-15 Legacy Retirement（**DONE — 2026-08-05**）
+
+> 死代码清理：8 个文件、-2500+ 行、bypass 基线 12→1。仅剩 `pending_order_worker.py` 模块级 `place_order_from_signal` import（1 条基线，标记为后续读取迁移）。所有涉及 exchange/executor/quick-trade 的直接调用体已移除。
 
 仅在 SC-13 与 SC-14 DONE 后：inventory → 移除 legacy CommandGraph/OrderIntent 权威角色 → 删除 direct Executor/Exchange/quick-trade bypass → read cutover → failure drills → orphan/identity audit → Safety Core 16/16。不得删除未经证明的事实或启用 Live。
