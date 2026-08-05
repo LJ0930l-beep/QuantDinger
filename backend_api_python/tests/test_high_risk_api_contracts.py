@@ -49,6 +49,78 @@ def test_login_validation_uses_human_error_envelope(client):
     }
 
 
+def test_login_unknown_user_is_typed_401_not_internal_error(client, monkeypatch):
+    """A missing local user must never surface as an HTTP 500 from login."""
+
+    class _Security:
+        def verify_turnstile_or_clearance(self, **kwargs):
+            return True, "ok"
+
+        def check_login_allowed(self, username, ip_address):
+            return True, "ok"
+
+        def record_login_attempt(self, *args, **kwargs):
+            return None
+
+        def log_security_event(self, *args, **kwargs):
+            return None
+
+    class _Users:
+        def authenticate(self, username, password, update_last_login=False):
+            return None
+
+    monkeypatch.setattr(
+        "app.services.security_service.get_security_service",
+        lambda: _Security(),
+    )
+    monkeypatch.setattr(
+        "app.services.user_service.get_user_service",
+        lambda: _Users(),
+    )
+    monkeypatch.setattr("app.routes.auth._is_single_user_mode", lambda: False)
+
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "missing-local-user", "password": "not-a-real-secret"},
+    )
+
+    assert response.status_code == 401
+    assert response.get_json() == {
+        "code": 0,
+        "msg": "Invalid credentials",
+        "data": None,
+    }
+
+
+def test_login_dependency_failure_is_safe_503_without_raw_error(client, monkeypatch):
+    """Infrastructure failures must not leak DB/driver text as HTTP 500."""
+
+    class _Security:
+        def verify_turnstile_or_clearance(self, **kwargs):
+            return True, "ok"
+
+        def check_login_allowed(self, username, ip_address):
+            raise RuntimeError("permission denied for table security_login_attempts")
+
+    monkeypatch.setattr(
+        "app.services.security_service.get_security_service",
+        lambda: _Security(),
+    )
+
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "known-user", "password": "not-a-real-secret"},
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "code": 503,
+        "msg": "Authentication service temporarily unavailable",
+        "data": None,
+    }
+    assert "permission denied" not in response.get_data(as_text=True).lower()
+
+
 def test_quick_trade_contract_normalizes_legacy_values():
     loaded = QuickTradeOrderRequestSchema().load(
         {

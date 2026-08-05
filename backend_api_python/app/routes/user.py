@@ -961,6 +961,7 @@ def _strategy_v2_admin_metadata(
         "schedule_count": len(schedules),
         "warmup_bars": int(manifest.get("warmupBars") or 0),
         "leverage_allowed": bool(manifest.get("leverageAllowed")),
+        "min_leverage": float(manifest.get("minLeverage") or 1),
         "max_leverage": float(manifest.get("maxLeverage") or 1),
     }
 

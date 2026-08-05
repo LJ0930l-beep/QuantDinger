@@ -1,0 +1,85 @@
+"""Load PR-11 pure contracts without importing application startup code."""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+
+
+_MISSING = object()
+
+
+def _load(name: str, path: Path) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {name}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_pr11_contracts() -> SimpleNamespace:
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    names = (
+        "app",
+        "app.domain",
+        "app.domain.decimal_values",
+        "app.domain.order_contracts",
+        "app.domain.canonical_entry_contracts",
+        "app.domain.canonical_entry_v2_contracts",
+        "app.domain.durable_entry_persistence_contracts",
+        "app.domain.hard_risk_contracts",
+        "app.domain.durable_risk_enforcement_v2_contracts",
+        "app.domain.canonical_entry_adapters",
+        "app.services",
+        "app.services.durable_entry_repository",
+        "app.services.durable_risk_enforcement_v2_repository",
+    )
+    original = {name: sys.modules.get(name, _MISSING) for name in names}
+    try:
+        app = ModuleType("app")
+        app.__path__ = [str(app_dir)]
+        domain = ModuleType("app.domain")
+        domain.__path__ = [str(app_dir / "domain")]
+        services = ModuleType("app.services")
+        services.__path__ = [str(app_dir / "services")]
+        sys.modules.update({"app": app, "app.domain": domain, "app.services": services})
+        order = _load("app.domain.order_contracts", app_dir / "domain" / "order_contracts.py")
+        decimals = _load("app.domain.decimal_values", app_dir / "domain" / "decimal_values.py")
+        entry = _load(
+            "app.domain.canonical_entry_contracts",
+            app_dir / "domain" / "canonical_entry_contracts.py",
+        )
+        entry_v2 = _load("app.domain.canonical_entry_v2_contracts", app_dir / "domain" / "canonical_entry_v2_contracts.py")
+        durable_entry = _load(
+            "app.domain.durable_entry_persistence_contracts",
+            app_dir / "domain" / "durable_entry_persistence_contracts.py",
+        )
+        hard_risk = _load("app.domain.hard_risk_contracts", app_dir / "domain" / "hard_risk_contracts.py")
+        durable_risk_v2 = _load(
+            "app.domain.durable_risk_enforcement_v2_contracts",
+            app_dir / "domain" / "durable_risk_enforcement_v2_contracts.py",
+        )
+        adapters = _load(
+            "app.domain.canonical_entry_adapters",
+            app_dir / "domain" / "canonical_entry_adapters.py",
+        )
+        durable_entry_repository = _load(
+            "app.services.durable_entry_repository",
+            app_dir / "services" / "durable_entry_repository.py",
+        )
+        durable_risk_repository = _load(
+            "app.services.durable_risk_enforcement_v2_repository",
+            app_dir / "services" / "durable_risk_enforcement_v2_repository.py",
+        )
+        return SimpleNamespace(order=order, decimals=decimals, entry=entry, entry_v2=entry_v2, durable_entry=durable_entry, hard_risk=hard_risk, durable_risk_v2=durable_risk_v2, adapters=adapters, durable_entry_repository=durable_entry_repository, durable_risk_repository=durable_risk_repository)
+    finally:
+        for name in reversed(names):
+            previous = original[name]
+            if previous is _MISSING:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous

@@ -283,6 +283,12 @@ def get_indicators():
         user_id = g.user_id
 
         with get_db_connection() as db:
+            # Existing accounts may predate the built-in indicator pack.  Keep
+            # the catalog available without requiring a re-registration; the
+            # helper is idempotent and only adds missing, chart-only samples.
+            from app.services.builtin_indicators import seed_builtin_indicators_for_new_user
+
+            seed_builtin_indicators_for_new_user(db, user_id)
             cur = db.cursor()
             # Get user's own indicators (both purchased and custom).
             cur.execute(
@@ -664,22 +670,6 @@ def get_indicator_params():
     except Exception as e:
         logger.error(f"get_indicator_params failed: {str(e)}", exc_info=True)
         return jsonify({"code": 0, "msg": str(e), "data": None}), 500
-
-
-@indicator_blp.route("/chart-preview", methods=["POST"])
-@login_required
-def preview_indicator_chart():
-    """Return candles, indicator plots, and visual signals without creating a task."""
-    try:
-        from app.services.indicator_signal_alerts import IndicatorSignalAlertService
-
-        data = IndicatorSignalAlertService().preview_chart(g.user_id, request.get_json() or {})
-        return jsonify({"code": 1, "msg": "success", "data": data})
-    except ValueError as exc:
-        return jsonify({"code": 0, "msg": str(exc), "data": None}), 400
-    except Exception as exc:
-        logger.error(f"preview_indicator_chart failed: {str(exc)}", exc_info=True)
-        return jsonify({"code": 0, "msg": str(exc), "data": None}), 500
 
 
 @indicator_blp.route("/aiGenerate", methods=["POST"])
@@ -1239,3 +1229,4 @@ def code_quality_hints():
             )
 
     return jsonify({"code": 1, "data": {"hints": hints}})
+

@@ -218,7 +218,7 @@ class TestValidateIllegalCombos:
     def test_removed_crypto_exchange_rejected(self):
         with pytest.raises(ValueError, match="Unknown exchange_id"):
             validate_strategy_config(
-                exchange_id="retiredexchange",
+                exchange_id="coinbaseexchange",
                 market_category="Crypto",
                 market_type="swap",
             )

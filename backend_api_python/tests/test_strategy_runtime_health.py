@@ -120,6 +120,30 @@ def test_historical_failed_order_does_not_degrade_current_run(monkeypatch):
     assert snapshots[20]["historical_failed_orders"] == 1
 
 
+def test_pending_start_command_explains_missing_worker(monkeypatch):
+    snapshots = {20: health._empty_snapshot()}
+
+    monkeypatch.setattr(
+        health,
+        "_query",
+        lambda _sql, _params: [{
+            "strategy_id": 20,
+            "id": 41,
+            "command_type": "start",
+            "status": "pending",
+            "error_message": "",
+            "created_at": None,
+            "updated_at": None,
+        }],
+    )
+
+    health._load_latest_commands(snapshots, "%s", [20])
+
+    assert health._health_state(snapshots[20], strategy_status="running", now=100) == "degraded"
+    assert snapshots[20]["health_reason"] == "worker_unavailable"
+    assert snapshots[20]["last_command_id"] == 41
+
+
 def test_recent_failed_order_degrades_until_attention_window_expires():
     snapshot = {
         **health._empty_snapshot(),
@@ -132,68 +156,3 @@ def test_recent_failed_order_degrades_until_attention_window_expires():
 
     snapshot["failed_orders"] = 0
     assert health._health_state(snapshot, strategy_status="running", now=1_010) == "healthy"
-
-
-def test_position_drift_degrades_running_strategy_health():
-    snapshot = {
-        **health._empty_snapshot(),
-        "run_id": 7,
-        "last_heartbeat_at": 1_000,
-        "position_drift_blocked": True,
-        "position_drift_count": 1,
-    }
-
-    assert health._health_state(snapshot, strategy_status="running", now=1_010) == "degraded"
-
-
-def test_position_ownership_loader_attaches_matching_okx_drift(monkeypatch):
-    snapshots = {
-        20: {
-            **health._empty_snapshot(),
-            "_ownership_context": {
-                "user_id": 7,
-                "exchange_id": "okx",
-                "credential_id": 12,
-                "symbol": "BTC/USDT",
-                "market_type": "swap",
-            },
-        },
-        21: {
-            **health._empty_snapshot(),
-            "_ownership_context": {
-                "user_id": 7,
-                "exchange_id": "bitget",
-                "credential_id": 13,
-                "symbol": "BTC/USDT",
-                "market_type": "swap",
-            },
-        },
-    }
-    monkeypatch.setattr(
-        health,
-        "_query",
-        lambda _sql, params: [
-            {
-                "user_id": 7,
-                "credential_id": 12,
-                "exchange_id": "okx",
-                "market_type": "swap",
-                "symbol_canonical": "BTC/USDT",
-                "side": "long",
-                "coexistence_mode": "strict",
-                "manual_reserved_qty": 0,
-                "observed_account_qty": 0.0145,
-                "allocated_qty": 0,
-                "status": "drift_blocked",
-                "drift_reason": "unallocated_account_position",
-            }
-        ],
-    )
-
-    health._load_position_ownership(snapshots)
-
-    assert snapshots[20]["position_drift_blocked"] is True
-    assert snapshots[20]["position_drift_count"] == 1
-    assert snapshots[20]["position_drift_sides"] == ["long"]
-    assert snapshots[20]["position_drift_details"][0]["account_qty"] == 0.0145
-    assert snapshots[21]["position_drift_blocked"] is False

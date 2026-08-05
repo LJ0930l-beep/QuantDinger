@@ -49,9 +49,7 @@ def shutdown_grid_for_strategy(strategy_id: int) -> None:
 
         sc = load_strategy_configs(sid) or {}
         tc = sc.get("trading_config") if isinstance(sc.get("trading_config"), dict) else {}
-        from app.services.strategy_runtime.bot_type import resolve_bot_type
-
-        bot_type = resolve_bot_type(sc, tc)
+        bot_type = str(sc.get("bot_type") or tc.get("bot_type") or "").strip().lower()
         if bot_type != "grid":
             return
         symbol = str(tc.get("symbol") or sc.get("symbol") or "").strip()
@@ -69,7 +67,6 @@ def shutdown_grid_for_strategy(strategy_id: int) -> None:
             symbol,
             tc,
             ex_cfg,
-            user_id=user_id,
             create_client_fn=_create_client,
             enqueue_market=lambda *a, **k: False,
         )
@@ -109,15 +106,12 @@ class GridRestingRunner:
             symbol,
             self.trading_config,
             self.exchange_config,
-            user_id=self.user_id,
             create_client_fn=create_client_fn,
             enqueue_market=enqueue_market_fn,
         )
         self._started = False
         self._last_sync_ts = 0.0
         self._last_exit_sync_ts = 0.0
-        self._last_operational_check_ts = 0.0
-        self._last_operational_snapshot: Dict[str, Any] = {}
 
     @property
     def engine(self) -> GridEngine:
@@ -132,6 +126,8 @@ class GridRestingRunner:
         return self._engine.stop_reason
 
     def startup(self, current_price: float, *, bars_df: Any = None) -> tuple[bool, str]:
+        return False, "Grid direct trading entry is permanently disabled"
+
         cfg = GridBotConfig.from_trading_config(self.trading_config)
         try:
             fee_rate = float(self.trading_config.get("commission") or 0.0) / 100.0
@@ -188,10 +184,6 @@ class GridRestingRunner:
                 f"long={snap.get('long_size', 0):.6f} short={snap.get('short_size', 0):.6f} "
                 f"mode={snap.get('position_mode_label') or 'unknown'}",
             )
-            self._engine.set_initial_exchange_baseline(
-                long_size=float(snap.get("long_size") or 0.0),
-                short_size=float(snap.get("short_size") or 0.0),
-            )
         except Exception as e:
             logger.debug("grid startup exchange snapshot sid=%s: %s", self.strategy_id, e)
         if self._engine.handle_boundary(current_price):
@@ -243,41 +235,6 @@ class GridRestingRunner:
             unregister_runner(self.strategy_id)
             self._started = False
 
-    def operational_snapshot(self, *, force: bool = False) -> Dict[str, Any]:
-        """Return whether exchange-resting coverage is verifiably active."""
-        now = time.time()
-        if (
-            not force
-            and self._last_operational_snapshot
-            and now - self._last_operational_check_ts < 5.0
-        ):
-            return dict(self._last_operational_snapshot)
-        orders = list(self._engine._orders.list_open(self.strategy_id) or [])
-        entries = [order for order in orders if str(order.purpose or "") in {"long_entry", "short_entry"}]
-        unverified = [order for order in orders if not str(order.exchange_order_id or "").strip()]
-        expected = bool(
-            int(self._engine.cfg.max_open_orders or 0) > 0
-            and not self._engine._paused_entries
-            and not self._engine.stop_requested
-            and not self._runtime_params.get("waterfall_pause")
-        )
-        error = ""
-        if unverified:
-            error = "grid_unverified_exchange_orders"
-        elif expected and not entries:
-            error = "grid_no_exchange_resting_orders"
-        snapshot = {
-            "open_orders": len(orders),
-            "open_entries": len(entries),
-            "unverified_orders": len(unverified),
-            "expected_entries": expected,
-            "healthy": not bool(error),
-            "error": error,
-        }
-        self._last_operational_check_ts = now
-        self._last_operational_snapshot = snapshot
-        return dict(snapshot)
-
     def tick(
         self,
         current_price: float,
@@ -287,6 +244,8 @@ class GridRestingRunner:
         bars_df: Any = None,
         is_closed_bar: bool = False,
     ) -> None:
+        return
+
         if not self._started or current_price <= 0:
             return
         if self._engine.stop_requested:
@@ -309,30 +268,13 @@ class GridRestingRunner:
                 exits = self._risk_exit_fn(current_price) or []
                 if exits:
                     self._engine.cancel_entry_orders_on_exchange()
-                    self._engine._paused_entries = True
-                    exit_reasons = []
-                    all_queued = True
-                    queued_any = False
                     for ex in exits:
                         st = str(ex.get("type") or "").strip().lower()
                         if st:
-                            queued_any = True
-                            exit_reasons.append(str(ex.get("reason") or "grid_risk"))
-                            all_queued = bool(self._engine._enqueue_market(
+                            self._engine._enqueue_market(
                                 st, 0, current_price, str(ex.get("reason") or "grid_risk")
-                            )) and all_queued
-                    if queued_any and all_queued:
-                        self._engine._stop_requested = True
-                        self._engine._stop_reason = (
-                            "grid risk exit: " + ", ".join(sorted(set(exit_reasons)))
-                        )
-                        append_strategy_log(self.strategy_id, "warning", "Grid risk exit triggered")
-                    else:
-                        append_strategy_log(
-                            self.strategy_id,
-                            "error",
-                            "Grid risk exit could not be queued; entries remain paused and the close will retry",
-                        )
+                            )
+                    append_strategy_log(self.strategy_id, "warning", "Grid risk exit triggered")
                     return
             except Exception as e:
                 logger.debug("grid risk exit: %s", e)

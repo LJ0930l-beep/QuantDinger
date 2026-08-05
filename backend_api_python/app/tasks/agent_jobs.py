@@ -26,7 +26,7 @@ def _execute(kind: str, payload: dict, on_progress):
     if kind == "backtest":
         from app.routes.agent_v1.backtests import _run_backtest
 
-        return _run_backtest(request_payload, on_progress)
+        return _run_backtest(request_payload)
 
     raise ValueError(f"Unsupported durable agent job kind: {kind}")
 
@@ -38,7 +38,7 @@ def execute_agent_job(job_id: str) -> None:
     row = agent_jobs.get_job_for_worker(job_id)
     if row is None:
         raise ValueError(f"Agent job does not exist: {job_id}")
-    if row.get("status") in {"succeeded", "cancelled"}:
+    if row.get("status") == "succeeded":
         return
 
     kind = str(row.get("kind") or "")
@@ -56,29 +56,17 @@ def execute_agent_job(job_id: str) -> None:
             dict(request_payload),
             lambda event: agent_jobs._publish_progress(job_id, event),
         )
-        if agent_jobs._set_result(job_id, result):
-            agent_jobs._publish_progress(
-                job_id,
-                {"phase": "succeeded", "ts": time.time()},
-                terminal=True,
-            )
-        else:
-            agent_jobs._publish_progress(
-                job_id,
-                {"phase": "cancelled", "ts": time.time()},
-                terminal=True,
-            )
+        agent_jobs._set_result(job_id, result)
+        agent_jobs._publish_progress(
+            job_id,
+            {"phase": "succeeded", "ts": time.time()},
+            terminal=True,
+        )
     except Exception as exc:
-        if agent_jobs._set_failure(job_id, str(exc)):
-            agent_jobs._publish_progress(
-                job_id,
-                {"phase": "failed", "error": str(exc)[:500], "ts": time.time()},
-                terminal=True,
-            )
-        else:
-            agent_jobs._publish_progress(
-                job_id,
-                {"phase": "cancelled", "ts": time.time()},
-                terminal=True,
-            )
+        agent_jobs._set_failure(job_id, str(exc))
+        agent_jobs._publish_progress(
+            job_id,
+            {"phase": "failed", "error": str(exc)[:500], "ts": time.time()},
+            terminal=True,
+        )
         raise

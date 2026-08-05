@@ -18,7 +18,11 @@ from app.services.backtest_limits import (
 from app.services.fundamental_data import get_fundamental_data_service
 from app.services.universe import UniverseService, get_universe_service
 
-from .contract import StrategyV2ContractError, compile_strategy_v2
+from .contract import (
+    StrategyV2ContractError,
+    compile_strategy_v2,
+    validate_requested_leverage,
+)
 from .factor_research import FactorResearchEngine
 from .models import InstrumentSpec, StrategyManifest
 from .market_data import load_strategy_frame
@@ -144,6 +148,11 @@ class StrategyV2BacktestService:
             raise StrategyV2ContractError("strategyV2.invalidDateRange")
         if initial_capital <= 0:
             raise StrategyV2ContractError("strategyV2.invalidInitialCapital")
+        effective_leverage = validate_requested_leverage(
+            manifest,
+            leverage_enabled=bool(leverage_enabled),
+            leverage=leverage,
+        )
 
         candidates, universe_id = self.resolve_candidates(
             user_id=user_id,
@@ -187,7 +196,7 @@ class StrategyV2BacktestService:
             initial_capital=initial_capital,
             params=params,
             leverage_enabled=leverage_enabled,
-            leverage=leverage,
+            leverage=effective_leverage,
             commission=commission,
             slippage=slippage,
             universe_resolver=resolve_universe,
@@ -269,7 +278,7 @@ class StrategyV2BacktestService:
             "startDate": start_date.date().isoformat(),
             "endDate": end_date.date().isoformat(),
             "leverageEnabled": bool(leverage_enabled),
-            "leverage": float(leverage if leverage_enabled else 1.0),
+            "leverage": effective_leverage,
             "commission": float(commission),
             "slippage": float(slippage),
             "fundingMode": "not_modeled",
@@ -292,7 +301,7 @@ class StrategyV2BacktestService:
                 initial_capital=initial_capital,
                 commission=commission,
                 slippage=slippage,
-                leverage=float(leverage if leverage_enabled else 1),
+                leverage=effective_leverage,
                 manifest=manifest.metadata(),
                 params=dict(params or {}),
                 result=result,

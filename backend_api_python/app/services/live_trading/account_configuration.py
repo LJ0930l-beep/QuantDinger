@@ -2,52 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from decimal import Decimal, InvalidOperation
+from typing import Any, Dict, Tuple
 
 from app.services.live_trading.base import LiveTradingError
-
-
-def requires_derivatives_account_configuration(*, market_type: str, reduce_only: bool) -> bool:
-    """Only opening derivative orders may mutate symbol account settings."""
-    market = str(market_type or "").strip().lower()
-    return market in {"swap", "future", "futures", "perp", "perpetual"} and not bool(reduce_only)
-
-
-def _is_binance_unknown_timeout(exc: BaseException | str) -> bool:
-    text = str(exc or "").lower()
-    return (
-        "-1007" in text
-        or "execution status unknown" in text
-        or ("http 408" in text and "timeout" in text)
-    )
-
-
-def _confirm_binance_configuration(
-    client: Any,
-    *,
-    symbol: str,
-    margin_mode: str,
-    leverage: int,
-    require_margin: bool,
-    require_leverage: bool,
-) -> Dict[str, Any]:
-    observed = client.get_symbol_configuration(symbol=symbol) or {}
-    observed_mode = normalize_margin_mode(str(observed.get("margin_mode") or ""))
-    try:
-        observed_leverage = int(float(observed.get("leverage") or 0))
-    except Exception:
-        observed_leverage = 0
-    if require_margin and observed_mode != margin_mode:
-        raise LiveTradingError(
-            f"Binance configuration timeout could not be confirmed: "
-            f"margin_mode expected={margin_mode}, observed={observed_mode}"
-        )
-    if require_leverage and observed_leverage != int(leverage):
-        raise LiveTradingError(
-            f"Binance configuration timeout could not be confirmed: "
-            f"leverage expected={int(leverage)}, observed={observed_leverage}"
-        )
-    return observed
 
 
 def normalize_margin_mode(value: str) -> str:
@@ -57,6 +15,40 @@ def normalize_margin_mode(value: str) -> str:
     if raw in {"isolated", "iso"}:
         return "isolated"
     raise LiveTradingError(f"Unsupported margin mode: {value}")
+
+
+def _decimal_contract_bound(value: Any, *, field: str) -> Decimal:
+    """Parse an exchange-provided leverage bound without a float round-trip."""
+
+    try:
+        bound = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise LiveTradingError(f"Invalid exchange leverage bound: {field}") from exc
+    if not bound.is_finite() or bound <= 0:
+        raise LiveTradingError(f"Invalid exchange leverage bound: {field}")
+    return bound
+
+
+def _gate_contract_leverage_bounds(client: Any, *, contract: str) -> Tuple[Decimal, Decimal]:
+    """Return the exact Gate contract leverage interval or fail closed.
+
+    Gate exposes these values in the contract metadata.  They are contract and
+    risk-tier facts, not a global ``50x``/``100x`` application setting.  An
+    absent or malformed interval must never be replaced with a guessed default.
+    """
+
+    metadata = client.get_contract(contract=contract)
+    if not isinstance(metadata, dict):
+        raise LiveTradingError("Gate leverage bounds unavailable")
+    minimum = _decimal_contract_bound(
+        metadata.get("leverage_min"), field="leverage_min"
+    )
+    maximum = _decimal_contract_bound(
+        metadata.get("leverage_max"), field="leverage_max"
+    )
+    if minimum > maximum:
+        raise LiveTradingError("Gate leverage bounds are inconsistent")
+    return minimum, maximum
 
 
 def configure_derivatives_account(
@@ -92,104 +84,60 @@ def configure_derivatives_account(
     }
 
     if isinstance(client, BinanceFuturesClient):
-        margin_confirmed_after_timeout = False
         try:
             client.set_margin_type(symbol=symbol, margin_mode=mode)
         except Exception as exc:
             text = str(exc).lower()
             if "-4046" not in text and "no need to change margin type" not in text:
-                if not _is_binance_unknown_timeout(exc):
-                    raise LiveTradingError(f"Binance margin mode setup failed: {exc}") from exc
-                observed = _confirm_binance_configuration(
-                    client,
-                    symbol=symbol,
-                    margin_mode=mode,
-                    leverage=target_leverage,
-                    require_margin=True,
-                    require_leverage=False,
-                )
-                details["readback_after_margin_timeout"] = observed
-                margin_confirmed_after_timeout = True
-        try:
-            client.set_leverage(symbol=symbol, leverage=target_leverage)
-        except Exception as exc:
-            if not _is_binance_unknown_timeout(exc):
-                raise
-            observed = _confirm_binance_configuration(
-                client,
-                symbol=symbol,
-                margin_mode=mode,
-                leverage=target_leverage,
-                require_margin=True,
-                require_leverage=True,
-            )
-            details["readback_after_leverage_timeout"] = observed
-        if margin_confirmed_after_timeout:
-            details["margin_mode_confirmed_after_timeout"] = True
+                raise LiveTradingError(f"Binance margin mode setup failed: {exc}") from exc
+        client.set_leverage(symbol=symbol, leverage=target_leverage)
         return details
 
     if isinstance(client, OkxClient):
         account_config = client.get_account_config() or {}
         account_level = str(account_config.get("acctLv") or "").strip()
-        position_mode = str(account_config.get("posMode") or "").strip().lower()
         if account_level:
             details["account_mode"] = account_level
         if account_level == "1":
             raise LiveTradingError("OKX_SWAP_ACCOUNT_MODE_REQUIRED")
-        if position_mode in ("long_short_mode", "longshort_mode"):
-            long_ok = client.set_leverage(
-                inst_id=to_okx_swap_inst_id(symbol),
-                lever=target_leverage,
-                mgn_mode=mode,
-                pos_side="long",
-            )
-            short_ok = client.set_leverage(
-                inst_id=to_okx_swap_inst_id(symbol),
-                lever=target_leverage,
-                mgn_mode=mode,
-                pos_side="short",
-            )
-            ok = bool(long_ok and short_ok)
-            details["position_mode"] = "hedge"
-        else:
-            ok = client.set_leverage(
-                inst_id=to_okx_swap_inst_id(symbol),
-                lever=target_leverage,
-                mgn_mode=mode,
-                pos_side="net",
-            )
-    elif isinstance(client, BitgetMixClient):
-        bitget_mode = client.get_account_pos_mode(
-            symbol=symbol,
-            margin_coin="USDT",
-            product_type="USDT-FUTURES",
+        ok = client.set_leverage(
+            inst_id=to_okx_swap_inst_id(symbol),
+            lever=target_leverage,
+            mgn_mode=mode,
         )
-        kwargs = {
-            "symbol": symbol,
-            "leverage": target_leverage,
-            "margin_mode": "crossed" if mode == "cross" else "isolated",
-        }
-        if bitget_mode == "hedge_mode":
-            long_ok = client.set_leverage(**kwargs, hold_side="long")
-            short_ok = client.set_leverage(**kwargs, hold_side="short")
-            ok = bool(long_ok and short_ok)
-            details["position_mode"] = "hedge"
-        else:
-            ok = client.set_leverage(**kwargs)
+    elif isinstance(client, BitgetMixClient):
+        ok = client.set_leverage(
+            symbol=symbol,
+            leverage=target_leverage,
+            margin_mode="crossed" if mode == "cross" else "isolated",
+        )
     elif isinstance(client, BybitClient):
         ok = client.set_margin_mode(mode) and client.set_leverage(
             symbol=symbol,
             leverage=target_leverage,
         )
     elif isinstance(client, GateUsdtFuturesClient):
-        position_mode = str(client.get_position_mode() or "").strip().lower()
-        if position_mode == "dual_plus":
+        contract = to_gate_currency_pair(symbol)
+        exchange_min, exchange_max = _gate_contract_leverage_bounds(
+            client, contract=contract
+        )
+        requested = Decimal(target_leverage)
+        if requested < exchange_min or requested > exchange_max:
             raise LiveTradingError(
-                "Gate dual_plus split-position mode is not supported; "
-                "switch the futures account to single or dual mode"
+                "Gate leverage outside contract bounds: "
+                f"requested={target_leverage}, "
+                f"allowed={format(exchange_min, 'f')}-{format(exchange_max, 'f')}"
             )
+        details.update(
+            {
+                "contract": contract,
+                "exchange_leverage_min": format(exchange_min, "f"),
+                "exchange_leverage_max": format(exchange_max, "f"),
+                "leverage_verified": True,
+            }
+        )
         ok = client.set_leverage(
-            contract=to_gate_currency_pair(symbol),
+            contract=contract,
             leverage=target_leverage,
             margin_mode=mode,
         )

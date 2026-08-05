@@ -218,20 +218,18 @@ class BybitClient(BaseRestClient):
         self._time_offset_ms = int(srv_ms - local_ms)
         self._time_offset_at = now
 
-    def is_hedge_position_mode(self, *, symbol: str) -> Optional[bool]:
+    def is_hedge_position_mode(self, *, symbol: str) -> bool:
         """
         Whether the Bybit account uses hedge (both-side) mode for ``symbol``.
 
-        Queries GET /v5/position/list (returns slots even when flat). ``None``
-        means the exchange did not provide enough authoritative information.
-        Callers performing deployment/preflight checks must fail closed instead
-        of treating the locally configured ``hedge_mode`` hint as proof.
+        Queries GET /v5/position/list (returns slots even when flat). Falls back to
+        ``hedge_mode`` from credentials when the API call fails.
         """
         if self.category != "linear":
-            return False
+            return bool(self.hedge_mode)
         sym = to_bybit_symbol(symbol)
         if not sym:
-            return None
+            return bool(self.hedge_mode)
         key = sym.upper()
         now = time.time()
         cached = self._pos_mode_cache.get(key)
@@ -259,9 +257,7 @@ class BybitClient(BaseRestClient):
                 detected = True
         except Exception:
             detected = None
-        if detected is None:
-            return None
-        hedge = bool(detected)
+        hedge = bool(self.hedge_mode) if detected is None else bool(detected)
         self._pos_mode_cache[key] = (now, hedge)
         return hedge
 
@@ -271,12 +267,7 @@ class BybitClient(BaseRestClient):
         """
         if self.category != "linear":
             return 0
-        detected = self.is_hedge_position_mode(symbol=symbol)
-        # Direct order callers may still use the explicit credential hint when
-        # mode lookup is temporarily unavailable. Strategy deployment does not:
-        # its preflight calls ``is_hedge_position_mode`` and rejects ``None``.
-        hedge = bool(self.hedge_mode) if detected is None else bool(detected)
-        if not hedge:
+        if not self.is_hedge_position_mode(symbol=symbol):
             return 0
         ps = str(pos_side or "").strip().lower()
         if ps == "short":
@@ -959,21 +950,7 @@ class BybitClient(BaseRestClient):
             lv = 1
         if lv < 1:
             lv = 1
-        try:
-            info = self.get_instrument_info(category="linear", symbol=sym) or {}
-        except Exception:
-            info = {}
-        leverage_filter = info.get("leverageFilter") if isinstance(info, dict) else {}
-        try:
-            max_leverage = int(
-                float((leverage_filter or {}).get("maxLeverage") or 0)
-            )
-        except (TypeError, ValueError):
-            max_leverage = 0
-        if max_leverage > 0 and lv > max_leverage:
-            raise LiveTradingError(
-                f"Bybit leverage {lv}x exceeds the current {sym} maximum {max_leverage}x"
-            )
+        # Bybit leverage caps vary per symbol; keep best-effort.
         body = {"category": "linear", "symbol": sym, "buyLeverage": str(lv), "sellLeverage": str(lv)}
         try:
             resp = self._signed_request("POST", "/v5/position/set-leverage", json_body=body)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any, Dict, List, Mapping, Tuple
 
 from app.services.live_trading.base import LiveTradingError
@@ -15,6 +14,15 @@ from app.services.live_trading.symbols import (
     to_htx_contract_code,
     to_okx_swap_inst_id,
 )
+
+
+class NativeProtectionDisabledError(LiveTradingError):
+    """Raised when the retired native-protection entry is reached.
+
+    Native exchange protection orders are not part of the canonical admission
+    path.  Keeping a typed error at this boundary makes every legacy caller
+    fail closed before it can import a venue client or invoke an exchange API.
+    """
 
 
 @dataclass(frozen=True)
@@ -75,7 +83,16 @@ def place_native_protection_orders(
     client: Any,
     request: NativeProtectionRequest,
 ) -> List[Dict[str, Any]]:
-    """Place reduce-only native protection and return exchange responses."""
+    """Reject the retired direct native-protection entry point.
+
+    The implementation below is retained as inert compatibility code while
+    callers migrate to canonical Protection admission.  This guard must stay
+    first: no request validation, venue-client import, or exchange call may
+    occur from this legacy path.
+    """
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
+
+    # Legacy implementation retained below for source compatibility only.
     side = str(request.pos_side or "").strip().lower()
     qty = float(request.quantity or 0.0)
     if side not in ("long", "short") or qty <= 0:
@@ -106,6 +123,7 @@ def place_native_protection_orders(
 
 
 def _place_binance(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     close_side = "SELL" if request.pos_side == "long" else "BUY"
     dual = client.get_dual_side_position()
     if dual is None:
@@ -140,6 +158,7 @@ def _place_binance(client: Any, request: NativeProtectionRequest) -> List[Dict[s
 
 
 def _place_okx(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     inst_id = to_okx_swap_inst_id(request.symbol)
     size, precision = client._normalize_order_size(
         inst_id=inst_id, market_type="swap", size=request.quantity
@@ -154,9 +173,8 @@ def _place_okx(client: Any, request: NativeProtectionRequest) -> List[Dict[str, 
         "posSide": pos_side,
         "ordType": "conditional",
         "sz": client._dec_str(size, strict_precision=precision),
+        "reduceOnly": "true",
     }
-    if pos_side == "net":
-        base["reduceOnly"] = "true"
     if client.broker_code:
         base["tag"] = str(client.broker_code)
     responses: List[Dict[str, Any]] = []
@@ -178,6 +196,7 @@ def _place_okx(client: Any, request: NativeProtectionRequest) -> List[Dict[str, 
 
 
 def _place_bitget(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     size, precision = client._normalize_size(
         symbol=request.symbol,
         product_type=request.product_type,
@@ -220,6 +239,7 @@ def _place_bitget(client: Any, request: NativeProtectionRequest) -> List[Dict[st
 
 
 def _place_bybit(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     close_side = "Sell" if request.pos_side == "long" else "Buy"
     size, precision = client._normalize_qty(symbol=request.symbol, qty=request.quantity)
     base: Dict[str, Any] = {
@@ -261,28 +281,19 @@ def _place_bybit(client: Any, request: NativeProtectionRequest) -> List[Dict[str
 
 
 def _place_gate(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     contract = to_gate_currency_pair(request.symbol)
     close_side = "sell" if request.pos_side == "long" else "buy"
     size, extra_headers = client._resolve_order_size(
         contract=contract, side=close_side, base_size=request.quantity
     )
-    initial: Dict[str, Any] = {
+    initial = {
         "contract": contract,
+        "size": size,
         "price": "0",
         "tif": "ioc",
         "reduce_only": True,
     }
-    # Gate's price-order schema is stricter than the regular futures-order
-    # schema: ``initial.size`` is int64. Fractional-contract orders use the
-    # string-typed ``initial.amount`` field instead.
-    decimal_size = bool(extra_headers and extra_headers.get("X-Gate-Size-Decimal") == "1")
-    if decimal_size:
-        initial["amount"] = str(size)
-    else:
-        try:
-            initial["size"] = int(Decimal(str(size)))
-        except (ArithmeticError, TypeError, ValueError) as exc:
-            raise LiveTradingError(f"Gate native protection resolved an invalid size: {size}") from exc
     responses: List[Dict[str, Any]] = []
     for price in (request.stop_loss_price, request.take_profit_price):
         if price <= 0:
@@ -313,6 +324,7 @@ def _place_gate(client: Any, request: NativeProtectionRequest) -> List[Dict[str,
 
 
 def _place_htx(client: Any, request: NativeProtectionRequest) -> List[Dict[str, Any]]:
+    raise NativeProtectionDisabledError("native protection entry is permanently disabled")
     volume = client._base_to_contracts(symbol=request.symbol, qty=request.quantity)
     body: Dict[str, Any] = {
         "contract_code": to_htx_contract_code(request.symbol),

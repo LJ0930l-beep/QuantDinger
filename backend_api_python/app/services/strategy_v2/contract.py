@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import math
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Iterable
@@ -45,6 +46,35 @@ class StrategyV2ContractError(ValueError):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+def validate_requested_leverage(
+    manifest: "StrategyManifest",
+    *,
+    leverage_enabled: bool,
+    leverage: object,
+) -> float:
+    """Validate and normalize caller leverage before any simulation work.
+
+    The compiled manifest is the authority.  Invalid numeric values fail
+    closed, while a disabled leverage control always resolves to neutral 1x.
+    """
+    if not leverage_enabled:
+        return 1.0
+    try:
+        raw = float(leverage)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise StrategyV2ContractError("strategyV2.leverageInvalid") from exc
+    if not math.isfinite(raw) or raw <= 0:
+        raise StrategyV2ContractError("strategyV2.leverageInvalid")
+    requested = max(1.0, raw)
+    if requested > 1.0 and not manifest.leverage_allowed:
+        raise StrategyV2ContractError("strategyV2.leverageNotAllowed")
+    if requested < manifest.min_leverage:
+        raise StrategyV2ContractError("strategyV2.leverageBelowStrategyMinimum")
+    if requested > manifest.max_leverage:
+        raise StrategyV2ContractError("strategyV2.leverageExceedsStrategyLimit")
+    return requested
 
 
 class StateNamespace(SimpleNamespace):
@@ -93,6 +123,7 @@ class DiscoveryContext:
         self.benchmark: InstrumentSpec | None = None
         self.warmup_bars = 0
         self.leverage_allowed = False
+        self.min_leverage = 1.0
         self.max_leverage = 1.0
         self.metadata: dict[str, Any] = {}
         self.current_dt = None
@@ -145,9 +176,16 @@ class DiscoveryContext:
     def set_warmup(self, bars: object) -> None:
         self.warmup_bars = max(0, int(bars or 0))
 
-    def allow_leverage(self, max_leverage: object = 1) -> None:
-        value = max(1.0, float(max_leverage or 1.0))
+    def allow_leverage(self, max_leverage: object = 1, *, min_leverage: object = 1) -> None:
+        try:
+            minimum = float(min_leverage or 1)
+            value = float(max_leverage or 1)
+        except (TypeError, ValueError) as exc:
+            raise StrategyV2ContractError("strategyV2.leverageBoundsInvalid") from exc
+        if not math.isfinite(minimum) or not math.isfinite(value) or minimum < 1 or value < minimum:
+            raise StrategyV2ContractError("strategyV2.leverageBoundsInvalid")
         self.leverage_allowed = value > 1.0
+        self.min_leverage = minimum
         self.max_leverage = value
 
     def set_metadata(self, **values: Any) -> None:
@@ -198,14 +236,6 @@ def compile_strategy_v2(code: str) -> CompiledStrategyV2:
             last_price=0.0,
         ),
         "get_positions": lambda *_args, **_kwargs: {},
-        "get_order_status": lambda *_args, **_kwargs: {
-            "status": "unknown",
-            "filled_quantity": 0.0,
-            "filled_notional": 0.0,
-            "fee": 0.0,
-        },
-        "cancel_order": lambda *_args, **_kwargs: False,
-        "consume_last_exit_reason": lambda *_args, **_kwargs: "",
         "get_history": lambda *_args, **_kwargs: [],
         "history": lambda *_args, **_kwargs: [],
         "is_trade": lambda *_args, **_kwargs: False,
@@ -277,6 +307,7 @@ def compile_strategy_v2(code: str) -> CompiledStrategyV2:
         fundamental_dependencies=tuple(sorted(fundamentals)),
         warmup_bars=context.warmup_bars,
         leverage_allowed=context.leverage_allowed,
+        min_leverage=context.min_leverage,
         max_leverage=context.max_leverage,
         direction_mode=direction_mode,
         metadata_fields=dict(context.metadata),
@@ -327,9 +358,6 @@ _RUNTIME_GLOBAL_CALL_NAMES = {
     "get_index_stocks",
     "get_position",
     "get_positions",
-    "get_order_status",
-    "consume_last_exit_reason",
-    "cancel_order",
     "get_universe_stocks",
     "history",
     "indicator",

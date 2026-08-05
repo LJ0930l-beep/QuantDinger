@@ -1,0 +1,121 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from decimal import Decimal
+import unittest
+from uuid import UUID
+
+from tests.pr08_contract_loader import load_pr08_contracts
+
+
+s = load_pr08_contracts()
+RUN_ID = UUID("11111111-1111-1111-1111-111111111111")
+
+
+def policy(**changes):
+    values = {"policy_version": "shadow-policy-v1", "quantity_absolute": "0.01", "monetary_absolute": "0.10", "ratio_absolute": "0.001"}
+    values.update(changes)
+    return s.ShadowTolerancePolicy(**values)
+
+
+def run(*, legacy=None, candidate=None, **changes):
+    observed = datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc)
+    legacy = legacy or snapshot("legacy", {"position": quantity("1")})
+    candidate = candidate or snapshot("candidate", {"position": quantity("1")})
+    values = {"run_id": RUN_ID, "tenant_id": 1, "credential_id": 2, "account_scope": "primary", "instrument_id": "BTCUSDT", "market_type": "swap", "legacy_source_identity": "legacy", "legacy_source_version": "state-v1", "legacy_source_fingerprint": legacy.source_fingerprint, "candidate_generation_id": candidate.generation_id, "candidate_consumer_name": "shadow-consumer", "candidate_generation_build_fingerprint": "b" * 64, "candidate_checkpoint_watermark": candidate.checkpoint_watermark, "as_of": observed, "correlation_id": "shadow-corr-1", "policy": policy()}
+    values.update(changes)
+    return s.ShadowComparisonRun(**values)
+
+
+def snapshot(source_name, facts, **changes):
+    generation = UUID("22222222-2222-2222-2222-222222222222") if source_name == "candidate" else None
+    watermark = 7 if source_name == "candidate" else None
+    values = {"source_name": source_name, "tenant_id": 1, "credential_id": 2, "account_scope": "primary", "instrument_id": "BTCUSDT", "market_type": "swap", "source_version": "state-v1", "observed_at": datetime(2026, 7, 26, 9, 0, tzinfo=timezone.utc), "status": s.ShadowSourceStatus.READY, "facts": facts, "generation_id": generation, "checkpoint_watermark": watermark}
+    values.update(changes)
+    return s.ShadowSourceSnapshot(**values)
+
+
+def quantity(value, asset="BTC"):
+    return s.ShadowFactValue(value, s.ShadowValueKind.QUANTITY, asset)
+
+
+def money(value, asset="USDT"):
+    return s.ShadowFactValue(value, s.ShadowValueKind.MONETARY, asset)
+
+
+class ShadowDiffContractTests(unittest.TestCase):
+    def test_exact_and_tolerated_matches_are_distinct_and_replay_is_deterministic(self):
+        legacy = snapshot("legacy", {"position": quantity("1"), "equity": money("100")})
+        candidate = snapshot("candidate", {"position": quantity("1.005"), "equity": money("100")})
+        first = s.compare_shadow_state(run(legacy=legacy, candidate=candidate), legacy, candidate)
+        second = s.compare_shadow_state(run(legacy=legacy, candidate=candidate), legacy, candidate)
+        self.assertEqual(first.exact_matches, ("equity",))
+        self.assertEqual(first.tolerated_matches, ("position",))
+        self.assertEqual(first.diffs, ())
+        self.assertEqual(first.replay_fingerprint, second.replay_fingerprint)
+
+    def test_currency_mismatch_requires_valuation_and_never_matches(self):
+        legacy = snapshot("legacy", {"equity": money("100", "USDT")})
+        candidate = snapshot("candidate", {"equity": money("100", "USDC")})
+        result = s.compare_shadow_state(run(legacy=legacy, candidate=candidate), legacy, candidate)
+        self.assertEqual(result.exact_matches, ())
+        self.assertEqual(result.diffs[0].kind, s.ShadowDiffKind.VALUATION_REQUIRED)
+        self.assertEqual(result.diffs[0].severity, s.ShadowDiffSeverity.BLOCKING)
+
+    def test_unknown_stale_and_scope_mismatch_fail_closed(self):
+        legacy = snapshot("legacy", {"position": quantity("1")}, status=s.ShadowSourceStatus.STALE)
+        candidate = snapshot("candidate", {"position": quantity("1")})
+        self.assertEqual(s.compare_shadow_state(run(legacy=legacy, candidate=candidate), legacy, candidate).diffs[0].kind, s.ShadowDiffKind.STALE_SOURCE)
+        cross_scope = snapshot("candidate", {"position": quantity("1")}, account_scope="other")
+        self.assertEqual(s.compare_shadow_state(run(legacy=candidate, candidate=cross_scope), candidate, cross_scope).diffs[0].kind, s.ShadowDiffKind.SCOPE_MISMATCH)
+
+    def test_missing_value_kind_and_outside_tolerance_are_explicit(self):
+        legacy = snapshot("legacy", {"a": quantity("1"), "b": quantity("1"), "c": money("1")})
+        candidate = snapshot("candidate", {"a": quantity("1"), "b": quantity("1.02"), "c": quantity("1", "USDT"), "d": quantity("1")})
+        result = s.compare_shadow_state(run(legacy=legacy, candidate=candidate), legacy, candidate)
+        self.assertEqual(result.exact_matches, ("a",))
+        self.assertEqual({item.kind for item in result.diffs}, {s.ShadowDiffKind.VALUE_MISMATCH, s.ShadowDiffKind.UNSUPPORTED_FACT, s.ShadowDiffKind.MISSING_LEGACY})
+
+    def test_float_and_noncanonical_values_are_rejected(self):
+        with self.assertRaises(s.ShadowDiffContractError):
+            quantity(1.0)
+        with self.assertRaises(s.ShadowDiffContractError):
+            snapshot("Legacy", {"position": quantity("1")})
+        with self.assertRaises(s.ShadowDiffContractError):
+            run(candidate_generation_build_fingerprint="not-a-fingerprint")
+
+    def test_snapshot_and_result_are_immutable(self):
+        fact = quantity(Decimal("1"))
+        source = snapshot("legacy", {"position": fact})
+        with self.assertRaises(TypeError):
+            source.facts["other"] = fact
+        candidate = snapshot("candidate", {"position": fact})
+        result = s.compare_shadow_state(run(legacy=source, candidate=candidate), source, candidate)
+        with self.assertRaises(Exception):
+            result.exact_matches += ("other",)
+
+    def test_build_fingerprint_is_derived_from_complete_policy_and_generation_facts(self):
+        first = run()
+        second = run()
+        changed_tolerance = run(policy=policy(quantity_absolute="0.02"))
+        changed_generation = run(candidate_consumer_name="other-consumer")
+        self.assertEqual(first.build_fingerprint, second.build_fingerprint)
+        self.assertNotEqual(first.build_fingerprint, changed_tolerance.build_fingerprint)
+        self.assertNotEqual(first.policy.tolerance_policy_fingerprint, changed_tolerance.policy.tolerance_policy_fingerprint)
+        self.assertNotEqual(first.build_fingerprint, changed_generation.build_fingerprint)
+
+    def test_correlation_is_a_persisted_audit_fact_not_build_or_replay_identity(self):
+        legacy = snapshot("legacy", {"position": quantity("1")})
+        candidate = snapshot("candidate", {"position": quantity("1")})
+        first = run(legacy=legacy, candidate=candidate, correlation_id="corr-1")
+        second = run(legacy=legacy, candidate=candidate, correlation_id="corr-2")
+        self.assertNotEqual(first.correlation_id, second.correlation_id)
+        self.assertEqual(first.build_fingerprint, second.build_fingerprint)
+        self.assertEqual(
+            s.compare_shadow_state(first, legacy, candidate).replay_fingerprint,
+            s.compare_shadow_state(second, legacy, candidate).replay_fingerprint,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

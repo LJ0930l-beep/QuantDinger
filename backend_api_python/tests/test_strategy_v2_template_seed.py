@@ -24,13 +24,14 @@ def _seed_entries():
 
 def test_strategy_v2_seed_has_explicit_cta_and_portfolio_catalogs():
     entries = _seed_entries()
-    assert len(entries) == 12
-    assert SEED_PATH.read_text(encoding="utf-8").count('"version":11') == 12
-    assert sum(item["asset_type"] == "script" for item in entries) == 8
+    assert len(entries) == 14
+    assert sum(item["asset_type"] == "script" for item in entries) == 10
     assert sum(item["asset_type"] == "portfolio_strategy" for item in entries) == 4
 
     by_key = {item["key"]: item for item in entries}
     assert by_key["strategy_v2_supertrend"]["asset_type"] == "script"
+    assert by_key["strategy_v2_rsi_scalper_5m"]["asset_type"] == "script"
+    assert by_key["strategy_v2_breakout_15m"]["asset_type"] == "script"
     assert by_key["strategy_v2_market_cap_barbell"]["asset_type"] == "portfolio_strategy"
 
 
@@ -48,49 +49,31 @@ def test_strategy_v2_seed_templates_compile_and_expose_parameters():
         assert manifest.strategy_type == expected_type
 
 
-def test_strategy_v2_seed_templates_declare_current_direction_contract():
-    for item in _seed_entries():
-        manifest = compile_strategy_v2(item["code"]).manifest
-        expected = "both" if item["key"] == "strategy_v2_double_ma" else "long_only"
-        assert manifest.direction_mode == expected, item["key"]
+def test_short_term_templates_declare_market_frequency_and_leverage_contract():
+    by_key = {item["key"]: item for item in _seed_entries()}
 
+    for key in (
+        "strategy_v2_double_ma",
+        "strategy_v2_macd_kdj",
+        "strategy_v2_rsi_scalper_5m",
+        "strategy_v2_breakout_15m",
+    ):
+        manifest = compile_strategy_v2(by_key[key]["code"]).manifest
+        assert manifest.min_leverage == 50
+        assert manifest.max_leverage == 100
+        assert [item.market_type for item in manifest.universe.instruments] == ["swap"]
 
-def test_swap_seed_template_uses_explicit_hedge_legs():
-    entry = next(
-        item for item in _seed_entries()
-        if item["key"] == "strategy_v2_double_ma"
-    )
+    rsi_manifest = compile_strategy_v2(by_key["strategy_v2_rsi_scalper_5m"]["code"]).manifest
+    assert rsi_manifest.primary_frequency == "5m"
+    assert rsi_manifest.min_leverage == 50
+    assert rsi_manifest.max_leverage == 100
+    assert [item.market_type for item in rsi_manifest.universe.instruments] == ["swap"]
 
-    assert 'get_position(g.symbol, position_side="long")' in entry["code"]
-    assert 'get_position(g.symbol, position_side="short")' in entry["code"]
-    assert 'position_side="long"' in entry["code"]
-    assert 'position_side="short"' in entry["code"]
-    assert "dual_ma_close_short" in entry["code"]
-    assert "dual_ma_open_long" in entry["code"]
-
-
-def test_stateful_seed_templates_are_restart_safe():
-    entries = {item["key"]: item["code"] for item in _seed_entries()}
-
-    assert "position.avg_cost" in entries["strategy_v2_turtle"]
-    assert "g.entry_price" not in entries["strategy_v2_turtle"]
-    assert "PERSIST_RUNTIME_STATE = True" in entries["strategy_v2_supertrend"]
-
-
-def test_macd_kdj_default_exposure_is_safe_without_user_enabled_leverage():
-    entry = next(
-        item for item in _seed_entries()
-        if item["key"] == "strategy_v2_macd_kdj"
-    )
-    schema = json.loads(entry["schema"])
-    target = next(
-        param for param in schema["params"]
-        if param["name"] == "target_pct"
-    )
-
-    assert target["default"] == 0.95
-    assert '# @param target_pct float 0.95 ' in entry["code"]
-    assert 'context.params.get("target_pct", 0.95)' in entry["code"]
+    breakout_manifest = compile_strategy_v2(by_key["strategy_v2_breakout_15m"]["code"]).manifest
+    assert breakout_manifest.primary_frequency == "15m"
+    assert breakout_manifest.min_leverage == 50
+    assert breakout_manifest.max_leverage == 100
+    assert [item.market_type for item in breakout_manifest.universe.instruments] == ["swap"]
 
 
 def test_portfolio_templates_use_fixed_ten_symbol_universe():

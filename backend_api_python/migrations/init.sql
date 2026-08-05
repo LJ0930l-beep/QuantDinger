@@ -509,14 +509,8 @@ CREATE TABLE IF NOT EXISTS qd_strategy_equity_snapshots (
     equity DECIMAL(24,8) NOT NULL DEFAULT 0,
     realized_pnl DECIMAL(24,8) NOT NULL DEFAULT 0,
     unrealized_pnl DECIMAL(24,8) NOT NULL DEFAULT 0,
-    initial_capital DECIMAL(24,8),
-    basis_reason VARCHAR(32) NOT NULL DEFAULT '',
     captured_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
-ALTER TABLE qd_strategy_equity_snapshots
-ADD COLUMN IF NOT EXISTS initial_capital DECIMAL(24,8);
-ALTER TABLE qd_strategy_equity_snapshots
-ADD COLUMN IF NOT EXISTS basis_reason VARCHAR(32) NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_strategy_equity_snapshots_boundary
 ON qd_strategy_equity_snapshots(strategy_id, captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_strategy_equity_snapshots_user
@@ -566,33 +560,6 @@ CREATE TABLE IF NOT EXISTS qd_account_positions (
 CREATE INDEX IF NOT EXISTS idx_account_pos_user ON qd_account_positions(user_id);
 CREATE INDEX IF NOT EXISTS idx_account_pos_cred ON qd_account_positions(credential_id, market_type);
 
--- L2 ownership layer: explicitly protected manual inventory plus drift state.
-CREATE TABLE IF NOT EXISTS qd_position_reservations (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL DEFAULT 1 REFERENCES qd_users(id) ON DELETE CASCADE,
-    credential_id INTEGER NOT NULL DEFAULT 0,
-    exchange_id VARCHAR(40) NOT NULL DEFAULT '',
-    market_type VARCHAR(20) NOT NULL DEFAULT 'swap',
-    inst_id VARCHAR(80) NOT NULL DEFAULT '',
-    symbol VARCHAR(50) NOT NULL DEFAULT '',
-    symbol_canonical VARCHAR(50) NOT NULL DEFAULT '',
-    side VARCHAR(10) NOT NULL DEFAULT '',
-    coexistence_mode VARCHAR(20) NOT NULL DEFAULT 'strict',
-    manual_reserved_qty DECIMAL(24, 8) NOT NULL DEFAULT 0,
-    observed_account_qty DECIMAL(24, 8) NOT NULL DEFAULT 0,
-    allocated_qty DECIMAL(24, 8) NOT NULL DEFAULT 0,
-    status VARCHAR(32) NOT NULL DEFAULT 'ok',
-    drift_reason VARCHAR(80) NOT NULL DEFAULT '',
-    last_log_at TIMESTAMP,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id, credential_id, market_type, symbol_canonical, side)
-);
-CREATE INDEX IF NOT EXISTS idx_position_reservation_leg
-    ON qd_position_reservations(credential_id, market_type, symbol_canonical, side);
-CREATE INDEX IF NOT EXISTS idx_position_reservation_blocked
-    ON qd_position_reservations(user_id, status);
-
 -- Grid cell ladder state (P2). Pre-placed limit orders / user-stream driven
 -- fills will land here; today only the scaffolding lives in code (see
 -- app.services.live_trading.grid_cells).
@@ -637,10 +604,6 @@ CREATE TABLE IF NOT EXISTS qd_grid_resting_orders (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_grid_resting_strategy ON qd_grid_resting_orders(strategy_id, status);
-
-ALTER TABLE qd_strategy_trades ADD COLUMN IF NOT EXISTS grid_order_id BIGINT NOT NULL DEFAULT 0;
-CREATE INDEX IF NOT EXISTS idx_strategy_trades_grid_order
-  ON qd_strategy_trades(grid_order_id) WHERE grid_order_id > 0;
 
 -- =============================================================================
 -- 5. Pending Orders Queue
@@ -1799,133 +1762,6 @@ CREATE TABLE IF NOT EXISTS strategy_order_fills (
 CREATE INDEX IF NOT EXISTS idx_strategy_order_fills_intent ON strategy_order_fills(order_intent_id);
 CREATE INDEX IF NOT EXISTS idx_strategy_order_fills_strategy ON strategy_order_fills(strategy_id, filled_at DESC);
 
--- =============================================================================
--- Unified live execution stream ledger
--- =============================================================================
-
-ALTER TABLE pending_orders ADD COLUMN IF NOT EXISTS client_order_id VARCHAR(100) NOT NULL DEFAULT '';
-ALTER TABLE pending_orders ADD COLUMN IF NOT EXISTS fee_status VARCHAR(24) NOT NULL DEFAULT 'pending';
-ALTER TABLE pending_orders ADD COLUMN IF NOT EXISTS fee_source VARCHAR(24) NOT NULL DEFAULT '';
-
-ALTER TABLE qd_strategy_trades ADD COLUMN IF NOT EXISTS execution_event_id BIGINT NOT NULL DEFAULT 0;
-ALTER TABLE qd_strategy_trades ADD COLUMN IF NOT EXISTS exchange_fill_id VARCHAR(160) NOT NULL DEFAULT '';
-ALTER TABLE qd_strategy_trades ADD COLUMN IF NOT EXISTS fee_status VARCHAR(24) NOT NULL DEFAULT 'pending';
-ALTER TABLE qd_strategy_trades ADD COLUMN IF NOT EXISTS fee_source VARCHAR(24) NOT NULL DEFAULT '';
-CREATE UNIQUE INDEX IF NOT EXISTS uq_strategy_trades_execution_event
-  ON qd_strategy_trades(execution_event_id) WHERE execution_event_id > 0;
-
-ALTER TABLE strategy_order_fills ADD COLUMN IF NOT EXISTS credential_id INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE strategy_order_fills ADD COLUMN IF NOT EXISTS commission_quote DECIMAL(28, 12);
-ALTER TABLE strategy_order_fills ADD COLUMN IF NOT EXISTS fee_status VARCHAR(24) NOT NULL DEFAULT 'pending';
-CREATE UNIQUE INDEX IF NOT EXISTS uq_strategy_order_fills_exchange_fill
-  ON strategy_order_fills(exchange_id, credential_id, exchange_fill_id)
-  WHERE exchange_fill_id <> '';
-
-CREATE TABLE IF NOT EXISTS qd_live_order_bindings (
-    id BIGSERIAL PRIMARY KEY,
-    credential_id INTEGER NOT NULL DEFAULT 0,
-    exchange_id VARCHAR(50) NOT NULL,
-    market_type VARCHAR(20) NOT NULL DEFAULT 'swap',
-    owner_type VARCHAR(24) NOT NULL,
-    owner_id BIGINT NOT NULL DEFAULT 0,
-    user_id INTEGER NOT NULL DEFAULT 1,
-    strategy_id INTEGER NOT NULL DEFAULT 0,
-    pending_order_id BIGINT NOT NULL DEFAULT 0,
-    strategy_run_id BIGINT NOT NULL DEFAULT 0,
-    order_intent_id BIGINT NOT NULL DEFAULT 0,
-    symbol VARCHAR(80) NOT NULL DEFAULT '',
-    signal_type VARCHAR(40) NOT NULL DEFAULT '',
-    client_order_id VARCHAR(100) NOT NULL DEFAULT '',
-    exchange_order_id VARCHAR(160) NOT NULL DEFAULT '',
-    observed_filled DECIMAL(28, 12) NOT NULL DEFAULT 0,
-    status VARCHAR(24) NOT NULL DEFAULT 'open',
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-CREATE UNIQUE INDEX IF NOT EXISTS uq_live_order_binding_owner
-  ON qd_live_order_bindings(owner_type, owner_id);
-CREATE INDEX IF NOT EXISTS idx_live_order_binding_client
-  ON qd_live_order_bindings(credential_id, exchange_id, market_type, client_order_id);
-CREATE INDEX IF NOT EXISTS idx_live_order_binding_exchange
-  ON qd_live_order_bindings(credential_id, exchange_id, market_type, exchange_order_id);
-
-CREATE TABLE IF NOT EXISTS qd_execution_events (
-    id BIGSERIAL PRIMARY KEY,
-    event_key VARCHAR(320) NOT NULL UNIQUE,
-    credential_id INTEGER NOT NULL DEFAULT 0,
-    user_id INTEGER NOT NULL DEFAULT 1,
-    exchange_id VARCHAR(50) NOT NULL,
-    market_type VARCHAR(20) NOT NULL DEFAULT 'swap',
-    account_id VARCHAR(128) NOT NULL DEFAULT '',
-    symbol VARCHAR(80) NOT NULL DEFAULT '',
-    exchange_order_id VARCHAR(160) NOT NULL DEFAULT '',
-    client_order_id VARCHAR(100) NOT NULL DEFAULT '',
-    exchange_fill_id VARCHAR(160) NOT NULL DEFAULT '',
-    side VARCHAR(12) NOT NULL DEFAULT '',
-    position_side VARCHAR(12) NOT NULL DEFAULT '',
-    order_status VARCHAR(24) NOT NULL DEFAULT '',
-    price DECIMAL(28, 12) NOT NULL DEFAULT 0,
-    quantity DECIMAL(28, 12) NOT NULL DEFAULT 0,
-    cumulative_quantity DECIMAL(28, 12) NOT NULL DEFAULT 0,
-    is_cumulative BOOLEAN NOT NULL DEFAULT FALSE,
-    realized_pnl DECIMAL(28, 12),
-    maker BOOLEAN,
-    fee_status VARCHAR(24) NOT NULL DEFAULT 'pending',
-    occurred_at TIMESTAMP NOT NULL,
-    received_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    raw_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    processed_at TIMESTAMP,
-    process_attempts INTEGER NOT NULL DEFAULT 0,
-    process_error TEXT NOT NULL DEFAULT ''
-);
-CREATE INDEX IF NOT EXISTS idx_execution_events_pending
-  ON qd_execution_events(received_at, id) WHERE processed_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_execution_events_order
-  ON qd_execution_events(credential_id, exchange_id, market_type, exchange_order_id);
-
-CREATE TABLE IF NOT EXISTS qd_execution_fee_components (
-    id BIGSERIAL PRIMARY KEY,
-    execution_event_id BIGINT NOT NULL REFERENCES qd_execution_events(id) ON DELETE CASCADE,
-    fee_type VARCHAR(24) NOT NULL DEFAULT 'trade',
-    currency VARCHAR(24) NOT NULL DEFAULT '',
-    amount DECIMAL(28, 12) NOT NULL DEFAULT 0,
-    quote_amount DECIMAL(28, 12),
-    source VARCHAR(24) NOT NULL DEFAULT 'websocket',
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    UNIQUE(execution_event_id, fee_type, currency)
-);
-CREATE INDEX IF NOT EXISTS idx_execution_fee_event
-  ON qd_execution_fee_components(execution_event_id);
-
-CREATE TABLE IF NOT EXISTS qd_execution_fee_projections (
-    execution_event_id BIGINT PRIMARY KEY REFERENCES qd_execution_events(id) ON DELETE CASCADE,
-    pending_order_id BIGINT NOT NULL DEFAULT 0,
-    applied_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS qd_execution_owner_projections (
-    execution_event_id BIGINT NOT NULL REFERENCES qd_execution_events(id) ON DELETE CASCADE,
-    owner_type VARCHAR(24) NOT NULL,
-    owner_id BIGINT NOT NULL DEFAULT 0,
-    applied_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (execution_event_id, owner_type, owner_id)
-);
-
-CREATE TABLE IF NOT EXISTS qd_execution_stream_health (
-    stream_key VARCHAR(180) PRIMARY KEY,
-    credential_id INTEGER NOT NULL DEFAULT 0,
-    exchange_id VARCHAR(50) NOT NULL,
-    market_type VARCHAR(20) NOT NULL DEFAULT '',
-    state VARCHAR(24) NOT NULL DEFAULT 'stopped',
-    last_event_at TIMESTAMP,
-    last_connected_at TIMESTAMP,
-    last_disconnected_at TIMESTAMP,
-    reconnect_count INTEGER NOT NULL DEFAULT 0,
-    rest_fallback BOOLEAN NOT NULL DEFAULT FALSE,
-    last_error TEXT NOT NULL DEFAULT '',
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
 CREATE TABLE IF NOT EXISTS strategy_runtime_events (
     id SERIAL PRIMARY KEY,
     strategy_run_id INTEGER NOT NULL DEFAULT 0,
@@ -2168,8 +2004,6 @@ CREATE TABLE IF NOT EXISTS qd_agent_tokens (
     instruments TEXT NOT NULL DEFAULT '*',       -- comma-separated allowlist or '*'
     paper_only BOOLEAN NOT NULL DEFAULT TRUE,    -- T-class always starts paper-only
     rate_limit_per_min INTEGER NOT NULL DEFAULT 60,
-    max_order_notional DECIMAL(24,8) NOT NULL DEFAULT 1000,
-    max_daily_notional DECIMAL(24,8) NOT NULL DEFAULT 5000,
     status VARCHAR(20) NOT NULL DEFAULT 'active',-- active/revoked/expired
     expires_at TIMESTAMP,
     last_used_at TIMESTAMP,
@@ -2178,10 +2012,6 @@ CREATE TABLE IF NOT EXISTS qd_agent_tokens (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tokens_hash ON qd_agent_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_agent_tokens_user ON qd_agent_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_agent_tokens_status ON qd_agent_tokens(status);
-ALTER TABLE qd_agent_tokens
-  ADD COLUMN IF NOT EXISTS max_order_notional DECIMAL(24,8) NOT NULL DEFAULT 1000;
-ALTER TABLE qd_agent_tokens
-  ADD COLUMN IF NOT EXISTS max_daily_notional DECIMAL(24,8) NOT NULL DEFAULT 5000;
 
 CREATE TABLE IF NOT EXISTS qd_agent_jobs (
     id BIGSERIAL PRIMARY KEY,
@@ -2225,37 +2055,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_audit_user ON qd_agent_audit(user_id, creat
 CREATE INDEX IF NOT EXISTS idx_agent_audit_token ON qd_agent_audit(agent_token_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_audit_class ON qd_agent_audit(scope_class);
 
-CREATE TABLE IF NOT EXISTS qd_agent_idempotency (
-    id BIGSERIAL PRIMARY KEY,
-    agent_token_id INTEGER NOT NULL REFERENCES qd_agent_tokens(id) ON DELETE CASCADE,
-    method VARCHAR(8) NOT NULL,
-    route VARCHAR(200) NOT NULL,
-    idempotency_key VARCHAR(120) NOT NULL,
-    request_hash VARCHAR(64) NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'started',
-    response_body JSONB,
-    response_status INTEGER,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(agent_token_id, method, route, idempotency_key)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_idempotency_created
-  ON qd_agent_idempotency(created_at);
-
-CREATE TABLE IF NOT EXISTS qd_agent_notional_reservations (
-    id BIGSERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE CASCADE,
-    agent_token_id INTEGER NOT NULL REFERENCES qd_agent_tokens(id) ON DELETE CASCADE,
-    idempotency_key VARCHAR(120) NOT NULL,
-    notional DECIMAL(24,8) NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'reserved',
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(agent_token_id, idempotency_key)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_notional_daily
-  ON qd_agent_notional_reservations(agent_token_id, created_at);
-
 -- Paper-only ledger so trading-class tokens can simulate without ever touching
 -- live exchange credentials.  Real-money execution stays gated by paper_only=false
 -- AND the existing TradingExecutor code path.
@@ -2284,6 +2083,2702 @@ ALTER TABLE qd_agent_jobs ADD COLUMN IF NOT EXISTS progress JSONB;
 
 -- Strategy API V2 templates are seeded by strategy_v2_templates.sql.
 
+-- Phase 0 / PR-02: expand-only unified-order safety kernel schema.
+-- This migration intentionally creates empty, unreferenced structures only.
+
+CREATE TABLE IF NOT EXISTS qd_order_commands (
+    id UUID PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    actor_type VARCHAR(16) NOT NULL CHECK (actor_type IN ('STRATEGY','HUMAN','AGENT','MCP','GRID','PROTECTION','ADMIN')),
+    actor_id VARCHAR(160) NOT NULL,
+    source VARCHAR(32) NOT NULL,
+    action VARCHAR(20) NOT NULL CHECK (action IN ('OPEN','INCREASE','REDUCE','CLOSE','CANCEL','EMERGENCY_CLOSE','PROTECTION')),
+    account_scope VARCHAR(160) NOT NULL,
+    strategy_id INTEGER REFERENCES qd_strategies_trading(id) ON DELETE RESTRICT,
+    request_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    request_fingerprint VARCHAR(128) NOT NULL CHECK (request_fingerprint <> ''),
+    idempotency_key VARCHAR(180) NOT NULL CHECK (idempotency_key <> ''),
+    status VARCHAR(16) NOT NULL CHECK (status IN ('ACCEPTED','PROCESSING','SUCCEEDED','FAILED','CANCELLED')),
+    correlation_id VARCHAR(160) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    accepted_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_order_commands_idempotency
+    ON qd_order_commands(tenant_id, source, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_qd_order_commands_account_created
+    ON qd_order_commands(account_scope, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS qd_instrument_rule_snapshots (
+    id UUID PRIMARY KEY,
+    exchange VARCHAR(50) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
+    rule_version VARCHAR(100) NOT NULL CHECK (rule_version <> ''),
+    tick_size NUMERIC(38,18) NOT NULL CHECK (tick_size > 0),
+    quantity_step NUMERIC(38,18) NOT NULL CHECK (quantity_step > 0),
+    minimum_quantity NUMERIC(38,18) NOT NULL CHECK (minimum_quantity >= 0),
+    minimum_notional NUMERIC(38,18) NOT NULL CHECK (minimum_notional >= 0),
+    price_scale INTEGER NOT NULL CHECK (price_scale >= 0),
+    quantity_scale INTEGER NOT NULL CHECK (quantity_scale >= 0),
+    rounding_policy_version VARCHAR(100) NOT NULL CHECK (rounding_policy_version <> ''),
+    raw_rules_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(exchange, market_type, instrument_id, rule_version)
+);
+
+CREATE TABLE IF NOT EXISTS qd_order_intents_v2 (
+    id UUID PRIMARY KEY,
+    command_id UUID NOT NULL REFERENCES qd_order_commands(id) ON DELETE RESTRICT,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    economic_order_id UUID NOT NULL,
+    intent_version INTEGER NOT NULL CHECK (intent_version >= 1),
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    side VARCHAR(8) NOT NULL CHECK (side IN ('BUY','SELL')),
+    position_side VARCHAR(12) NOT NULL DEFAULT '' CHECK (position_side IN ('','LONG','SHORT')),
+    reduce_only BOOLEAN NOT NULL DEFAULT FALSE,
+    order_type VARCHAR(24) NOT NULL,
+    execution_algo VARCHAR(32) NOT NULL,
+    time_in_force VARCHAR(16) NOT NULL DEFAULT '',
+    target_quantity NUMERIC(38,18) NOT NULL CHECK (target_quantity > 0),
+    limit_price NUMERIC(38,18),
+    quote_notional NUMERIC(38,18),
+    instrument_rule_snapshot_id UUID NOT NULL REFERENCES qd_instrument_rule_snapshots(id) ON DELETE RESTRICT,
+    instrument_rule_version VARCHAR(100) NOT NULL CHECK (instrument_rule_version <> ''),
+    rounding_mode VARCHAR(32) NOT NULL,
+    strategy_run_id INTEGER,
+    portfolio_id VARCHAR(96) NOT NULL DEFAULT '',
+    rebalance_group_id VARCHAR(128) NOT NULL DEFAULT '',
+    payload_hash VARCHAR(128) NOT NULL CHECK (payload_hash <> ''),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (limit_price IS NULL OR limit_price > 0),
+    CHECK (quote_notional IS NULL OR quote_notional > 0),
+    UNIQUE(command_id, intent_version),
+    UNIQUE(id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    UNIQUE(id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_order_intents_v2_scope
+    ON qd_order_intents_v2(account_scope, instrument_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS qd_economic_orders (
+    id UUID PRIMARY KEY,
+    intent_id UUID NOT NULL UNIQUE,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    state VARCHAR(32) NOT NULL CHECK (state IN ('CREATED','RISK_PENDING','RISK_RESERVED','SUBMITTING','SUBMITTED','SUBMISSION_UNKNOWN','PARTIALLY_FILLED','FILLED','CANCEL_REQUESTED','CANCELLING','CANCELLED','REJECTED','FAILED','RECONCILIATION_REQUIRED')),
+    version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
+    target_quantity NUMERIC(38,18) NOT NULL CHECK (target_quantity > 0),
+    cumulative_filled_qty NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (cumulative_filled_qty >= 0),
+    cumulative_fee_quote NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (cumulative_fee_quote >= 0),
+    overfill_qty NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (overfill_qty >= 0),
+    last_event_seq BIGINT NOT NULL DEFAULT 0 CHECK (last_event_seq >= 0),
+    active_fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (active_fencing_token >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    FOREIGN KEY(intent_id, id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_order_intents_v2(id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_qd_economic_orders_scope_state
+    ON qd_economic_orders(account_scope, instrument_id, state);
+
+CREATE TABLE IF NOT EXISTS qd_risk_reservations (
+    id UUID PRIMARY KEY,
+    command_id UUID NOT NULL REFERENCES qd_order_commands(id) ON DELETE RESTRICT,
+    economic_order_id UUID REFERENCES qd_economic_orders(id) ON DELETE RESTRICT,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    reservation_kind VARCHAR(32) NOT NULL,
+    currency VARCHAR(20) NOT NULL,
+    reserved_notional NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (reserved_notional >= 0),
+    reserved_margin NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (reserved_margin >= 0),
+    reserved_position_qty NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (reserved_position_qty >= 0),
+    limits_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    risk_input_hash VARCHAR(128) NOT NULL CHECK (risk_input_hash <> ''),
+    state VARCHAR(16) NOT NULL CHECK (state IN ('ACTIVE','CONSUMED','RELEASED','EXPIRED')),
+    expires_at TIMESTAMPTZ,
+    version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_risk_reservations_active_command_kind
+    ON qd_risk_reservations(command_id, reservation_kind) WHERE state = 'ACTIVE';
+CREATE INDEX IF NOT EXISTS idx_qd_risk_reservations_active_scope
+    ON qd_risk_reservations(account_scope, expires_at) WHERE state = 'ACTIVE';
+
+CREATE TABLE IF NOT EXISTS qd_order_state_events (
+    id UUID PRIMARY KEY,
+    economic_order_id UUID NOT NULL REFERENCES qd_economic_orders(id) ON DELETE RESTRICT,
+    event_seq BIGINT NOT NULL CHECK (event_seq >= 1),
+    from_state VARCHAR(32) CHECK (from_state IS NULL OR from_state IN ('CREATED','RISK_PENDING','RISK_RESERVED','SUBMITTING','SUBMITTED','SUBMISSION_UNKNOWN','PARTIALLY_FILLED','FILLED','CANCEL_REQUESTED','CANCELLING','CANCELLED','REJECTED','FAILED','RECONCILIATION_REQUIRED')),
+    to_state VARCHAR(32) NOT NULL CHECK (to_state IN ('CREATED','RISK_PENDING','RISK_RESERVED','SUBMITTING','SUBMITTED','SUBMISSION_UNKNOWN','PARTIALLY_FILLED','FILLED','CANCEL_REQUESTED','CANCELLING','CANCELLED','REJECTED','FAILED','RECONCILIATION_REQUIRED')),
+    reason_code VARCHAR(64) NOT NULL,
+    actor_type VARCHAR(16) NOT NULL,
+    evidence_hash VARCHAR(128) NOT NULL DEFAULT '',
+    occurred_at TIMESTAMPTZ NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(economic_order_id, event_seq)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_order_state_events_occurred
+    ON qd_order_state_events(economic_order_id, occurred_at);
+
+CREATE TABLE IF NOT EXISTS qd_submission_attempts (
+    id UUID PRIMARY KEY,
+    economic_order_id UUID NOT NULL,
+    exchange VARCHAR(50) NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    child_seq INTEGER NOT NULL CHECK (child_seq >= 1),
+    attempt_no INTEGER NOT NULL CHECK (attempt_no >= 1),
+    role VARCHAR(16) NOT NULL CHECK (role IN ('PRIMARY','FALLBACK','PROTECTION','EMERGENCY')),
+    canonical_client_order_id VARCHAR(128) NOT NULL CHECK (canonical_client_order_id <> ''),
+    venue_client_order_id VARCHAR(128) NOT NULL CHECK (venue_client_order_id <> ''),
+    request_fingerprint VARCHAR(128) NOT NULL CHECK (request_fingerprint <> ''),
+    request_json_redacted JSONB NOT NULL DEFAULT '{}'::jsonb,
+    state VARCHAR(20) NOT NULL CHECK (state IN ('READY','SUBMITTING','ACKED','UNKNOWN','CONFIRMED_ABSENT','REJECTED')),
+    lease_owner VARCHAR(160) NOT NULL DEFAULT '',
+    fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (fencing_token >= 0),
+    started_at TIMESTAMPTZ,
+    response_at TIMESTAMPTZ,
+    unknown_since TIMESTAMPTZ,
+    last_error_class VARCHAR(128) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(economic_order_id, child_seq, attempt_no),
+    UNIQUE(exchange, credential_id, market_type, venue_client_order_id),
+    UNIQUE(id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_economic_orders(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_qd_submission_attempts_recovery
+    ON qd_submission_attempts(exchange, credential_id, state, unknown_since);
+
+CREATE TABLE IF NOT EXISTS qd_exchange_orders (
+    id UUID PRIMARY KEY,
+    attempt_id UUID NOT NULL UNIQUE,
+    economic_order_id UUID NOT NULL,
+    parent_exchange_order_id UUID REFERENCES qd_exchange_orders(id) ON DELETE RESTRICT,
+    child_role VARCHAR(32) NOT NULL,
+    exchange VARCHAR(50) NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    market_type VARCHAR(20) NOT NULL,
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
+    exchange_order_id VARCHAR(160),
+    venue_client_order_id VARCHAR(128) NOT NULL CHECK (venue_client_order_id <> ''),
+    raw_status VARCHAR(64) NOT NULL DEFAULT '',
+    normalized_state VARCHAR(32) NOT NULL CHECK (normalized_state IN ('SUBMITTED','PARTIALLY_FILLED','FILLED','SUBMISSION_UNKNOWN','CANCEL_REQUESTED','CANCELLING','CANCELLED','REJECTED','RECONCILIATION_REQUIRED')),
+    requested_qty NUMERIC(38,18) NOT NULL CHECK (requested_qty > 0),
+    cumulative_filled_qty NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (cumulative_filled_qty >= 0),
+    avg_fill_price NUMERIC(38,18),
+    cancel_state VARCHAR(32) NOT NULL DEFAULT '',
+    last_exchange_update_at TIMESTAMPTZ,
+    last_observed_at TIMESTAMPTZ,
+    raw_payload_hash VARCHAR(128) NOT NULL DEFAULT '',
+    version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (avg_fill_price IS NULL OR avg_fill_price > 0),
+    UNIQUE(exchange, credential_id, market_type, venue_client_order_id),
+    UNIQUE(exchange, credential_id, exchange_order_id),
+    FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_economic_orders(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT,
+    FOREIGN KEY(attempt_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_submission_attempts(id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS qd_exchange_order_observations (
+    id UUID PRIMARY KEY,
+    exchange_order_id UUID REFERENCES qd_exchange_orders(id) ON DELETE RESTRICT,
+    attempt_id UUID REFERENCES qd_submission_attempts(id) ON DELETE RESTRICT,
+    observation_source VARCHAR(16) NOT NULL CHECK (observation_source IN ('REST','WS','BACKFILL','MANUAL')),
+    payload_hash VARCHAR(128) NOT NULL CHECK (payload_hash <> ''),
+    payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    observed_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (exchange_order_id IS NOT NULL OR attempt_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_exchange_order_observations_order_evidence
+    ON qd_exchange_order_observations(exchange_order_id, observation_source, payload_hash)
+    WHERE exchange_order_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_exchange_order_observations_attempt_evidence
+    ON qd_exchange_order_observations(attempt_id, observation_source, payload_hash)
+    WHERE attempt_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS qd_exchange_fill_events (
+    id UUID PRIMARY KEY,
+    key_version VARCHAR(32) NOT NULL CHECK (key_version <> ''),
+    dedupe_key VARCHAR(256) NOT NULL CHECK (dedupe_key <> ''),
+    exchange VARCHAR(50) NOT NULL,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    exchange_order_pk UUID REFERENCES qd_exchange_orders(id) ON DELETE RESTRICT,
+    economic_order_id UUID NOT NULL REFERENCES qd_economic_orders(id) ON DELETE RESTRICT,
+    intent_id UUID NOT NULL REFERENCES qd_order_intents_v2(id) ON DELETE RESTRICT,
+    exchange_order_id VARCHAR(160) NOT NULL DEFAULT '',
+    exchange_fill_id VARCHAR(160) NOT NULL DEFAULT '',
+    venue_trade_sequence VARCHAR(160) NOT NULL DEFAULT '',
+    instrument_id VARCHAR(100) NOT NULL,
+    side VARCHAR(8) NOT NULL CHECK (side IN ('BUY','SELL')),
+    position_side VARCHAR(12) NOT NULL DEFAULT '' CHECK (position_side IN ('','LONG','SHORT')),
+    liquidity_role VARCHAR(16) NOT NULL DEFAULT '',
+    price NUMERIC(38,18) NOT NULL CHECK (price > 0),
+    quantity NUMERIC(38,18) NOT NULL CHECK (quantity > 0),
+    quote_quantity NUMERIC(38,18) NOT NULL CHECK (quote_quantity >= 0),
+    fee_amount NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (fee_amount >= 0),
+    fee_asset VARCHAR(20) NOT NULL DEFAULT '',
+    fee_quote_amount NUMERIC(38,18),
+    exchange_event_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL,
+    source VARCHAR(16) NOT NULL CHECK (source IN ('WS','REST','BACKFILL','MANUAL')),
+    source_cursor VARCHAR(256) NOT NULL DEFAULT '',
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    raw_payload_hash VARCHAR(128) NOT NULL CHECK (raw_payload_hash <> ''),
+    normalizer_version VARCHAR(64) NOT NULL,
+    instrument_rule_version VARCHAR(100) NOT NULL,
+    supersedes_event_id UUID REFERENCES qd_exchange_fill_events(id) ON DELETE RESTRICT,
+    quarantine_state VARCHAR(32) NOT NULL DEFAULT 'CLEAR' CHECK (quarantine_state IN ('CLEAR','QUARANTINED','RECONCILIATION_REQUIRED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(exchange, credential_id, dedupe_key, key_version),
+    FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_economic_orders(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT,
+    FOREIGN KEY(intent_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_order_intents_v2(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_qd_exchange_fill_events_history
+    ON qd_exchange_fill_events(credential_id, exchange_event_at, id);
+CREATE INDEX IF NOT EXISTS idx_qd_exchange_fill_events_order
+    ON qd_exchange_fill_events(exchange_order_pk, id);
+
+CREATE TABLE IF NOT EXISTS qd_ledger_transactions (
+    id UUID PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    transaction_type VARCHAR(32) NOT NULL CHECK (transaction_type IN ('TRADE','FEE','FUNDING','REALIZED_PNL','BALANCE_ADJUSTMENT','EXTERNAL_TRADE','REVERSAL','CORRECTION')),
+    source_event_type VARCHAR(64) NOT NULL,
+    source_event_id UUID NOT NULL,
+    reverses_transaction_id UUID REFERENCES qd_ledger_transactions(id) ON DELETE RESTRICT,
+    effective_at TIMESTAMPTZ NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    valuation_ccy VARCHAR(20) NOT NULL,
+    policy_version VARCHAR(64) NOT NULL,
+    correlation_id VARCHAR(160) NOT NULL DEFAULT '',
+    description_code VARCHAR(64) NOT NULL,
+    CHECK ((transaction_type = 'REVERSAL' AND reverses_transaction_id IS NOT NULL) OR (transaction_type <> 'REVERSAL' AND reverses_transaction_id IS NULL)),
+    UNIQUE(source_event_type, source_event_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_ledger_transactions_reversal_once
+    ON qd_ledger_transactions(reverses_transaction_id)
+    WHERE transaction_type = 'REVERSAL' AND reverses_transaction_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS qd_ledger_entries (
+    id UUID PRIMARY KEY,
+    transaction_id UUID NOT NULL REFERENCES qd_ledger_transactions(id) ON DELETE RESTRICT,
+    line_no INTEGER NOT NULL CHECK (line_no >= 1),
+    book VARCHAR(16) NOT NULL CHECK (book IN ('QUANTITY','MONETARY')),
+    account_code VARCHAR(96) NOT NULL,
+    asset VARCHAR(20) NOT NULL,
+    signed_amount NUMERIC(38,18) NOT NULL,
+    quantity NUMERIC(38,18),
+    unit_price NUMERIC(38,18),
+    value_in_valuation_ccy NUMERIC(38,18),
+    instrument_id VARCHAR(100) NOT NULL DEFAULT '',
+    strategy_id INTEGER REFERENCES qd_strategies_trading(id) ON DELETE RESTRICT,
+    economic_order_id UUID REFERENCES qd_economic_orders(id) ON DELETE RESTRICT,
+    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (quantity IS NULL OR quantity >= 0),
+    CHECK (unit_price IS NULL OR unit_price > 0),
+    UNIQUE(transaction_id, line_no)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_ledger_entries_replay
+    ON qd_ledger_entries(economic_order_id, transaction_id);
+
+CREATE TABLE IF NOT EXISTS qd_position_projections (
+    id UUID PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    strategy_id INTEGER REFERENCES qd_strategies_trading(id) ON DELETE RESTRICT,
+    instrument_id VARCHAR(100) NOT NULL,
+    side VARCHAR(12) NOT NULL CHECK (side IN ('LONG','SHORT')),
+    quantity NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+    average_cost NUMERIC(38,18),
+    realized_pnl NUMERIC(38,18) NOT NULL DEFAULT 0,
+    last_event_seq BIGINT NOT NULL DEFAULT 0 CHECK (last_event_seq >= 0),
+    projection_version INTEGER NOT NULL CHECK (projection_version >= 1),
+    policy_version VARCHAR(64) NOT NULL,
+    rebuilt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (average_cost IS NULL OR average_cost > 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_position_projections_strategy_scope
+    ON qd_position_projections(tenant_id, credential_id, account_scope, strategy_id, instrument_id, side, projection_version)
+    WHERE strategy_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_position_projections_unassigned_scope
+    ON qd_position_projections(tenant_id, credential_id, account_scope, instrument_id, side, projection_version)
+    WHERE strategy_id IS NULL;
+
+CREATE TABLE IF NOT EXISTS qd_pnl_projections (
+    id UUID PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
+    projection_version INTEGER NOT NULL CHECK (projection_version >= 1),
+    realized_pnl NUMERIC(38,18) NOT NULL DEFAULT 0,
+    fee_amount NUMERIC(38,18) NOT NULL DEFAULT 0,
+    funding_amount NUMERIC(38,18) NOT NULL DEFAULT 0,
+    net_realized_pnl NUMERIC(38,18) NOT NULL DEFAULT 0,
+    mark_price NUMERIC(38,18),
+    mark_at TIMESTAMPTZ,
+    unrealized_pnl NUMERIC(38,18),
+    last_ledger_seq BIGINT NOT NULL DEFAULT 0 CHECK (last_ledger_seq >= 0),
+    rebuilt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (mark_price IS NULL OR mark_price > 0),
+    UNIQUE(tenant_id, credential_id, account_scope, instrument_id, projection_version)
+);
+
+CREATE TABLE IF NOT EXISTS qd_reconciliation_checkpoints (
+    id UUID PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    exchange VARCHAR(50) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL CHECK (status IN ('HEALTHY','STALE','FAILED','CONFLICT')),
+    last_orders_cursor VARCHAR(256) NOT NULL DEFAULT '',
+    last_fills_cursor VARCHAR(256) NOT NULL DEFAULT '',
+    last_positions_cursor VARCHAR(256) NOT NULL DEFAULT '',
+    last_balances_cursor VARCHAR(256) NOT NULL DEFAULT '',
+    last_funding_cursor VARCHAR(256) NOT NULL DEFAULT '',
+    last_success_at TIMESTAMPTZ,
+    evidence_hash VARCHAR(128) NOT NULL DEFAULT '',
+    unresolved_count INTEGER NOT NULL DEFAULT 0 CHECK (unresolved_count >= 0),
+    version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
+    sla_deadline TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(credential_id, exchange, market_type, account_scope, instrument_id)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_reconciliation_checkpoints_health
+    ON qd_reconciliation_checkpoints(credential_id, market_type, status, last_success_at);
+
+CREATE TABLE IF NOT EXISTS qd_reconciliation_issues (
+    id UUID PRIMARY KEY,
+    checkpoint_id UUID NOT NULL REFERENCES qd_reconciliation_checkpoints(id) ON DELETE RESTRICT,
+    key_version VARCHAR(32) NOT NULL CHECK (key_version <> ''),
+    dedupe_key VARCHAR(256) NOT NULL CHECK (dedupe_key <> ''),
+    issue_type VARCHAR(64) NOT NULL,
+    status VARCHAR(16) NOT NULL CHECK (status IN ('OPEN','RESOLVED','QUARANTINED')),
+    evidence_hash VARCHAR(128) NOT NULL,
+    resolution_event_id UUID REFERENCES qd_order_state_events(id) ON DELETE RESTRICT,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(checkpoint_id, key_version, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_reconciliation_issues_active
+    ON qd_reconciliation_issues(checkpoint_id, occurred_at) WHERE status IN ('OPEN','QUARANTINED');
+
+CREATE TABLE IF NOT EXISTS qd_transactional_outbox (
+    event_id UUID PRIMARY KEY,
+    aggregate_type VARCHAR(64) NOT NULL,
+    aggregate_id UUID NOT NULL,
+    aggregate_version BIGINT NOT NULL CHECK (aggregate_version >= 0),
+    event_type VARCHAR(96) NOT NULL,
+    payload_json JSONB NOT NULL,
+    available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at TIMESTAMPTZ,
+    publish_attempts INTEGER NOT NULL DEFAULT 0 CHECK (publish_attempts >= 0),
+    lease_owner VARCHAR(160) NOT NULL DEFAULT '',
+    lease_expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(aggregate_id, aggregate_version, event_type)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_transactional_outbox_pending
+    ON qd_transactional_outbox(available_at, event_id) WHERE published_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS qd_consumer_inbox (
+    consumer_name VARCHAR(96) NOT NULL,
+    event_id UUID NOT NULL REFERENCES qd_transactional_outbox(event_id) ON DELETE RESTRICT,
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    result_hash VARCHAR(128) NOT NULL DEFAULT '',
+    PRIMARY KEY(consumer_name, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS qd_projection_snapshots (
+    id UUID PRIMARY KEY,
+    projection_name VARCHAR(96) NOT NULL,
+    projection_version INTEGER NOT NULL CHECK (projection_version >= 1),
+    policy_version VARCHAR(64) NOT NULL,
+    account_scope VARCHAR(160) NOT NULL,
+    last_event_seq BIGINT NOT NULL CHECK (last_event_seq >= 0),
+    snapshot_hash VARCHAR(128) NOT NULL CHECK (snapshot_hash <> ''),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(projection_name, projection_version, account_scope, last_event_seq)
+);
+
+-- Phase 0 precondition: append-only state recovery and lossless fill-fee facts.
+-- This migration is expand-only. It does not wire any runtime trading path.
+
+ALTER TABLE qd_order_state_events
+    ADD COLUMN IF NOT EXISTS expected_version BIGINT,
+    ADD COLUMN IF NOT EXISTS resulting_version BIGINT,
+    ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(180),
+    ADD COLUMN IF NOT EXISTS event_fingerprint VARCHAR(128),
+    ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(160),
+    ADD COLUMN IF NOT EXISTS canonical_payload_json JSONB;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_order_state_events_versions'
+    ) THEN
+        ALTER TABLE qd_order_state_events
+            ADD CONSTRAINT chk_qd_order_state_events_versions
+            CHECK (
+                (expected_version IS NULL AND resulting_version IS NULL AND idempotency_key IS NULL
+                 AND event_fingerprint IS NULL AND correlation_id IS NULL AND canonical_payload_json IS NULL)
+                OR (expected_version >= 0 AND resulting_version = expected_version + 1
+                    AND event_seq = resulting_version
+                    AND idempotency_key <> '' AND event_fingerprint <> '' AND correlation_id <> ''
+                    AND canonical_payload_json IS NOT NULL)
+            ) NOT VALID;
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_order_state_events_idempotency
+    ON qd_order_state_events(economic_order_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_order_state_events_fingerprint
+    ON qd_order_state_events(economic_order_id, event_fingerprint)
+    WHERE event_fingerprint IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS qd_venue_capability_snapshots (
+    id UUID PRIMARY KEY,
+    exchange VARCHAR(50) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    capability_version VARCHAR(64) NOT NULL CHECK (capability_version <> ''),
+    profile_hash VARCHAR(128) NOT NULL CHECK (profile_hash <> ''),
+    accepts_external_client_order_id BOOLEAN NOT NULL,
+    can_generate_safe_client_order_id BOOLEAN NOT NULL,
+    query_by_exchange_order_id BOOLEAN NOT NULL,
+    query_by_client_order_id BOOLEAN NOT NULL,
+    list_order_fills BOOLEAN NOT NULL,
+    stable_fill_id BOOLEAN NOT NULL,
+    client_id_max_length INTEGER CHECK (client_id_max_length IS NULL OR client_id_max_length > 0),
+    client_id_pattern VARCHAR(256),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (exchange = lower(exchange) AND market_type = lower(market_type)),
+    UNIQUE(exchange, market_type, capability_version, profile_hash),
+    UNIQUE(id, exchange, market_type),
+    UNIQUE(id, exchange, market_type, query_by_client_order_id)
+);
+
+CREATE TABLE IF NOT EXISTS qd_submission_recovery_policy_snapshots (
+    id UUID PRIMARY KEY,
+    exchange VARCHAR(50) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    policy_version VARCHAR(64) NOT NULL CHECK (policy_version <> ''),
+    policy_hash VARCHAR(128) NOT NULL CHECK (policy_hash <> ''),
+    capability_snapshot_id UUID NOT NULL,
+    capability_query_by_client_order_id BOOLEAN NOT NULL,
+    client_id_query_authoritative BOOLEAN NOT NULL,
+    order_history_authoritative BOOLEAN NOT NULL,
+    fill_history_authoritative BOOLEAN NOT NULL,
+    not_found_min_query_count INTEGER NOT NULL CHECK (not_found_min_query_count >= 1),
+    not_found_grace_seconds INTEGER NOT NULL CHECK (not_found_grace_seconds >= 0),
+    not_found_action VARCHAR(24) NOT NULL CHECK (not_found_action = 'KEEP_UNKNOWN'),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (exchange = lower(exchange) AND market_type = lower(market_type)),
+    CHECK (NOT client_id_query_authoritative OR capability_query_by_client_order_id),
+    FOREIGN KEY(capability_snapshot_id, exchange, market_type, capability_query_by_client_order_id)
+        REFERENCES qd_venue_capability_snapshots(id, exchange, market_type, query_by_client_order_id) ON DELETE RESTRICT,
+    UNIQUE(exchange, market_type, policy_version, policy_hash),
+    UNIQUE(id, exchange, market_type),
+    UNIQUE(id, capability_snapshot_id, exchange, market_type)
+);
+
+ALTER TABLE qd_submission_attempts
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_event_seq BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS venue_capability_snapshot_id UUID,
+    ADD COLUMN IF NOT EXISTS recovery_policy_snapshot_id UUID,
+    ADD COLUMN IF NOT EXISTS client_id_algorithm_version VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS broker_prefix_normalization_version VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS broker_prefix VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS canonical_contract_version VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS recovery_evidence_hash VARCHAR(128) NOT NULL DEFAULT '';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_submission_attempts_version_sequence'
+    ) THEN
+        ALTER TABLE qd_submission_attempts
+            ADD CONSTRAINT chk_qd_submission_attempts_version_sequence
+            CHECK (version >= 0 AND last_event_seq >= 0 AND version = last_event_seq) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'uq_qd_submission_attempts_id_economic_order'
+    ) THEN
+        ALTER TABLE qd_submission_attempts
+            ADD CONSTRAINT uq_qd_submission_attempts_id_economic_order
+            UNIQUE (id, economic_order_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_submission_attempts_capability_scope') THEN
+        ALTER TABLE qd_submission_attempts ADD CONSTRAINT fk_qd_submission_attempts_capability_scope
+            FOREIGN KEY(venue_capability_snapshot_id, exchange, market_type)
+            REFERENCES qd_venue_capability_snapshots(id, exchange, market_type) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_submission_attempts_policy_scope') THEN
+        ALTER TABLE qd_submission_attempts ADD CONSTRAINT fk_qd_submission_attempts_policy_scope
+            FOREIGN KEY(recovery_policy_snapshot_id, exchange, market_type)
+            REFERENCES qd_submission_recovery_policy_snapshots(id, exchange, market_type) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_submission_attempts_policy_capability_scope') THEN
+        ALTER TABLE qd_submission_attempts ADD CONSTRAINT fk_qd_submission_attempts_policy_capability_scope
+            FOREIGN KEY(recovery_policy_snapshot_id, venue_capability_snapshot_id, exchange, market_type)
+            REFERENCES qd_submission_recovery_policy_snapshots(id, capability_snapshot_id, exchange, market_type) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_qd_submission_attempts_canonical_snapshot') THEN
+        ALTER TABLE qd_submission_attempts ADD CONSTRAINT chk_qd_submission_attempts_canonical_snapshot CHECK (
+            (canonical_contract_version IS NULL
+                AND venue_capability_snapshot_id IS NULL AND recovery_policy_snapshot_id IS NULL
+                AND client_id_algorithm_version IS NULL
+                AND broker_prefix_normalization_version IS NULL
+                AND broker_prefix IS NULL)
+            OR (canonical_contract_version = 'attempt-contract-v1'
+                AND venue_capability_snapshot_id IS NOT NULL AND recovery_policy_snapshot_id IS NOT NULL
+                AND client_id_algorithm_version IS NOT NULL AND client_id_algorithm_version <> ''
+                AND broker_prefix_normalization_version IS NOT NULL AND broker_prefix_normalization_version <> ''
+                AND broker_prefix IS NOT NULL AND broker_prefix <> '')
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_qd_submission_attempts_capability_snapshot'
+    ) THEN
+        ALTER TABLE qd_submission_attempts
+            ADD CONSTRAINT fk_qd_submission_attempts_capability_snapshot
+            FOREIGN KEY (venue_capability_snapshot_id)
+            REFERENCES qd_venue_capability_snapshots(id) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_qd_submission_attempts_recovery_policy_snapshot'
+    ) THEN
+        ALTER TABLE qd_submission_attempts
+            ADD CONSTRAINT fk_qd_submission_attempts_recovery_policy_snapshot
+            FOREIGN KEY (recovery_policy_snapshot_id)
+            REFERENCES qd_submission_recovery_policy_snapshots(id) ON DELETE RESTRICT NOT VALID;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS qd_submission_attempt_state_events (
+    id UUID PRIMARY KEY,
+    attempt_id UUID NOT NULL,
+    economic_order_id UUID NOT NULL REFERENCES qd_economic_orders(id) ON DELETE RESTRICT,
+    event_seq BIGINT NOT NULL CHECK (event_seq >= 1),
+    expected_version BIGINT NOT NULL CHECK (expected_version >= 0),
+    resulting_version BIGINT NOT NULL CHECK (resulting_version = expected_version + 1),
+    from_state VARCHAR(20) CHECK (from_state IS NULL OR from_state IN ('READY','SUBMITTING','ACKED','UNKNOWN','CONFIRMED_ABSENT','REJECTED')),
+    to_state VARCHAR(20) NOT NULL CHECK (to_state IN ('READY','SUBMITTING','ACKED','UNKNOWN','CONFIRMED_ABSENT','REJECTED')),
+    reason_code VARCHAR(64) NOT NULL CHECK (reason_code <> ''),
+    actor_type VARCHAR(16) NOT NULL CHECK (actor_type <> ''),
+    correlation_id VARCHAR(160) NOT NULL DEFAULT '',
+    idempotency_key VARCHAR(180) NOT NULL CHECK (idempotency_key <> ''),
+    event_fingerprint VARCHAR(128) NOT NULL CHECK (event_fingerprint <> ''),
+    evidence_hash VARCHAR(128) NOT NULL DEFAULT '',
+    canonical_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (attempt_id, economic_order_id)
+        REFERENCES qd_submission_attempts(id, economic_order_id) ON DELETE RESTRICT,
+    UNIQUE(attempt_id, event_seq),
+    UNIQUE(attempt_id, idempotency_key),
+    UNIQUE(attempt_id, event_fingerprint)
+);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_submission_attempt_state_events_sequence_version'
+    ) THEN
+        ALTER TABLE qd_submission_attempt_state_events
+            ADD CONSTRAINT chk_qd_submission_attempt_state_events_sequence_version
+            CHECK (event_seq = resulting_version);
+    END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_qd_submission_attempt_state_events_order
+    ON qd_submission_attempt_state_events(economic_order_id, occurred_at);
+
+CREATE TABLE IF NOT EXISTS qd_ledger_valuation_evidence (
+    id UUID PRIMARY KEY,
+    fill_event_id UUID NOT NULL REFERENCES qd_exchange_fill_events(id) ON DELETE RESTRICT,
+    asset VARCHAR(20) NOT NULL CHECK (asset <> '' AND asset = upper(asset)),
+    valuation_ccy VARCHAR(20) NOT NULL CHECK (valuation_ccy <> '' AND valuation_ccy = upper(valuation_ccy)),
+    price NUMERIC(38,18) NOT NULL CHECK (price > 0),
+    evidence_source VARCHAR(32) NOT NULL CHECK (evidence_source IN ('VENUE','ORACLE','MANUAL_APPROVED','IDENTITY')),
+    policy_version VARCHAR(64) NOT NULL CHECK (policy_version <> ''),
+    observed_at TIMESTAMPTZ NOT NULL,
+    payload_hash VARCHAR(128) NOT NULL CHECK (payload_hash <> ''),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (
+        (evidence_source = 'IDENTITY' AND asset = valuation_ccy AND price = 1)
+        OR (evidence_source <> 'IDENTITY' AND asset <> valuation_ccy)
+    ),
+    UNIQUE(id, fill_event_id, asset, valuation_ccy),
+    UNIQUE(fill_event_id, asset, valuation_ccy, evidence_source, policy_version, observed_at, payload_hash)
+);
+
+ALTER TABLE qd_exchange_fill_events
+    ADD COLUMN IF NOT EXISTS quote_quantity_origin VARCHAR(16),
+    ADD COLUMN IF NOT EXISTS quote_quantity_policy_version VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS quote_quantity_evidence_hash VARCHAR(128) NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS fee_summary_state VARCHAR(24) NOT NULL DEFAULT 'UNSPECIFIED';
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_exchange_fill_events_quote_quantity_origin'
+    ) THEN
+        ALTER TABLE qd_exchange_fill_events
+            ADD CONSTRAINT chk_qd_exchange_fill_events_quote_quantity_origin
+            CHECK (
+                (quote_quantity_origin IS NULL AND quote_quantity_policy_version IS NULL AND quote_quantity_evidence_hash = '')
+                OR (quote_quantity_origin = 'VENUE' AND quote_quantity_policy_version IS NULL
+                    AND quote_quantity_evidence_hash <> '')
+                OR (quote_quantity_origin = 'DERIVED' AND quote_quantity_policy_version IS NOT NULL
+                    AND quote_quantity_policy_version <> '' AND quote_quantity_evidence_hash <> '')
+            ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_exchange_fill_events_fee_summary_state'
+    ) THEN
+        ALTER TABLE qd_exchange_fill_events
+            ADD CONSTRAINT chk_qd_exchange_fill_events_fee_summary_state
+            CHECK (
+                fee_summary_state = 'UNSPECIFIED'
+                OR (fee_summary_state IN ('NONE','MULTI_COMPONENT')
+                    AND fee_amount = 0 AND fee_asset = '' AND fee_quote_amount IS NULL)
+                OR fee_summary_state = 'SINGLE_COMPONENT'
+            ) NOT VALID;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS qd_exchange_fill_fee_components (
+    fill_event_id UUID NOT NULL REFERENCES qd_exchange_fill_events(id) ON DELETE RESTRICT,
+    fee_seq INTEGER NOT NULL CHECK (fee_seq >= 1),
+    asset VARCHAR(20) NOT NULL CHECK (asset <> '' AND asset = upper(asset)),
+    amount NUMERIC(38,18) NOT NULL CHECK (amount > 0),
+    fee_quote_amount NUMERIC(38,18),
+    valuation_ccy VARCHAR(20),
+    valuation_evidence_id UUID,
+    raw_component_hash VARCHAR(128) NOT NULL CHECK (raw_component_hash <> ''),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(fill_event_id, fee_seq),
+    UNIQUE(fill_event_id, raw_component_hash),
+    FOREIGN KEY(valuation_evidence_id, fill_event_id, asset, valuation_ccy)
+        REFERENCES qd_ledger_valuation_evidence(id, fill_event_id, asset, valuation_ccy) ON DELETE RESTRICT,
+    CHECK (valuation_ccy IS NULL OR valuation_ccy = upper(valuation_ccy)),
+    CHECK (
+        (fee_quote_amount IS NULL AND valuation_evidence_id IS NULL AND valuation_ccy IS NULL)
+        OR (fee_quote_amount IS NOT NULL AND fee_quote_amount >= 0
+            AND valuation_evidence_id IS NOT NULL AND valuation_ccy IS NOT NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_qd_exchange_fill_fee_components_asset
+    ON qd_exchange_fill_fee_components(asset, fill_event_id);
+
+
+-- Phase 0 PR-06: immutable fill-ledger storage guards.
+-- This migration is expand-only. It does not wire any runtime trading path.
+
+ALTER TABLE qd_ledger_transactions
+    ADD COLUMN IF NOT EXISTS account_scope VARCHAR(160),
+    ADD COLUMN IF NOT EXISTS source_fingerprint VARCHAR(128);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_ledger_transactions_canonical_scope'
+    ) THEN
+        ALTER TABLE qd_ledger_transactions
+            ADD CONSTRAINT chk_qd_ledger_transactions_canonical_scope
+            CHECK (account_scope IS NOT NULL AND btrim(account_scope) <> '') NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_ledger_transactions_source_fingerprint'
+    ) THEN
+        ALTER TABLE qd_ledger_transactions
+            ADD CONSTRAINT chk_qd_ledger_transactions_source_fingerprint
+            CHECK (source_fingerprint IS NOT NULL AND source_fingerprint ~ '^[0-9a-f]{64}$') NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_ledger_entries_book_shape'
+    ) THEN
+        ALTER TABLE qd_ledger_entries
+            ADD CONSTRAINT chk_qd_ledger_entries_book_shape
+            CHECK (
+                (book = 'QUANTITY' AND value_in_valuation_ccy IS NULL)
+                OR (book = 'MONETARY' AND value_in_valuation_ccy IS NOT NULL)
+            ) NOT VALID;
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_ledger_transactions_source_fingerprint
+    ON qd_ledger_transactions(source_fingerprint)
+    WHERE source_fingerprint IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION qd_reject_immutable_fill_ledger_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'immutable fill-ledger facts cannot be %', TG_OP
+        USING ERRCODE = '55000';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION qd_assert_immutable_ledger_transaction_balanced()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    ledger_transaction_id UUID;
+BEGIN
+    IF TG_TABLE_NAME = 'qd_ledger_entries' THEN
+        ledger_transaction_id := NEW.transaction_id;
+    ELSE
+        ledger_transaction_id := NEW.id;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM qd_ledger_entries
+        WHERE transaction_id = ledger_transaction_id
+    ) THEN
+        RAISE EXCEPTION 'ledger transaction % requires entries before commit', ledger_transaction_id
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM qd_ledger_entries
+        WHERE transaction_id = ledger_transaction_id
+        GROUP BY book, asset
+        HAVING SUM(signed_amount) <> 0
+    ) THEN
+        RAISE EXCEPTION 'ledger transaction % is unbalanced by book and asset', ledger_transaction_id
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM qd_ledger_entries
+        WHERE transaction_id = ledger_transaction_id
+          AND book = 'MONETARY'
+        GROUP BY book
+        HAVING SUM(value_in_valuation_ccy) <> 0
+    ) THEN
+        RAISE EXCEPTION 'ledger transaction % is monetarily unbalanced', ledger_transaction_id
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_qd_exchange_fill_events_append_only'
+          AND tgrelid = 'qd_exchange_fill_events'::regclass
+    ) THEN
+        CREATE TRIGGER trg_qd_exchange_fill_events_append_only
+            BEFORE UPDATE OR DELETE ON qd_exchange_fill_events
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_immutable_fill_ledger_mutation();
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_qd_exchange_fill_fee_components_append_only'
+          AND tgrelid = 'qd_exchange_fill_fee_components'::regclass
+    ) THEN
+        CREATE TRIGGER trg_qd_exchange_fill_fee_components_append_only
+            BEFORE UPDATE OR DELETE ON qd_exchange_fill_fee_components
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_immutable_fill_ledger_mutation();
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_qd_ledger_valuation_evidence_append_only'
+          AND tgrelid = 'qd_ledger_valuation_evidence'::regclass
+    ) THEN
+        CREATE TRIGGER trg_qd_ledger_valuation_evidence_append_only
+            BEFORE UPDATE OR DELETE ON qd_ledger_valuation_evidence
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_immutable_fill_ledger_mutation();
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_qd_ledger_transactions_append_only'
+          AND tgrelid = 'qd_ledger_transactions'::regclass
+    ) THEN
+        CREATE TRIGGER trg_qd_ledger_transactions_append_only
+            BEFORE UPDATE OR DELETE ON qd_ledger_transactions
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_immutable_fill_ledger_mutation();
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_qd_ledger_entries_append_only'
+          AND tgrelid = 'qd_ledger_entries'::regclass
+    ) THEN
+        CREATE TRIGGER trg_qd_ledger_entries_append_only
+            BEFORE UPDATE OR DELETE ON qd_ledger_entries
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_immutable_fill_ledger_mutation();
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'ctrg_qd_ledger_transactions_balanced'
+          AND tgrelid = 'qd_ledger_transactions'::regclass
+    ) THEN
+        CREATE CONSTRAINT TRIGGER ctrg_qd_ledger_transactions_balanced
+            AFTER INSERT ON qd_ledger_transactions
+            DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW EXECUTE FUNCTION qd_assert_immutable_ledger_transaction_balanced();
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'ctrg_qd_ledger_entries_balanced'
+          AND tgrelid = 'qd_ledger_entries'::regclass
+    ) THEN
+        CREATE CONSTRAINT TRIGGER ctrg_qd_ledger_entries_balanced
+            AFTER INSERT ON qd_ledger_entries
+            DEFERRABLE INITIALLY DEFERRED
+            FOR EACH ROW EXECUTE FUNCTION qd_assert_immutable_ledger_transaction_balanced();
+    END IF;
+END $$;
+
+-- Phase 0 wave 2: hard-risk enforcement and outbox/projection persistence.
+-- Expand-only. No runtime path is enabled by this migration.
+
+-- qd_order_commands does not itself carry instrument/market facts.  This
+-- non-partial unique index makes its command-level account scope referenceable
+-- by an immutable risk decision without inventing those missing facts.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_order_commands_command_scope
+    ON qd_order_commands(id, tenant_id, credential_id, account_scope);
+
+CREATE TABLE IF NOT EXISTS qd_risk_policy_snapshots (
+    id UUID PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    valuation_currency VARCHAR(20) NOT NULL,
+    policy_version VARCHAR(96) NOT NULL,
+    policy_hash VARCHAR(64) NOT NULL CHECK (policy_hash ~ '^[0-9a-f]{64}$'),
+    max_gross_notional NUMERIC(38,18) NOT NULL CHECK (max_gross_notional >= 0),
+    max_net_notional NUMERIC(38,18) NOT NULL CHECK (max_net_notional >= 0),
+    max_instrument_notional NUMERIC(38,18) NOT NULL CHECK (max_instrument_notional >= 0),
+    max_leverage NUMERIC(38,18) NOT NULL CHECK (max_leverage > 0),
+    minimum_available_margin NUMERIC(38,18) NOT NULL CHECK (minimum_available_margin >= 0),
+    max_daily_loss NUMERIC(38,18) NOT NULL CHECK (max_daily_loss >= 0),
+    max_drawdown_ratio NUMERIC(38,18) NOT NULL CHECK (max_drawdown_ratio >= 0 AND max_drawdown_ratio <= 1),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    UNIQUE(tenant_id, credential_id, account_scope, instrument_id, market_type, policy_version, policy_hash)
+);
+
+CREATE TABLE IF NOT EXISTS qd_risk_input_snapshots (
+    id UUID PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    input_version VARCHAR(96) NOT NULL,
+    input_hash VARCHAR(64) NOT NULL CHECK (input_hash ~ '^[0-9a-f]{64}$'),
+    reconciliation_health VARCHAR(16) NOT NULL CHECK (reconciliation_health IN ('HEALTHY','DEGRADED','UNHEALTHY')),
+    market_data_health VARCHAR(16) NOT NULL CHECK (market_data_health IN ('FRESH','STALE','UNKNOWN')),
+    account_facts_verified BOOLEAN NOT NULL,
+    global_kill_switch_version BIGINT NOT NULL CHECK (global_kill_switch_version >= 0),
+    global_kill_switch_enabled BOOLEAN NOT NULL,
+    global_kill_switch_mode VARCHAR(32),
+    account_kill_switch_version BIGINT NOT NULL CHECK (account_kill_switch_version >= 0),
+    account_kill_switch_enabled BOOLEAN NOT NULL,
+    account_kill_switch_mode VARCHAR(32),
+    strategy_kill_switch_version BIGINT NOT NULL CHECK (strategy_kill_switch_version >= 0),
+    strategy_kill_switch_enabled BOOLEAN NOT NULL,
+    strategy_kill_switch_mode VARCHAR(32),
+    gross_notional NUMERIC(38,18) NOT NULL CHECK (gross_notional >= 0),
+    net_notional NUMERIC(38,18) NOT NULL,
+    instrument_notional NUMERIC(38,18) NOT NULL CHECK (instrument_notional >= 0),
+    available_margin NUMERIC(38,18) NOT NULL CHECK (available_margin >= 0),
+    equity NUMERIC(38,18) NOT NULL CHECK (equity > 0),
+    peak_equity NUMERIC(38,18) NOT NULL CHECK (peak_equity >= equity),
+    daily_realized_pnl NUMERIC(38,18) NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    UNIQUE(tenant_id, credential_id, account_scope, instrument_id, market_type, input_version, input_hash)
+);
+
+CREATE TABLE IF NOT EXISTS qd_risk_decisions (
+    id UUID PRIMARY KEY,
+    command_id UUID NOT NULL REFERENCES qd_order_commands(id) ON DELETE RESTRICT,
+    economic_order_id UUID NOT NULL REFERENCES qd_economic_orders(id) ON DELETE RESTRICT,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    action VARCHAR(20) NOT NULL CHECK (action IN ('OPEN','INCREASE','REDUCE','CLOSE','CANCEL','EMERGENCY_CLOSE','PROTECTION')),
+    actor_type VARCHAR(16) NOT NULL CHECK (actor_type IN ('STRATEGY','HUMAN','AGENT','MCP','GRID','PROTECTION','ADMIN')),
+    actor_id VARCHAR(160) NOT NULL,
+    risk_effect VARCHAR(16) NOT NULL CHECK (risk_effect IN ('INCREASE_RISK','REDUCE_RISK','NEUTRAL')),
+    policy_snapshot_id UUID NOT NULL,
+    risk_input_snapshot_id UUID NOT NULL,
+    decision VARCHAR(32) NOT NULL CHECK (decision IN ('ALLOW','DENY','ALLOW_RISK_REDUCING_ONLY','RECONCILIATION_REQUIRED')),
+    decision_fingerprint VARCHAR(64) NOT NULL CHECK (decision_fingerprint ~ '^[0-9a-f]{64}$'),
+    rejection_codes JSONB NOT NULL CHECK (jsonb_typeof(rejection_codes) = 'array'),
+    projected_gross_notional NUMERIC(38,18) NOT NULL,
+    projected_net_notional NUMERIC(38,18) NOT NULL,
+    projected_instrument_notional NUMERIC(38,18) NOT NULL,
+    projected_available_margin NUMERIC(38,18) NOT NULL,
+    projected_leverage NUMERIC(38,18) NOT NULL CHECK (projected_leverage >= 0),
+    projected_daily_loss NUMERIC(38,18) NOT NULL CHECK (projected_daily_loss >= 0),
+    projected_drawdown_ratio NUMERIC(38,18) NOT NULL CHECK (projected_drawdown_ratio >= 0 AND projected_drawdown_ratio <= 1),
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
+    observed_at TIMESTAMPTZ NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(decision_fingerprint),
+    UNIQUE(id, command_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    FOREIGN KEY(command_id, tenant_id, credential_id, account_scope)
+        REFERENCES qd_order_commands(id, tenant_id, credential_id, account_scope) ON DELETE RESTRICT,
+    FOREIGN KEY(economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_economic_orders(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT,
+    FOREIGN KEY(policy_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_risk_policy_snapshots(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT,
+    FOREIGN KEY(risk_input_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+        REFERENCES qd_risk_input_snapshots(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT
+);
+
+ALTER TABLE qd_risk_reservations
+    ADD COLUMN IF NOT EXISTS decision_id UUID,
+    ADD COLUMN IF NOT EXISTS instrument_id VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS market_type VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS action VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS policy_snapshot_id UUID,
+    ADD COLUMN IF NOT EXISTS risk_input_snapshot_id UUID,
+    ADD COLUMN IF NOT EXISTS enforcement_contract_version VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS reserved_gross_notional NUMERIC(38,18),
+    ADD COLUMN IF NOT EXISTS reserved_net_notional NUMERIC(38,18),
+    ADD COLUMN IF NOT EXISTS reserved_instrument_notional NUMERIC(38,18),
+    ADD COLUMN IF NOT EXISTS correlation_id VARCHAR(160);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_risk_reservations_enforcement_decision
+    ON qd_risk_reservations(decision_id) WHERE decision_id IS NOT NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_qd_risk_reservations_enforcement_complete') THEN
+        ALTER TABLE qd_risk_reservations ADD CONSTRAINT chk_qd_risk_reservations_enforcement_complete CHECK (
+            (
+                decision_id IS NULL AND instrument_id IS NULL AND market_type IS NULL
+                AND action IS NULL AND policy_snapshot_id IS NULL
+                AND risk_input_snapshot_id IS NULL AND enforcement_contract_version IS NULL
+                AND reserved_gross_notional IS NULL AND reserved_net_notional IS NULL
+                AND reserved_instrument_notional IS NULL AND correlation_id IS NULL
+            ) OR (
+                decision_id IS NOT NULL AND economic_order_id IS NOT NULL
+                AND instrument_id IS NOT NULL AND market_type IS NOT NULL AND action IS NOT NULL
+                AND policy_snapshot_id IS NOT NULL AND risk_input_snapshot_id IS NOT NULL
+                AND enforcement_contract_version = 'hard-risk-enforcement-v1'
+                AND reserved_gross_notional IS NOT NULL AND reserved_gross_notional >= 0
+                AND reserved_net_notional IS NOT NULL
+                AND reserved_instrument_notional IS NOT NULL AND reserved_instrument_notional >= 0
+                AND correlation_id IS NOT NULL AND correlation_id <> ''
+            )
+        ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_risk_reservations_enforcement_decision') THEN
+        ALTER TABLE qd_risk_reservations ADD CONSTRAINT fk_qd_risk_reservations_enforcement_decision
+            FOREIGN KEY(decision_id, command_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+            REFERENCES qd_risk_decisions(id, command_id, economic_order_id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_risk_reservations_enforcement_policy_snapshot') THEN
+        ALTER TABLE qd_risk_reservations ADD CONSTRAINT fk_qd_risk_reservations_enforcement_policy_snapshot
+            FOREIGN KEY(policy_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+            REFERENCES qd_risk_policy_snapshots(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT NOT VALID;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_risk_reservations_enforcement_input_snapshot') THEN
+        ALTER TABLE qd_risk_reservations ADD CONSTRAINT fk_qd_risk_reservations_enforcement_input_snapshot
+            FOREIGN KEY(risk_input_snapshot_id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+            REFERENCES qd_risk_input_snapshots(id, tenant_id, credential_id, account_scope, instrument_id, market_type) ON DELETE RESTRICT NOT VALID;
+    END IF;
+END $$;
+
+ALTER TABLE qd_transactional_outbox
+    ADD COLUMN IF NOT EXISTS schema_version VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS payload_hash VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS event_fingerprint VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS lease_fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (lease_fencing_token >= 0),
+    ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+    ADD COLUMN IF NOT EXISTS last_error VARCHAR(512);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_transactional_outbox_fingerprint
+    ON qd_transactional_outbox(event_fingerprint) WHERE event_fingerprint IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_transactional_outbox_canonical_identity
+    ON qd_transactional_outbox(aggregate_type, aggregate_id, aggregate_version, event_type, schema_version)
+    WHERE schema_version IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS qd_projection_generations (
+    id UUID PRIMARY KEY,
+    consumer_name VARCHAR(160) NOT NULL,
+    build_fingerprint VARCHAR(64) NOT NULL CHECK (build_fingerprint ~ '^[0-9a-f]{64}$'),
+    state VARCHAR(16) NOT NULL CHECK (state IN ('BUILDING','READY','FAILED')),
+    source_high_watermark BIGINT NOT NULL CHECK (source_high_watermark >= 0),
+    processed_high_watermark BIGINT NOT NULL DEFAULT -1 CHECK (processed_high_watermark >= -1),
+    expected_event_count BIGINT NOT NULL DEFAULT 0 CHECK (expected_event_count >= 0),
+    applied_event_count BIGINT NOT NULL DEFAULT 0 CHECK (applied_event_count >= 0),
+    is_current BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    promoted_at TIMESTAMPTZ,
+    failure_reason VARCHAR(512),
+    UNIQUE(consumer_name, build_fingerprint),
+    CHECK ((state = 'BUILDING' AND completed_at IS NULL AND promoted_at IS NULL AND failure_reason IS NULL)
+        OR (state = 'READY' AND completed_at IS NOT NULL AND failure_reason IS NULL)
+        OR (state = 'FAILED' AND completed_at IS NULL AND promoted_at IS NULL AND failure_reason IS NOT NULL)),
+    CHECK (NOT is_current OR state = 'READY')
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_projection_generations_current_consumer
+    ON qd_projection_generations(consumer_name) WHERE is_current;
+
+CREATE TABLE IF NOT EXISTS qd_projection_generation_events (
+    generation_id UUID NOT NULL REFERENCES qd_projection_generations(id) ON DELETE RESTRICT,
+    source_offset BIGINT NOT NULL CHECK (source_offset >= 0),
+    event_id UUID NOT NULL REFERENCES qd_transactional_outbox(event_id) ON DELETE RESTRICT,
+    payload_hash VARCHAR(64) NOT NULL CHECK (payload_hash ~ '^[0-9a-f]{64}$'),
+    applied_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (generation_id, source_offset),
+    UNIQUE(generation_id, event_id)
+);
+
+CREATE TABLE IF NOT EXISTS qd_projection_checkpoints (
+    id UUID PRIMARY KEY,
+    generation_id UUID NOT NULL REFERENCES qd_projection_generations(id) ON DELETE RESTRICT,
+    consumer_name VARCHAR(160) NOT NULL,
+    aggregate_type VARCHAR(64) NOT NULL,
+    aggregate_id UUID NOT NULL,
+    last_applied_version BIGINT NOT NULL DEFAULT -1 CHECK (last_applied_version >= -1),
+    last_event_id UUID,
+    last_payload_hash VARCHAR(64),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(generation_id, consumer_name, aggregate_type, aggregate_id),
+    CHECK ((last_applied_version = -1 AND last_event_id IS NULL AND last_payload_hash IS NULL) OR (last_applied_version >= 0 AND last_event_id IS NOT NULL AND last_payload_hash ~ '^[0-9a-f]{64}$'))
+);
+
+CREATE OR REPLACE FUNCTION qd_reject_wave2_risk_fact_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    RAISE EXCEPTION 'immutable wave2 risk fact cannot be %', TG_OP USING ERRCODE = '55000';
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_guard_risk_reservation_enforcement_update()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    -- Existing non-enforcement reservations keep their current repository
+    -- contract.  Once the enforcement facts exist, all later changes are
+    -- constrained by the canonical state/version transition below.
+    IF OLD.enforcement_contract_version IS NULL THEN
+        RETURN NEW;
+    END IF;
+    IF ROW(NEW.id,NEW.command_id,NEW.economic_order_id,NEW.tenant_id,NEW.credential_id,NEW.account_scope,NEW.reservation_kind,NEW.currency,NEW.reserved_notional,NEW.reserved_margin,NEW.reserved_position_qty,NEW.limits_snapshot_json,NEW.risk_input_hash,NEW.decision_id,NEW.instrument_id,NEW.market_type,NEW.action,NEW.policy_snapshot_id,NEW.risk_input_snapshot_id,NEW.enforcement_contract_version,NEW.reserved_gross_notional,NEW.reserved_net_notional,NEW.reserved_instrument_notional,NEW.correlation_id)
+       IS DISTINCT FROM ROW(OLD.id,OLD.command_id,OLD.economic_order_id,OLD.tenant_id,OLD.credential_id,OLD.account_scope,OLD.reservation_kind,OLD.currency,OLD.reserved_notional,OLD.reserved_margin,OLD.reserved_position_qty,OLD.limits_snapshot_json,OLD.risk_input_hash,OLD.decision_id,OLD.instrument_id,OLD.market_type,OLD.action,OLD.policy_snapshot_id,OLD.risk_input_snapshot_id,OLD.enforcement_contract_version,OLD.reserved_gross_notional,OLD.reserved_net_notional,OLD.reserved_instrument_notional,OLD.correlation_id) THEN
+        RAISE EXCEPTION 'risk reservation immutable facts cannot change' USING ERRCODE = '55000';
+    END IF;
+    IF NEW.state = OLD.state OR NEW.version <> OLD.version + 1 THEN
+        RAISE EXCEPTION 'risk reservation update requires one state transition and version increment' USING ERRCODE = '55000';
+    END IF;
+    IF NOT ((OLD.state = 'ACTIVE' AND NEW.state IN ('CONSUMED','RELEASED','EXPIRED'))) THEN
+        RAISE EXCEPTION 'risk reservation state transition is invalid' USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_guard_transactional_outbox_immutable_facts()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    IF ROW(NEW.event_id, NEW.aggregate_type, NEW.aggregate_id, NEW.aggregate_version,
+           NEW.event_type, NEW.payload_json, NEW.schema_version, NEW.payload_hash,
+           NEW.event_fingerprint)
+       IS DISTINCT FROM ROW(OLD.event_id, OLD.aggregate_type, OLD.aggregate_id,
+           OLD.aggregate_version, OLD.event_type, OLD.payload_json, OLD.schema_version,
+           OLD.payload_hash, OLD.event_fingerprint) THEN
+        RAISE EXCEPTION 'transactional outbox immutable facts cannot change' USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_reject_transactional_outbox_delete()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    RAISE EXCEPTION 'transactional outbox facts are append-only' USING ERRCODE = '55000';
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_reject_projection_generation_event_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    RAISE EXCEPTION 'projection generation event facts are append-only' USING ERRCODE = '55000';
+END; $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_risk_policy_snapshots_append_only') THEN CREATE TRIGGER trg_qd_risk_policy_snapshots_append_only BEFORE UPDATE OR DELETE ON qd_risk_policy_snapshots FOR EACH ROW EXECUTE FUNCTION qd_reject_wave2_risk_fact_mutation(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_risk_input_snapshots_append_only') THEN CREATE TRIGGER trg_qd_risk_input_snapshots_append_only BEFORE UPDATE OR DELETE ON qd_risk_input_snapshots FOR EACH ROW EXECUTE FUNCTION qd_reject_wave2_risk_fact_mutation(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_risk_decisions_append_only') THEN CREATE TRIGGER trg_qd_risk_decisions_append_only BEFORE UPDATE OR DELETE ON qd_risk_decisions FOR EACH ROW EXECUTE FUNCTION qd_reject_wave2_risk_fact_mutation(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_risk_reservations_enforcement_guard') THEN CREATE TRIGGER trg_qd_risk_reservations_enforcement_guard BEFORE UPDATE ON qd_risk_reservations FOR EACH ROW EXECUTE FUNCTION qd_guard_risk_reservation_enforcement_update(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_transactional_outbox_immutable_facts') THEN CREATE TRIGGER trg_qd_transactional_outbox_immutable_facts BEFORE UPDATE ON qd_transactional_outbox FOR EACH ROW EXECUTE FUNCTION qd_guard_transactional_outbox_immutable_facts(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_transactional_outbox_append_only') THEN CREATE TRIGGER trg_qd_transactional_outbox_append_only BEFORE DELETE ON qd_transactional_outbox FOR EACH ROW EXECUTE FUNCTION qd_reject_transactional_outbox_delete(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_projection_generation_events_append_only') THEN CREATE TRIGGER trg_qd_projection_generation_events_append_only BEFORE UPDATE OR DELETE ON qd_projection_generation_events FOR EACH ROW EXECUTE FUNCTION qd_reject_projection_generation_event_mutation(); END IF;
+END $$;
+
+-- Phase 0 wave 3: immutable shadow-comparison persistence only.
+-- Expand-only.  No runtime consumer, trading decision, or read cutover is enabled.
+
+CREATE TABLE IF NOT EXISTS qd_shadow_comparison_runs (
+    id UUID PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    instrument_id VARCHAR(100) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    comparison_contract_version VARCHAR(64) NOT NULL CHECK (comparison_contract_version = 'shadow-diff-v1'),
+    legacy_source_identity VARCHAR(32) NOT NULL,
+    legacy_source_version VARCHAR(64) NOT NULL,
+    legacy_source_fingerprint VARCHAR(64) NOT NULL CHECK (legacy_source_fingerprint ~ '^[0-9a-f]{64}$'),
+    candidate_source_fingerprint VARCHAR(64) NOT NULL CHECK (candidate_source_fingerprint ~ '^[0-9a-f]{64}$'),
+    candidate_generation_id UUID NOT NULL REFERENCES qd_projection_generations(id) ON DELETE RESTRICT,
+    candidate_consumer_name VARCHAR(160) NOT NULL,
+    candidate_generation_build_fingerprint VARCHAR(64) NOT NULL CHECK (candidate_generation_build_fingerprint ~ '^[0-9a-f]{64}$'),
+    candidate_checkpoint_watermark BIGINT NOT NULL CHECK (candidate_checkpoint_watermark >= 0),
+    as_of TIMESTAMPTZ NOT NULL,
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
+    tolerance_policy_version VARCHAR(64) NOT NULL,
+    quantity_absolute NUMERIC(38,18) NOT NULL CHECK (quantity_absolute >= 0),
+    quantity_relative NUMERIC(38,18) NOT NULL CHECK (quantity_relative >= 0),
+    monetary_absolute NUMERIC(38,18) NOT NULL CHECK (monetary_absolute >= 0),
+    monetary_relative NUMERIC(38,18) NOT NULL CHECK (monetary_relative >= 0),
+    ratio_absolute NUMERIC(38,18) NOT NULL CHECK (ratio_absolute >= 0),
+    tolerance_policy_fingerprint VARCHAR(64) NOT NULL CHECK (tolerance_policy_fingerprint ~ '^[0-9a-f]{64}$'),
+    build_fingerprint VARCHAR(64) NOT NULL CHECK (build_fingerprint ~ '^[0-9a-f]{64}$'),
+    replay_fingerprint VARCHAR(64) CHECK (replay_fingerprint ~ '^[0-9a-f]{64}$'),
+    state VARCHAR(16) NOT NULL CHECK (state IN ('BUILDING','COMPLETE','FAILED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    failure_reason VARCHAR(512),
+    UNIQUE(tenant_id, credential_id, account_scope, instrument_id, market_type, build_fingerprint),
+    CHECK ((state = 'BUILDING' AND replay_fingerprint IS NULL AND completed_at IS NULL AND failure_reason IS NULL)
+        OR (state = 'COMPLETE' AND replay_fingerprint IS NOT NULL AND completed_at IS NOT NULL AND failure_reason IS NULL)
+        OR (state = 'FAILED' AND replay_fingerprint IS NULL AND completed_at IS NOT NULL AND failure_reason IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS qd_shadow_diff_facts (
+    id UUID PRIMARY KEY,
+    run_id UUID NOT NULL REFERENCES qd_shadow_comparison_runs(id) ON DELETE RESTRICT,
+    fact_name VARCHAR(100) NOT NULL,
+    diff_kind VARCHAR(32) NOT NULL CHECK (diff_kind IN ('MISSING_LEGACY','MISSING_CANDIDATE','VALUE_MISMATCH','VERSION_MISMATCH','STALE_SOURCE','UNSUPPORTED_FACT','SCOPE_MISMATCH','VALUATION_REQUIRED')),
+    severity VARCHAR(16) NOT NULL CHECK (severity IN ('INFO','WARNING','BLOCKING')),
+    legacy_value NUMERIC(38,18),
+    legacy_value_kind VARCHAR(16) CHECK (legacy_value_kind IN ('QUANTITY','MONETARY','RATIO')),
+    legacy_asset VARCHAR(24),
+    candidate_value NUMERIC(38,18),
+    candidate_value_kind VARCHAR(16) CHECK (candidate_value_kind IN ('QUANTITY','MONETARY','RATIO')),
+    candidate_asset VARCHAR(24),
+    detail VARCHAR(160) NOT NULL,
+    diff_fingerprint VARCHAR(64) NOT NULL CHECK (diff_fingerprint ~ '^[0-9a-f]{64}$'),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(run_id, diff_fingerprint),
+    CHECK ((legacy_value IS NULL AND legacy_value_kind IS NULL AND legacy_asset IS NULL)
+        OR (legacy_value IS NOT NULL AND legacy_value_kind IS NOT NULL
+            AND ((legacy_value_kind = 'RATIO' AND legacy_asset IS NULL)
+                OR (legacy_value_kind IN ('QUANTITY','MONETARY') AND legacy_asset IS NOT NULL)))),
+    CHECK ((candidate_value IS NULL AND candidate_value_kind IS NULL AND candidate_asset IS NULL)
+        OR (candidate_value IS NOT NULL AND candidate_value_kind IS NOT NULL
+            AND ((candidate_value_kind = 'RATIO' AND candidate_asset IS NULL)
+                OR (candidate_value_kind IN ('QUANTITY','MONETARY') AND candidate_asset IS NOT NULL))))
+);
+
+CREATE OR REPLACE FUNCTION qd_guard_shadow_comparison_run_update()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    IF ROW(NEW.id, NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.instrument_id,
+           NEW.market_type, NEW.comparison_contract_version, NEW.legacy_source_fingerprint,
+           NEW.legacy_source_identity, NEW.legacy_source_version, NEW.candidate_source_fingerprint,
+           NEW.candidate_generation_id, NEW.candidate_consumer_name, NEW.candidate_generation_build_fingerprint,
+           NEW.candidate_checkpoint_watermark, NEW.as_of, NEW.correlation_id, NEW.tolerance_policy_version,
+           NEW.quantity_absolute, NEW.quantity_relative, NEW.monetary_absolute, NEW.monetary_relative,
+           NEW.ratio_absolute, NEW.tolerance_policy_fingerprint, NEW.build_fingerprint,
+           NEW.created_at)
+       IS DISTINCT FROM ROW(OLD.id, OLD.tenant_id, OLD.credential_id, OLD.account_scope,
+           OLD.instrument_id, OLD.market_type, OLD.comparison_contract_version,
+           OLD.legacy_source_fingerprint, OLD.legacy_source_identity, OLD.legacy_source_version,
+           OLD.candidate_source_fingerprint, OLD.candidate_generation_id, OLD.candidate_consumer_name,
+           OLD.candidate_generation_build_fingerprint, OLD.candidate_checkpoint_watermark, OLD.as_of,
+           OLD.correlation_id, OLD.tolerance_policy_version, OLD.quantity_absolute, OLD.quantity_relative,
+           OLD.monetary_absolute, OLD.monetary_relative, OLD.ratio_absolute,
+           OLD.tolerance_policy_fingerprint, OLD.build_fingerprint, OLD.created_at) THEN
+        RAISE EXCEPTION 'shadow comparison immutable facts cannot change' USING ERRCODE = '55000';
+    END IF;
+    IF OLD.state <> 'BUILDING' OR NEW.state NOT IN ('COMPLETE','FAILED') THEN
+        RAISE EXCEPTION 'shadow comparison run transition is invalid' USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_reject_shadow_comparison_run_delete()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    RAISE EXCEPTION 'shadow comparison runs are append-only' USING ERRCODE = '55000';
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_guard_shadow_diff_fact_insert()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ DECLARE current_state VARCHAR(16); BEGIN
+    SELECT state INTO current_state FROM qd_shadow_comparison_runs WHERE id = NEW.run_id FOR KEY SHARE;
+    IF current_state IS NULL OR current_state <> 'BUILDING' THEN
+        RAISE EXCEPTION 'shadow diff facts require a BUILDING run' USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_reject_shadow_diff_fact_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    RAISE EXCEPTION 'shadow diff facts are append-only' USING ERRCODE = '55000';
+END; $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_shadow_comparison_runs_guard') THEN CREATE TRIGGER trg_qd_shadow_comparison_runs_guard BEFORE UPDATE ON qd_shadow_comparison_runs FOR EACH ROW EXECUTE FUNCTION qd_guard_shadow_comparison_run_update(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_shadow_comparison_runs_append_only') THEN CREATE TRIGGER trg_qd_shadow_comparison_runs_append_only BEFORE DELETE ON qd_shadow_comparison_runs FOR EACH ROW EXECUTE FUNCTION qd_reject_shadow_comparison_run_delete(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_shadow_diff_facts_building_only') THEN CREATE TRIGGER trg_qd_shadow_diff_facts_building_only BEFORE INSERT ON qd_shadow_diff_facts FOR EACH ROW EXECUTE FUNCTION qd_guard_shadow_diff_fact_insert(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_shadow_diff_facts_append_only') THEN CREATE TRIGGER trg_qd_shadow_diff_facts_append_only BEFORE UPDATE OR DELETE ON qd_shadow_diff_facts FOR EACH ROW EXECUTE FUNCTION qd_reject_shadow_diff_fact_mutation(); END IF;
+END $$;
+
+-- Phase 0 wave 4: deterministic reconciliation facts and derived health only.
+-- Expand-only. No exchange client, worker, scheduler, runtime or order mutation is enabled.
+
+CREATE TABLE IF NOT EXISTS qd_reconciliation_runs (
+    id UUID PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL,
+    venue VARCHAR(64) NOT NULL,
+    market_type VARCHAR(20) NOT NULL,
+    instrument_id VARCHAR(100),
+    asset_scope VARCHAR(24),
+    reconciliation_contract_version VARCHAR(64) NOT NULL CHECK (reconciliation_contract_version = 'reconciliation-v1'),
+    local_generation_id UUID NOT NULL REFERENCES qd_projection_generations(id) ON DELETE RESTRICT,
+    local_consumer_name VARCHAR(160) NOT NULL,
+    local_generation_build_fingerprint VARCHAR(64) NOT NULL CHECK (local_generation_build_fingerprint ~ '^[0-9a-f]{64}$'),
+    local_checkpoint_watermark BIGINT NOT NULL CHECK (local_checkpoint_watermark >= 0),
+    external_observation_identity VARCHAR(64) NOT NULL,
+    external_observation_version VARCHAR(64) NOT NULL,
+    external_observation_fingerprint VARCHAR(64) NOT NULL CHECK (external_observation_fingerprint ~ '^[0-9a-f]{64}$'),
+    local_observed_at TIMESTAMPTZ NOT NULL,
+    external_observed_at TIMESTAMPTZ NOT NULL,
+    as_of TIMESTAMPTZ NOT NULL,
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
+    policy_version VARCHAR(64) NOT NULL,
+    warning_degrades_health BOOLEAN NOT NULL,
+    quantity_absolute NUMERIC(38,18) NOT NULL CHECK (quantity_absolute >= 0),
+    monetary_absolute NUMERIC(38,18) NOT NULL CHECK (monetary_absolute >= 0),
+    max_observation_age_seconds BIGINT NOT NULL CHECK (max_observation_age_seconds >= 0),
+    policy_fingerprint VARCHAR(64) NOT NULL CHECK (policy_fingerprint ~ '^[0-9a-f]{64}$'),
+    build_fingerprint VARCHAR(64) NOT NULL CHECK (build_fingerprint ~ '^[0-9a-f]{64}$'),
+    replay_fingerprint VARCHAR(64) CHECK (replay_fingerprint ~ '^[0-9a-f]{64}$'),
+    discrepancy_count INTEGER NOT NULL DEFAULT 0 CHECK (discrepancy_count >= 0),
+    state VARCHAR(16) NOT NULL CHECK (state IN ('BUILDING','COMPLETE','FAILED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    failure_reason VARCHAR(512),
+    CHECK (instrument_id IS NOT NULL OR asset_scope IS NOT NULL),
+    CHECK (local_observed_at <= as_of AND external_observed_at <= as_of),
+    CHECK ((state = 'BUILDING' AND replay_fingerprint IS NULL AND completed_at IS NULL AND failure_reason IS NULL)
+        OR (state = 'COMPLETE' AND replay_fingerprint IS NOT NULL AND completed_at IS NOT NULL AND failure_reason IS NULL)
+        OR (state = 'FAILED' AND replay_fingerprint IS NULL AND completed_at IS NOT NULL AND failure_reason IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_reconciliation_runs_authoritative_identity
+    ON qd_reconciliation_runs (tenant_id, credential_id, account_scope, venue, market_type,
+        COALESCE(instrument_id, ''), COALESCE(asset_scope, ''), build_fingerprint);
+
+CREATE TABLE IF NOT EXISTS qd_reconciliation_discrepancies (
+    id UUID PRIMARY KEY,
+    run_id UUID NOT NULL REFERENCES qd_reconciliation_runs(id) ON DELETE RESTRICT,
+    fact_name VARCHAR(100) NOT NULL,
+    discrepancy_kind VARCHAR(32) NOT NULL CHECK (discrepancy_kind IN (
+        'MISSING_LOCAL','MISSING_EXTERNAL','ORDER_STATE_MISMATCH','UNKNOWN_SUBMISSION',
+        'FILL_MISSING','FILL_UNEXPECTED','POSITION_MISMATCH','BALANCE_MISMATCH',
+        'FEE_MISMATCH','STALE_LOCAL','STALE_EXTERNAL','SCOPE_MISMATCH','VERSION_MISMATCH','UNSUPPORTED_FACT')),
+    severity VARCHAR(16) NOT NULL CHECK (severity IN ('INFO','WARNING','BLOCKING')),
+    local_value NUMERIC(38,18),
+    local_value_kind VARCHAR(16) CHECK (local_value_kind IN ('QUANTITY','MONETARY','RATIO')),
+    local_asset VARCHAR(24),
+    external_value NUMERIC(38,18),
+    external_value_kind VARCHAR(16) CHECK (external_value_kind IN ('QUANTITY','MONETARY','RATIO')),
+    external_asset VARCHAR(24),
+    detail VARCHAR(160) NOT NULL,
+    discrepancy_fingerprint VARCHAR(64) NOT NULL CHECK (discrepancy_fingerprint ~ '^[0-9a-f]{64}$'),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(run_id, discrepancy_fingerprint),
+    CHECK ((local_value IS NULL AND local_value_kind IS NULL AND local_asset IS NULL)
+       OR (local_value IS NOT NULL AND local_value_kind IS NOT NULL
+           AND ((local_value_kind = 'RATIO' AND local_asset IS NULL)
+             OR (local_value_kind IN ('QUANTITY','MONETARY') AND local_asset IS NOT NULL)))),
+    CHECK ((external_value IS NULL AND external_value_kind IS NULL AND external_asset IS NULL)
+       OR (external_value IS NOT NULL AND external_value_kind IS NOT NULL
+           AND ((external_value_kind = 'RATIO' AND external_asset IS NULL)
+             OR (external_value_kind IN ('QUANTITY','MONETARY') AND external_asset IS NOT NULL))))
+);
+
+-- qd_reconciliation_checkpoints already exists from PR-02.  These canonical
+-- columns are additive and leave legacy cursor checkpoints readable.
+ALTER TABLE qd_reconciliation_checkpoints
+    ADD COLUMN IF NOT EXISTS reconciliation_run_id UUID,
+    ADD COLUMN IF NOT EXISTS reconciliation_checkpoint_version BIGINT,
+    ADD COLUMN IF NOT EXISTS result_fingerprint VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS policy_fingerprint VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS reconciliation_discrepancy_count INTEGER;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_qd_reconciliation_checkpoints_canonical_run') THEN
+        ALTER TABLE qd_reconciliation_checkpoints
+            ADD CONSTRAINT fk_qd_reconciliation_checkpoints_canonical_run
+            FOREIGN KEY (reconciliation_run_id) REFERENCES qd_reconciliation_runs(id) ON DELETE RESTRICT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_qd_reconciliation_checkpoints_canonical_complete') THEN
+        ALTER TABLE qd_reconciliation_checkpoints
+            ADD CONSTRAINT chk_qd_reconciliation_checkpoints_canonical_complete CHECK (
+                (reconciliation_run_id IS NULL AND reconciliation_checkpoint_version IS NULL
+                    AND result_fingerprint IS NULL AND policy_fingerprint IS NULL)
+                OR (reconciliation_run_id IS NOT NULL AND reconciliation_checkpoint_version IS NOT NULL
+                    AND reconciliation_checkpoint_version >= 0
+                    AND result_fingerprint ~ '^[0-9a-f]{64}$'
+                    AND policy_fingerprint ~ '^[0-9a-f]{64}$')
+            ) NOT VALID;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_qd_reconciliation_checkpoints_canonical_count') THEN
+        ALTER TABLE qd_reconciliation_checkpoints
+            ADD CONSTRAINT chk_qd_reconciliation_checkpoints_canonical_count CHECK (
+                (reconciliation_run_id IS NULL AND reconciliation_discrepancy_count IS NULL)
+                OR (reconciliation_run_id IS NOT NULL AND reconciliation_discrepancy_count >= 0)
+            ) NOT VALID;
+    END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_reconciliation_checkpoints_canonical_version
+    ON qd_reconciliation_checkpoints (reconciliation_run_id, reconciliation_checkpoint_version)
+    WHERE reconciliation_run_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_reconciliation_checkpoints_canonical_result
+    ON qd_reconciliation_checkpoints (reconciliation_run_id, result_fingerprint)
+    WHERE reconciliation_run_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION qd_guard_reconciliation_run_update()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE actual_count INTEGER;
+BEGIN
+    IF ROW(NEW.id, NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.venue,
+           NEW.instrument_id, NEW.asset_scope, NEW.reconciliation_contract_version,
+           NEW.local_generation_id, NEW.local_consumer_name, NEW.local_generation_build_fingerprint,
+           NEW.local_checkpoint_watermark, NEW.external_observation_identity,
+           NEW.external_observation_version, NEW.external_observation_fingerprint,
+           NEW.local_observed_at, NEW.external_observed_at, NEW.as_of, NEW.correlation_id,
+           NEW.policy_version, NEW.warning_degrades_health, NEW.quantity_absolute,
+           NEW.monetary_absolute, NEW.max_observation_age_seconds, NEW.policy_fingerprint,
+           NEW.build_fingerprint, NEW.created_at)
+       IS DISTINCT FROM ROW(OLD.id, OLD.tenant_id, OLD.credential_id, OLD.account_scope, OLD.venue,
+           OLD.instrument_id, OLD.asset_scope, OLD.reconciliation_contract_version,
+           OLD.local_generation_id, OLD.local_consumer_name, OLD.local_generation_build_fingerprint,
+           OLD.local_checkpoint_watermark, OLD.external_observation_identity,
+           OLD.external_observation_version, OLD.external_observation_fingerprint,
+           OLD.local_observed_at, OLD.external_observed_at, OLD.as_of, OLD.correlation_id,
+           OLD.policy_version, OLD.warning_degrades_health, OLD.quantity_absolute,
+           OLD.monetary_absolute, OLD.max_observation_age_seconds, OLD.policy_fingerprint,
+           OLD.build_fingerprint, OLD.created_at) THEN
+        RAISE EXCEPTION 'reconciliation run immutable facts cannot change' USING ERRCODE = '55000';
+    END IF;
+    IF OLD.state <> 'BUILDING' OR NEW.state NOT IN ('COMPLETE','FAILED') THEN
+        RAISE EXCEPTION 'reconciliation run transition is invalid' USING ERRCODE = '55000';
+    END IF;
+    IF NEW.state = 'COMPLETE' THEN
+        SELECT COUNT(*) INTO actual_count FROM qd_reconciliation_discrepancies WHERE run_id = NEW.id;
+        IF actual_count <> NEW.discrepancy_count THEN
+            RAISE EXCEPTION 'reconciliation discrepancy count is incomplete' USING ERRCODE = '55000';
+        END IF;
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_reject_reconciliation_run_delete()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    RAISE EXCEPTION 'reconciliation runs are append-only' USING ERRCODE = '55000';
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_guard_reconciliation_discrepancy_insert()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ DECLARE current_state VARCHAR(16); BEGIN
+    SELECT state INTO current_state FROM qd_reconciliation_runs WHERE id = NEW.run_id FOR KEY SHARE;
+    IF current_state IS NULL OR current_state <> 'BUILDING' THEN
+        RAISE EXCEPTION 'reconciliation discrepancies require a BUILDING run' USING ERRCODE = '55000';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_reject_reconciliation_discrepancy_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    RAISE EXCEPTION 'reconciliation discrepancies are append-only' USING ERRCODE = '55000';
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_reject_reconciliation_checkpoint_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$ BEGIN
+    IF TG_OP = 'DELETE' AND OLD.reconciliation_run_id IS NOT NULL THEN
+        RAISE EXCEPTION 'canonical reconciliation checkpoints are append-only' USING ERRCODE = '55000';
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    IF OLD.reconciliation_run_id IS NOT NULL THEN
+        IF ROW(NEW.tenant_id, NEW.credential_id, NEW.exchange, NEW.market_type,
+               NEW.account_scope, NEW.instrument_id)
+           IS DISTINCT FROM ROW(OLD.tenant_id, OLD.credential_id, OLD.exchange, OLD.market_type,
+               OLD.account_scope, OLD.instrument_id) THEN
+            RAISE EXCEPTION 'canonical reconciliation checkpoint scope cannot change' USING ERRCODE = '55000';
+        END IF;
+        IF NEW.version <> OLD.version + 1
+           OR NEW.reconciliation_checkpoint_version <> OLD.reconciliation_checkpoint_version + 1 THEN
+            RAISE EXCEPTION 'canonical reconciliation checkpoint version must increase by one' USING ERRCODE = '55000';
+        END IF;
+    END IF;
+    RETURN NEW;
+END; $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_reconciliation_runs_guard') THEN CREATE TRIGGER trg_qd_reconciliation_runs_guard BEFORE UPDATE ON qd_reconciliation_runs FOR EACH ROW EXECUTE FUNCTION qd_guard_reconciliation_run_update(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_reconciliation_runs_append_only') THEN CREATE TRIGGER trg_qd_reconciliation_runs_append_only BEFORE DELETE ON qd_reconciliation_runs FOR EACH ROW EXECUTE FUNCTION qd_reject_reconciliation_run_delete(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_reconciliation_discrepancies_building_only') THEN CREATE TRIGGER trg_qd_reconciliation_discrepancies_building_only BEFORE INSERT ON qd_reconciliation_discrepancies FOR EACH ROW EXECUTE FUNCTION qd_guard_reconciliation_discrepancy_insert(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_reconciliation_discrepancies_append_only') THEN CREATE TRIGGER trg_qd_reconciliation_discrepancies_append_only BEFORE UPDATE OR DELETE ON qd_reconciliation_discrepancies FOR EACH ROW EXECUTE FUNCTION qd_reject_reconciliation_discrepancy_mutation(); END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_qd_reconciliation_checkpoints_append_only') THEN CREATE TRIGGER trg_qd_reconciliation_checkpoints_append_only BEFORE UPDATE OR DELETE ON qd_reconciliation_checkpoints FOR EACH ROW EXECUTE FUNCTION qd_reject_reconciliation_checkpoint_mutation(); END IF;
+END $$;
+
+-- Phase 0 PR-12b1 Lane B: durable Canonical Entry V2 typed persistence.
+-- The incremental migration is mirrored here verbatim for clean-database parity.
+-- Durable Canonical Entry V2 persistence.  Expand-only; no runtime path is wired.
+-- Typed columns are authoritative.  No opaque payload is used for replay facts.
+
+CREATE TABLE IF NOT EXISTS qd_durable_entry_specifications (
+    command_id UUID PRIMARY KEY,
+    contract_version VARCHAR(32) NOT NULL
+        CHECK (contract_version = 'canonical-entry-v2'),
+
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    instrument_id VARCHAR(100) NOT NULL
+        CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL
+        CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+
+    action VARCHAR(20) NOT NULL CHECK (action IN (
+        'OPEN','INCREASE','REDUCE','CLOSE','CANCEL','EMERGENCY_CLOSE','PROTECTION')),
+    risk_effect VARCHAR(16) NOT NULL CHECK (risk_effect IN (
+        'INCREASE_RISK','REDUCE_RISK','NEUTRAL')),
+
+    side VARCHAR(8) CHECK (side IN ('BUY','SELL')),
+    quantity NUMERIC(38,18),
+    quantity_semantics VARCHAR(16) CHECK (quantity_semantics IN ('ABSOLUTE')),
+    execution_kind VARCHAR(16) CHECK (execution_kind IN (
+        'MARKET','LIMIT','STOP_MARKET','STOP_LIMIT')),
+    limit_price NUMERIC(38,18),
+    trigger_price NUMERIC(38,18),
+    trigger_direction VARCHAR(16) CHECK (trigger_direction IN ('AT_OR_ABOVE','AT_OR_BELOW')),
+    trigger_price_type VARCHAR(8) CHECK (trigger_price_type IN ('LAST','MARK','INDEX')),
+    reduce_only BOOLEAN NOT NULL,
+    position_side VARCHAR(8) NOT NULL CHECK (position_side IN ('NET','LONG','SHORT')),
+
+    cancel_target_kind VARCHAR(24) CHECK (cancel_target_kind IN (
+        'ECONOMIC_ORDER_ID','CLIENT_ORDER_ID','VENUE_ORDER_ID')),
+    cancel_target_id VARCHAR(160),
+    target_position_id VARCHAR(160),
+    close_quantity NUMERIC(38,18),
+    close_all BOOLEAN NOT NULL,
+    economic_order_id UUID,
+
+    economic_fingerprint VARCHAR(64) NOT NULL
+        CHECK (economic_fingerprint ~ '^[0-9a-f]{64}$'),
+    request_fingerprint VARCHAR(64) NOT NULL
+        CHECK (request_fingerprint ~ '^[0-9a-f]{64}$'),
+
+    actor_type VARCHAR(16) NOT NULL CHECK (actor_type IN (
+        'STRATEGY','HUMAN','AGENT','MCP','GRID','PROTECTION','ADMIN')),
+    actor_id VARCHAR(160) NOT NULL CHECK (actor_id <> ''),
+    source VARCHAR(16) NOT NULL CHECK (source IN (
+        'REST','MANUAL','STRATEGY','AGENT','MCP','GRID','PROTECTION')),
+    mode VARCHAR(16) NOT NULL CHECK (mode IN ('DISABLED','PAPER','SHADOW')),
+    idempotency_key VARCHAR(160) NOT NULL CHECK (idempotency_key <> ''),
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
+    occurred_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    UNIQUE (tenant_id, credential_id, account_scope, idempotency_key, contract_version),
+
+    CHECK (
+        cancel_target_kind IS NULL
+        OR cancel_target_kind <> 'ECONOMIC_ORDER_ID'
+        OR cancel_target_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    ),
+
+    CHECK (
+        (source = 'REST' AND actor_type = 'HUMAN') OR
+        (source = 'MANUAL' AND actor_type = 'HUMAN') OR
+        (source = 'STRATEGY' AND actor_type = 'STRATEGY') OR
+        (source = 'AGENT' AND actor_type = 'AGENT') OR
+        (source = 'MCP' AND actor_type = 'MCP') OR
+        (source = 'GRID' AND actor_type = 'GRID') OR
+        (source = 'PROTECTION' AND actor_type = 'PROTECTION')
+    ),
+
+    CHECK (
+        (action = 'CANCEL'
+            AND risk_effect = 'NEUTRAL'
+            AND economic_order_id IS NULL
+            AND side IS NULL
+            AND quantity IS NULL
+            AND quantity_semantics IS NULL
+            AND execution_kind IS NULL
+            AND limit_price IS NULL
+            AND trigger_price IS NULL
+            AND trigger_direction IS NULL
+            AND trigger_price_type IS NULL
+            AND target_position_id IS NULL
+            AND close_quantity IS NULL
+            AND close_all = FALSE
+            AND reduce_only = FALSE
+            AND position_side = 'NET'
+            AND cancel_target_kind IS NOT NULL
+            AND cancel_target_id IS NOT NULL
+            AND cancel_target_id <> '')
+        OR
+        (action IN ('OPEN','INCREASE')
+            AND risk_effect = 'INCREASE_RISK'
+            AND economic_order_id IS NOT NULL
+            AND side IS NOT NULL
+            AND quantity IS NOT NULL AND quantity > 0
+            AND quantity_semantics = 'ABSOLUTE'
+            AND execution_kind IS NOT NULL
+            AND reduce_only = FALSE
+            AND cancel_target_kind IS NULL
+            AND cancel_target_id IS NULL
+            AND target_position_id IS NULL
+            AND close_quantity IS NULL
+            AND close_all = FALSE)
+        OR
+        (action IN ('REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION')
+            AND risk_effect = 'REDUCE_RISK'
+            AND economic_order_id IS NOT NULL
+            AND side IS NOT NULL
+            AND execution_kind IS NOT NULL
+            AND reduce_only = TRUE
+            AND target_position_id IS NOT NULL AND target_position_id <> ''
+            AND quantity IS NULL
+            AND quantity_semantics IS NULL
+            AND cancel_target_kind IS NULL
+            AND cancel_target_id IS NULL
+            AND ((close_quantity IS NOT NULL AND close_quantity > 0 AND close_all = FALSE)
+                OR (close_quantity IS NULL AND close_all = TRUE)))
+    ),
+
+    CHECK (
+        execution_kind IS NULL
+        OR (execution_kind = 'MARKET'
+            AND limit_price IS NULL AND trigger_price IS NULL
+            AND trigger_direction IS NULL AND trigger_price_type IS NULL)
+        OR (execution_kind = 'LIMIT'
+            AND limit_price IS NOT NULL AND trigger_price IS NULL
+            AND trigger_direction IS NULL AND trigger_price_type IS NULL)
+        OR (execution_kind = 'STOP_MARKET'
+            AND limit_price IS NULL AND trigger_price IS NOT NULL
+            AND trigger_direction IS NOT NULL AND trigger_price_type IS NOT NULL)
+        OR (execution_kind = 'STOP_LIMIT'
+            AND limit_price IS NOT NULL AND trigger_price IS NOT NULL
+            AND trigger_direction IS NOT NULL AND trigger_price_type IS NOT NULL)
+    ),
+    CHECK ((limit_price IS NULL OR limit_price > 0)
+        AND (trigger_price IS NULL OR trigger_price > 0)),
+    CHECK (
+        (action = 'PROTECTION' AND actor_type = 'PROTECTION' AND source = 'PROTECTION')
+        OR action <> 'PROTECTION'
+    ),
+    CHECK (
+        source <> 'PROTECTION'
+        OR (action IN ('REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION')
+            AND risk_effect = 'REDUCE_RISK')
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_qd_durable_entry_specifications_scope_created
+    ON qd_durable_entry_specifications
+        (tenant_id, credential_id, account_scope, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_qd_durable_entry_specifications_economic_order
+    ON qd_durable_entry_specifications (economic_order_id)
+    WHERE economic_order_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_qd_durable_entry_specifications_request_fingerprint
+    ON qd_durable_entry_specifications (request_fingerprint);
+
+CREATE OR REPLACE FUNCTION qd_reject_durable_entry_specification_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'durable entry specifications are append-only' USING ERRCODE = '55000';
+END; $$;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_qd_durable_entry_specifications_append_only'
+    ) THEN
+        CREATE TRIGGER trg_qd_durable_entry_specifications_append_only
+        BEFORE UPDATE OR DELETE ON qd_durable_entry_specifications
+        FOR EACH ROW EXECUTE FUNCTION qd_reject_durable_entry_specification_mutation();
+    END IF;
+END $$;
+
+-- Durable-entry hard-risk enforcement V2.  Expand-only and independent from
+-- hard-risk-enforcement-v1: it references only durable-entry specifications.
+-- Typed columns are the authoritative replay facts; JSON columns are audit
+-- mirrors and never substitute for the typed columns below.
+
+CREATE TABLE IF NOT EXISTS qd_durable_risk_policy_snapshots (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL
+        CHECK (contract_version = 'durable-risk-enforcement-v2'),
+    command_id UUID NOT NULL,
+    economic_order_id UUID NOT NULL,
+    durable_entry_contract_version VARCHAR(32) NOT NULL
+        CHECK (durable_entry_contract_version = 'canonical-entry-v2'),
+    economic_fingerprint VARCHAR(64) NOT NULL CHECK (economic_fingerprint ~ '^[0-9a-f]{64}$'),
+    request_fingerprint VARCHAR(64) NOT NULL CHECK (request_fingerprint ~ '^[0-9a-f]{64}$'),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    instrument_id VARCHAR(100) NOT NULL CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    action VARCHAR(20) NOT NULL CHECK (action IN ('OPEN','INCREASE','REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION')),
+    risk_effect VARCHAR(16) NOT NULL CHECK (risk_effect IN ('INCREASE_RISK','REDUCE_RISK')),
+    actor_type VARCHAR(16) NOT NULL CHECK (actor_type IN ('STRATEGY','HUMAN','AGENT','MCP','GRID','PROTECTION','ADMIN')),
+    actor_id VARCHAR(160) NOT NULL CHECK (actor_id <> ''),
+    source VARCHAR(16) NOT NULL CHECK (source IN ('REST','MANUAL','STRATEGY','AGENT','MCP','GRID','PROTECTION')),
+    mode VARCHAR(16) NOT NULL CHECK (mode IN ('DISABLED','PAPER','SHADOW')),
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
+    entry_occurred_at TIMESTAMPTZ NOT NULL,
+    scope_fingerprint VARCHAR(64) NOT NULL CHECK (scope_fingerprint ~ '^[0-9a-f]{64}$'),
+    audit_fingerprint VARCHAR(64) NOT NULL CHECK (audit_fingerprint ~ '^[0-9a-f]{64}$'),
+
+    policy_hash VARCHAR(64) NOT NULL CHECK (policy_hash ~ '^[0-9a-f]{64}$'),
+    policy_version VARCHAR(160) NOT NULL CHECK (policy_version <> ''),
+    valuation_currency VARCHAR(32) NOT NULL CHECK (valuation_currency <> '' AND valuation_currency = UPPER(valuation_currency)),
+    max_gross_notional NUMERIC(38,18) NOT NULL CHECK (max_gross_notional >= 0),
+    max_net_notional NUMERIC(38,18) NOT NULL CHECK (max_net_notional >= 0),
+    max_instrument_notional NUMERIC(38,18) NOT NULL CHECK (max_instrument_notional >= 0),
+    max_leverage NUMERIC(38,18) NOT NULL CHECK (max_leverage > 0),
+    minimum_available_margin NUMERIC(38,18) NOT NULL CHECK (minimum_available_margin >= 0),
+    max_daily_loss NUMERIC(38,18) NOT NULL CHECK (max_daily_loss >= 0),
+    max_drawdown_ratio NUMERIC(38,18) NOT NULL CHECK (max_drawdown_ratio >= 0 AND max_drawdown_ratio <= 1),
+    policy_payload_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (command_id) REFERENCES qd_durable_entry_specifications(command_id) ON DELETE RESTRICT,
+    CHECK ((action IN ('OPEN','INCREASE') AND risk_effect = 'INCREASE_RISK')
+        OR (action IN ('REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION') AND risk_effect = 'REDUCE_RISK')),
+    CHECK ((source = 'REST' AND actor_type = 'HUMAN')
+        OR (source = 'MANUAL' AND actor_type = 'HUMAN')
+        OR (source = 'STRATEGY' AND actor_type = 'STRATEGY')
+        OR (source = 'AGENT' AND actor_type = 'AGENT')
+        OR (source = 'MCP' AND actor_type = 'MCP')
+        OR (source = 'GRID' AND actor_type = 'GRID')
+        OR (source = 'PROTECTION' AND actor_type = 'PROTECTION')),
+    CHECK (source <> 'PROTECTION' OR (action IN ('REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION') AND risk_effect = 'REDUCE_RISK')),
+    UNIQUE (id, contract_version, command_id, economic_order_id, durable_entry_contract_version,
+        economic_fingerprint, request_fingerprint, tenant_id, credential_id, account_scope,
+        instrument_id, market_type, action, risk_effect, actor_type, actor_id, source, mode,
+        correlation_id, entry_occurred_at, scope_fingerprint, audit_fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS qd_durable_risk_input_snapshots (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL
+        CHECK (contract_version = 'durable-risk-enforcement-v2'),
+    command_id UUID NOT NULL,
+    economic_order_id UUID NOT NULL,
+    durable_entry_contract_version VARCHAR(32) NOT NULL
+        CHECK (durable_entry_contract_version = 'canonical-entry-v2'),
+    economic_fingerprint VARCHAR(64) NOT NULL CHECK (economic_fingerprint ~ '^[0-9a-f]{64}$'),
+    request_fingerprint VARCHAR(64) NOT NULL CHECK (request_fingerprint ~ '^[0-9a-f]{64}$'),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    instrument_id VARCHAR(100) NOT NULL CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    action VARCHAR(20) NOT NULL CHECK (action IN ('OPEN','INCREASE','REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION')),
+    risk_effect VARCHAR(16) NOT NULL CHECK (risk_effect IN ('INCREASE_RISK','REDUCE_RISK')),
+    actor_type VARCHAR(16) NOT NULL CHECK (actor_type IN ('STRATEGY','HUMAN','AGENT','MCP','GRID','PROTECTION','ADMIN')),
+    actor_id VARCHAR(160) NOT NULL CHECK (actor_id <> ''),
+    source VARCHAR(16) NOT NULL CHECK (source IN ('REST','MANUAL','STRATEGY','AGENT','MCP','GRID','PROTECTION')),
+    mode VARCHAR(16) NOT NULL CHECK (mode IN ('DISABLED','PAPER','SHADOW')),
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
+    entry_occurred_at TIMESTAMPTZ NOT NULL,
+    scope_fingerprint VARCHAR(64) NOT NULL CHECK (scope_fingerprint ~ '^[0-9a-f]{64}$'),
+    audit_fingerprint VARCHAR(64) NOT NULL CHECK (audit_fingerprint ~ '^[0-9a-f]{64}$'),
+
+    input_hash VARCHAR(64) NOT NULL CHECK (input_hash ~ '^[0-9a-f]{64}$'),
+    input_version VARCHAR(160) NOT NULL CHECK (input_version <> ''),
+    valuation_currency VARCHAR(32) NOT NULL CHECK (valuation_currency <> '' AND valuation_currency = UPPER(valuation_currency)),
+    gross_notional NUMERIC(38,18) NOT NULL CHECK (gross_notional >= 0),
+    net_notional NUMERIC(38,18) NOT NULL,
+    instrument_notional NUMERIC(38,18) NOT NULL CHECK (instrument_notional >= 0),
+    available_margin NUMERIC(38,18) NOT NULL CHECK (available_margin >= 0),
+    equity NUMERIC(38,18) NOT NULL CHECK (equity > 0),
+    peak_equity NUMERIC(38,18) NOT NULL CHECK (peak_equity >= equity),
+    daily_realized_pnl NUMERIC(38,18) NOT NULL,
+    reconciliation_health VARCHAR(16) NOT NULL CHECK (reconciliation_health IN ('HEALTHY','DEGRADED','UNHEALTHY')),
+    market_data_health VARCHAR(16) NOT NULL CHECK (market_data_health IN ('FRESH','STALE','UNKNOWN')),
+    account_facts_verified BOOLEAN NOT NULL,
+    global_kill_switch_version BIGINT NOT NULL CHECK (global_kill_switch_version >= 0),
+    global_kill_switch_enabled BOOLEAN NOT NULL,
+    global_kill_switch_mode VARCHAR(32) CHECK (global_kill_switch_mode IN ('OPEN_BLOCKED','ALL_NEW_COMMANDS_BLOCKED','EMERGENCY_REDUCE_ONLY')),
+    account_kill_switch_version BIGINT NOT NULL CHECK (account_kill_switch_version >= 0),
+    account_kill_switch_enabled BOOLEAN NOT NULL,
+    account_kill_switch_mode VARCHAR(32) CHECK (account_kill_switch_mode IN ('OPEN_BLOCKED','ALL_NEW_COMMANDS_BLOCKED','EMERGENCY_REDUCE_ONLY')),
+    strategy_kill_switch_version BIGINT NOT NULL CHECK (strategy_kill_switch_version >= 0),
+    strategy_kill_switch_enabled BOOLEAN NOT NULL,
+    strategy_kill_switch_mode VARCHAR(32) CHECK (strategy_kill_switch_mode IN ('OPEN_BLOCKED','ALL_NEW_COMMANDS_BLOCKED','EMERGENCY_REDUCE_ONLY')),
+    exposure_payload_json JSONB NOT NULL,
+    kill_switch_payload_json JSONB NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (command_id) REFERENCES qd_durable_entry_specifications(command_id) ON DELETE RESTRICT,
+    CHECK ((action IN ('OPEN','INCREASE') AND risk_effect = 'INCREASE_RISK')
+        OR (action IN ('REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION') AND risk_effect = 'REDUCE_RISK')),
+    CHECK ((source = 'REST' AND actor_type = 'HUMAN')
+        OR (source = 'MANUAL' AND actor_type = 'HUMAN')
+        OR (source = 'STRATEGY' AND actor_type = 'STRATEGY')
+        OR (source = 'AGENT' AND actor_type = 'AGENT')
+        OR (source = 'MCP' AND actor_type = 'MCP')
+        OR (source = 'GRID' AND actor_type = 'GRID')
+        OR (source = 'PROTECTION' AND actor_type = 'PROTECTION')),
+    CHECK (source <> 'PROTECTION' OR (action IN ('REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION') AND risk_effect = 'REDUCE_RISK')),
+    CHECK ((global_kill_switch_enabled AND global_kill_switch_mode IS NOT NULL) OR (NOT global_kill_switch_enabled AND global_kill_switch_mode IS NULL)),
+    CHECK ((account_kill_switch_enabled AND account_kill_switch_mode IS NOT NULL) OR (NOT account_kill_switch_enabled AND account_kill_switch_mode IS NULL)),
+    CHECK ((strategy_kill_switch_enabled AND strategy_kill_switch_mode IS NOT NULL) OR (NOT strategy_kill_switch_enabled AND strategy_kill_switch_mode IS NULL)),
+    UNIQUE (id, contract_version, command_id, economic_order_id, durable_entry_contract_version,
+        economic_fingerprint, request_fingerprint, tenant_id, credential_id, account_scope,
+        instrument_id, market_type, action, risk_effect, actor_type, actor_id, source, mode,
+        correlation_id, entry_occurred_at, scope_fingerprint, audit_fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS qd_durable_risk_decisions (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL
+        CHECK (contract_version = 'durable-risk-enforcement-v2'),
+    command_id UUID NOT NULL REFERENCES qd_durable_entry_specifications(command_id) ON DELETE RESTRICT,
+    economic_order_id UUID NOT NULL,
+    durable_entry_contract_version VARCHAR(32) NOT NULL
+        CHECK (durable_entry_contract_version = 'canonical-entry-v2'),
+    economic_fingerprint VARCHAR(64) NOT NULL CHECK (economic_fingerprint ~ '^[0-9a-f]{64}$'),
+    request_fingerprint VARCHAR(64) NOT NULL CHECK (request_fingerprint ~ '^[0-9a-f]{64}$'),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    instrument_id VARCHAR(100) NOT NULL CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    action VARCHAR(20) NOT NULL CHECK (action IN ('OPEN','INCREASE','REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION')),
+    risk_effect VARCHAR(16) NOT NULL CHECK (risk_effect IN ('INCREASE_RISK','REDUCE_RISK')),
+    actor_type VARCHAR(16) NOT NULL CHECK (actor_type IN ('STRATEGY','HUMAN','AGENT','MCP','GRID','PROTECTION','ADMIN')),
+    actor_id VARCHAR(160) NOT NULL CHECK (actor_id <> ''),
+    source VARCHAR(16) NOT NULL CHECK (source IN ('REST','MANUAL','STRATEGY','AGENT','MCP','GRID','PROTECTION')),
+    mode VARCHAR(16) NOT NULL CHECK (mode IN ('DISABLED','PAPER','SHADOW')),
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
+    entry_occurred_at TIMESTAMPTZ NOT NULL,
+    scope_fingerprint VARCHAR(64) NOT NULL CHECK (scope_fingerprint ~ '^[0-9a-f]{64}$'),
+    audit_fingerprint VARCHAR(64) NOT NULL CHECK (audit_fingerprint ~ '^[0-9a-f]{64}$'),
+
+    policy_snapshot_id UUID NOT NULL,
+    input_snapshot_id UUID NOT NULL,
+    policy_hash VARCHAR(64) NOT NULL CHECK (policy_hash ~ '^[0-9a-f]{64}$'),
+    input_hash VARCHAR(64) NOT NULL CHECK (input_hash ~ '^[0-9a-f]{64}$'),
+    decision_fingerprint VARCHAR(64) NOT NULL CHECK (decision_fingerprint ~ '^[0-9a-f]{64}$'),
+    allowed BOOLEAN NOT NULL,
+    decision_status VARCHAR(32) NOT NULL CHECK (decision_status IN ('ALLOW','DENY','RECONCILIATION_REQUIRED')),
+    rejection_codes_json JSONB NOT NULL CHECK (jsonb_typeof(rejection_codes_json) = 'array'),
+    projected_gross_notional NUMERIC(38,18) NOT NULL CHECK (projected_gross_notional >= 0),
+    projected_net_notional NUMERIC(38,18) NOT NULL,
+    projected_instrument_notional NUMERIC(38,18) NOT NULL CHECK (projected_instrument_notional >= 0),
+    projected_available_margin NUMERIC(38,18) NOT NULL,
+    projected_leverage NUMERIC(38,18) NOT NULL CHECK (projected_leverage >= 0),
+    projected_daily_loss NUMERIC(38,18) NOT NULL CHECK (projected_daily_loss >= 0),
+    projected_drawdown_ratio NUMERIC(38,18) NOT NULL CHECK (projected_drawdown_ratio >= 0 AND projected_drawdown_ratio <= 1),
+    projected_risk_payload_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (policy_snapshot_id, contract_version, command_id, economic_order_id,
+        durable_entry_contract_version, economic_fingerprint, request_fingerprint, tenant_id,
+        credential_id, account_scope, instrument_id, market_type, action, risk_effect,
+        actor_type, actor_id, source, mode, correlation_id, entry_occurred_at,
+        scope_fingerprint, audit_fingerprint)
+        REFERENCES qd_durable_risk_policy_snapshots (id, contract_version, command_id,
+        economic_order_id, durable_entry_contract_version, economic_fingerprint,
+        request_fingerprint, tenant_id, credential_id, account_scope, instrument_id,
+        market_type, action, risk_effect, actor_type, actor_id, source, mode,
+        correlation_id, entry_occurred_at, scope_fingerprint, audit_fingerprint) ON DELETE RESTRICT,
+    FOREIGN KEY (input_snapshot_id, contract_version, command_id, economic_order_id,
+        durable_entry_contract_version, economic_fingerprint, request_fingerprint, tenant_id,
+        credential_id, account_scope, instrument_id, market_type, action, risk_effect,
+        actor_type, actor_id, source, mode, correlation_id, entry_occurred_at,
+        scope_fingerprint, audit_fingerprint)
+        REFERENCES qd_durable_risk_input_snapshots (id, contract_version, command_id,
+        economic_order_id, durable_entry_contract_version, economic_fingerprint,
+        request_fingerprint, tenant_id, credential_id, account_scope, instrument_id,
+        market_type, action, risk_effect, actor_type, actor_id, source, mode,
+        correlation_id, entry_occurred_at, scope_fingerprint, audit_fingerprint) ON DELETE RESTRICT,
+    CHECK ((action IN ('OPEN','INCREASE') AND risk_effect = 'INCREASE_RISK')
+        OR (action IN ('REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION') AND risk_effect = 'REDUCE_RISK')),
+    CHECK ((allowed AND decision_status = 'ALLOW')
+        OR (NOT allowed AND decision_status IN ('DENY','RECONCILIATION_REQUIRED'))),
+    UNIQUE (id, contract_version, command_id, economic_order_id, durable_entry_contract_version,
+        economic_fingerprint, request_fingerprint, tenant_id, credential_id, account_scope,
+        instrument_id, market_type, action, risk_effect, actor_type, actor_id, source, mode,
+        correlation_id, entry_occurred_at, scope_fingerprint, audit_fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS qd_durable_risk_reservations (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL
+        CHECK (contract_version = 'durable-risk-enforcement-v2'),
+    command_id UUID NOT NULL,
+    economic_order_id UUID NOT NULL,
+    durable_entry_contract_version VARCHAR(32) NOT NULL
+        CHECK (durable_entry_contract_version = 'canonical-entry-v2'),
+    economic_fingerprint VARCHAR(64) NOT NULL CHECK (economic_fingerprint ~ '^[0-9a-f]{64}$'),
+    request_fingerprint VARCHAR(64) NOT NULL CHECK (request_fingerprint ~ '^[0-9a-f]{64}$'),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    instrument_id VARCHAR(100) NOT NULL CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    action VARCHAR(20) NOT NULL CHECK (action IN ('OPEN','INCREASE')),
+    risk_effect VARCHAR(16) NOT NULL CHECK (risk_effect = 'INCREASE_RISK'),
+    actor_type VARCHAR(16) NOT NULL CHECK (actor_type IN ('STRATEGY','HUMAN','AGENT','MCP','GRID','PROTECTION','ADMIN')),
+    actor_id VARCHAR(160) NOT NULL CHECK (actor_id <> ''),
+    source VARCHAR(16) NOT NULL CHECK (source IN ('REST','MANUAL','STRATEGY','AGENT','MCP','GRID','PROTECTION')),
+    mode VARCHAR(16) NOT NULL CHECK (mode IN ('DISABLED','PAPER','SHADOW')),
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
+    entry_occurred_at TIMESTAMPTZ NOT NULL,
+    scope_fingerprint VARCHAR(64) NOT NULL CHECK (scope_fingerprint ~ '^[0-9a-f]{64}$'),
+    audit_fingerprint VARCHAR(64) NOT NULL CHECK (audit_fingerprint ~ '^[0-9a-f]{64}$'),
+
+    decision_id UUID NOT NULL,
+    reservation_hash VARCHAR(64) NOT NULL CHECK (reservation_hash ~ '^[0-9a-f]{64}$'),
+    valuation_currency VARCHAR(32) NOT NULL CHECK (valuation_currency <> '' AND valuation_currency = UPPER(valuation_currency)),
+    reserved_gross_notional NUMERIC(38,18) NOT NULL CHECK (reserved_gross_notional >= 0),
+    reserved_net_notional NUMERIC(38,18) NOT NULL,
+    reserved_instrument_notional NUMERIC(38,18) NOT NULL CHECK (reserved_instrument_notional >= 0),
+    reserved_margin NUMERIC(38,18) NOT NULL CHECK (reserved_margin >= 0),
+    state VARCHAR(16) NOT NULL CHECK (state = 'ACTIVE'),
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    FOREIGN KEY (decision_id, contract_version, command_id, economic_order_id,
+        durable_entry_contract_version, economic_fingerprint, request_fingerprint, tenant_id,
+        credential_id, account_scope, instrument_id, market_type, action, risk_effect,
+        actor_type, actor_id, source, mode, correlation_id, entry_occurred_at,
+        scope_fingerprint, audit_fingerprint)
+        REFERENCES qd_durable_risk_decisions (id, contract_version, command_id,
+        economic_order_id, durable_entry_contract_version, economic_fingerprint,
+        request_fingerprint, tenant_id, credential_id, account_scope, instrument_id,
+        market_type, action, risk_effect, actor_type, actor_id, source, mode,
+        correlation_id, entry_occurred_at, scope_fingerprint, audit_fingerprint) ON DELETE RESTRICT,
+    CHECK (action IN ('OPEN','INCREASE') AND risk_effect = 'INCREASE_RISK')
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qd_durable_risk_reservations_active_decision
+    ON qd_durable_risk_reservations (decision_id) WHERE state = 'ACTIVE';
+
+CREATE OR REPLACE FUNCTION qd_reject_durable_risk_v2_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'durable risk enforcement v2 facts are append-only' USING ERRCODE = '55000';
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_assert_durable_risk_v2_reservation_allowed()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    decision_allowed BOOLEAN;
+    decision_status_value VARCHAR(32);
+BEGIN
+    SELECT allowed, decision_status
+      INTO decision_allowed, decision_status_value
+      FROM qd_durable_risk_decisions
+     WHERE id = NEW.decision_id
+     FOR KEY SHARE;
+    IF NOT FOUND OR NOT decision_allowed OR decision_status_value <> 'ALLOW' THEN
+        RAISE EXCEPTION 'durable risk reservation requires an ALLOW decision' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_assert_durable_risk_v2_scope_matches_entry()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM 1
+      FROM qd_durable_entry_specifications entry_specification
+     WHERE entry_specification.command_id = NEW.command_id
+       AND entry_specification.contract_version = NEW.durable_entry_contract_version
+       AND entry_specification.economic_order_id = NEW.economic_order_id
+       AND entry_specification.economic_fingerprint = NEW.economic_fingerprint
+       AND entry_specification.request_fingerprint = NEW.request_fingerprint
+       AND entry_specification.tenant_id = NEW.tenant_id
+       AND entry_specification.credential_id = NEW.credential_id
+       AND entry_specification.account_scope = NEW.account_scope
+       AND entry_specification.instrument_id = NEW.instrument_id
+       AND entry_specification.market_type = NEW.market_type
+       AND entry_specification.action = NEW.action
+       AND entry_specification.risk_effect = NEW.risk_effect
+       AND entry_specification.actor_type = NEW.actor_type
+       AND entry_specification.actor_id = NEW.actor_id
+       AND entry_specification.source = NEW.source
+       AND entry_specification.mode = NEW.mode
+       AND entry_specification.correlation_id = NEW.correlation_id
+       AND entry_specification.occurred_at = NEW.entry_occurred_at;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'durable risk v2 scope does not match durable entry specification' USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_policy_snapshots_append_only') THEN
+        CREATE TRIGGER trg_qd_durable_risk_policy_snapshots_append_only
+        BEFORE UPDATE OR DELETE ON qd_durable_risk_policy_snapshots
+        FOR EACH ROW EXECUTE FUNCTION qd_reject_durable_risk_v2_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_input_snapshots_append_only') THEN
+        CREATE TRIGGER trg_qd_durable_risk_input_snapshots_append_only
+        BEFORE UPDATE OR DELETE ON qd_durable_risk_input_snapshots
+        FOR EACH ROW EXECUTE FUNCTION qd_reject_durable_risk_v2_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_decisions_append_only') THEN
+        CREATE TRIGGER trg_qd_durable_risk_decisions_append_only
+        BEFORE UPDATE OR DELETE ON qd_durable_risk_decisions
+        FOR EACH ROW EXECUTE FUNCTION qd_reject_durable_risk_v2_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_reservations_append_only') THEN
+        CREATE TRIGGER trg_qd_durable_risk_reservations_append_only
+        BEFORE UPDATE OR DELETE ON qd_durable_risk_reservations
+        FOR EACH ROW EXECUTE FUNCTION qd_reject_durable_risk_v2_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_reservations_allow_decision') THEN
+        CREATE TRIGGER trg_qd_durable_risk_reservations_allow_decision
+        BEFORE INSERT ON qd_durable_risk_reservations
+        FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_risk_v2_reservation_allowed();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_policy_snapshots_scope_entry') THEN
+        CREATE TRIGGER trg_qd_durable_risk_policy_snapshots_scope_entry
+        BEFORE INSERT ON qd_durable_risk_policy_snapshots
+        FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_risk_v2_scope_matches_entry();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_input_snapshots_scope_entry') THEN
+        CREATE TRIGGER trg_qd_durable_risk_input_snapshots_scope_entry
+        BEFORE INSERT ON qd_durable_risk_input_snapshots
+        FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_risk_v2_scope_matches_entry();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_decisions_scope_entry') THEN
+        CREATE TRIGGER trg_qd_durable_risk_decisions_scope_entry
+        BEFORE INSERT ON qd_durable_risk_decisions
+        FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_risk_v2_scope_matches_entry();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_reservations_scope_entry') THEN
+        CREATE TRIGGER trg_qd_durable_risk_reservations_scope_entry
+        BEFORE INSERT ON qd_durable_risk_reservations
+        FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_risk_v2_scope_matches_entry();
+    END IF;
+END $$;
+
+-- RF-01A: authoritative persisted sources for runtime hard-risk facts.
+-- Expand-only.  These tables are source facts, not a trading runtime path.
+
+CREATE TABLE IF NOT EXISTS qd_authoritative_risk_policies (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL CHECK (contract_version = 'authoritative-risk-facts-v1'),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    instrument_id VARCHAR(100) NOT NULL CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    strategy_scope VARCHAR(160) NOT NULL CHECK (strategy_scope <> ''),
+    policy_identity VARCHAR(160) NOT NULL CHECK (policy_identity <> ''),
+    policy_version VARCHAR(160) NOT NULL CHECK (policy_version <> ''),
+    policy_fingerprint VARCHAR(64) NOT NULL CHECK (policy_fingerprint ~ '^[0-9a-f]{64}$'),
+    observed_at TIMESTAMPTZ NOT NULL,
+    max_age_seconds INTEGER NOT NULL CHECK (max_age_seconds >= 0),
+    reservation_ttl_seconds INTEGER NOT NULL CHECK (reservation_ttl_seconds > 0),
+    valuation_currency VARCHAR(32) NOT NULL CHECK (valuation_currency <> '' AND valuation_currency = UPPER(valuation_currency)),
+    max_gross_notional NUMERIC(38,18) NOT NULL CHECK (max_gross_notional >= 0),
+    max_net_notional NUMERIC(38,18) NOT NULL CHECK (max_net_notional >= 0),
+    max_instrument_notional NUMERIC(38,18) NOT NULL CHECK (max_instrument_notional >= 0),
+    max_leverage NUMERIC(38,18) NOT NULL CHECK (max_leverage > 0),
+    minimum_available_margin NUMERIC(38,18) NOT NULL CHECK (minimum_available_margin >= 0),
+    max_daily_loss NUMERIC(38,18) NOT NULL CHECK (max_daily_loss >= 0),
+    max_drawdown_ratio NUMERIC(38,18) NOT NULL CHECK (max_drawdown_ratio >= 0 AND max_drawdown_ratio <= 1),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, credential_id, account_scope, instrument_id, market_type, strategy_scope,
+        policy_identity, policy_version, policy_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_authoritative_risk_policies_select
+    ON qd_authoritative_risk_policies
+    (tenant_id, credential_id, account_scope, instrument_id, market_type, strategy_scope, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS qd_authoritative_account_risk_facts (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL CHECK (contract_version = 'authoritative-risk-facts-v1'),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    instrument_id VARCHAR(100) NOT NULL CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    valuation_currency VARCHAR(32) NOT NULL CHECK (valuation_currency <> '' AND valuation_currency = UPPER(valuation_currency)),
+    source_identity VARCHAR(160) NOT NULL CHECK (source_identity <> ''),
+    source_version VARCHAR(160) NOT NULL CHECK (source_version <> ''),
+    source_fingerprint VARCHAR(64) NOT NULL CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
+    observed_at TIMESTAMPTZ NOT NULL,
+    max_age_seconds INTEGER NOT NULL CHECK (max_age_seconds >= 0),
+    gross_notional NUMERIC(38,18) NOT NULL CHECK (gross_notional >= 0),
+    net_notional NUMERIC(38,18) NOT NULL,
+    instrument_notional NUMERIC(38,18) NOT NULL CHECK (instrument_notional >= 0),
+    available_margin NUMERIC(38,18) NOT NULL CHECK (available_margin >= 0),
+    equity NUMERIC(38,18) NOT NULL CHECK (equity > 0),
+    peak_equity NUMERIC(38,18) NOT NULL CHECK (peak_equity >= equity),
+    daily_realized_pnl NUMERIC(38,18) NOT NULL,
+    account_facts_verified BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, credential_id, account_scope, instrument_id, market_type,
+        source_identity, source_version, source_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_authoritative_account_risk_facts_select
+    ON qd_authoritative_account_risk_facts
+    (tenant_id, credential_id, account_scope, instrument_id, market_type, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS qd_authoritative_market_observations (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL CHECK (contract_version = 'authoritative-risk-facts-v1'),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    instrument_id VARCHAR(100) NOT NULL CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    valuation_currency VARCHAR(32) NOT NULL CHECK (valuation_currency <> '' AND valuation_currency = UPPER(valuation_currency)),
+    price_type VARCHAR(8) NOT NULL CHECK (price_type IN ('LAST','MARK','INDEX')),
+    price NUMERIC(38,18) NOT NULL CHECK (price > 0),
+    source_identity VARCHAR(160) NOT NULL CHECK (source_identity <> ''),
+    source_version VARCHAR(160) NOT NULL CHECK (source_version <> ''),
+    source_fingerprint VARCHAR(64) NOT NULL CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
+    observed_at TIMESTAMPTZ NOT NULL,
+    max_age_seconds INTEGER NOT NULL CHECK (max_age_seconds >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, credential_id, account_scope, instrument_id, market_type, valuation_currency,
+        price_type, source_identity, source_version, source_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_authoritative_market_observations_select
+    ON qd_authoritative_market_observations
+    (tenant_id, credential_id, account_scope, instrument_id, market_type, valuation_currency, price_type, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS qd_authoritative_kill_switch_observations (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL CHECK (contract_version = 'authoritative-risk-facts-v1'),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    strategy_scope VARCHAR(160) NOT NULL CHECK (strategy_scope <> ''),
+    scope_kind VARCHAR(16) NOT NULL CHECK (scope_kind IN ('GLOBAL','ACCOUNT','STRATEGY')),
+    source_identity VARCHAR(160) NOT NULL CHECK (source_identity <> ''),
+    source_version VARCHAR(160) NOT NULL CHECK (source_version <> ''),
+    source_fingerprint VARCHAR(64) NOT NULL CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
+    observed_at TIMESTAMPTZ NOT NULL,
+    max_age_seconds INTEGER NOT NULL CHECK (max_age_seconds >= 0),
+    switch_version BIGINT NOT NULL CHECK (switch_version >= 0),
+    enabled BOOLEAN NOT NULL,
+    mode VARCHAR(32) CHECK (mode IN ('OPEN_BLOCKED','ALL_NEW_COMMANDS_BLOCKED','EMERGENCY_REDUCE_ONLY')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK ((enabled AND mode IS NOT NULL) OR (NOT enabled AND mode IS NULL)),
+    UNIQUE (tenant_id, credential_id, account_scope, strategy_scope, scope_kind,
+        source_identity, source_version, source_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_authoritative_kill_switch_select
+    ON qd_authoritative_kill_switch_observations
+    (tenant_id, credential_id, account_scope, strategy_scope, scope_kind, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS qd_durable_risk_fact_provenance (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL CHECK (contract_version = 'authoritative-risk-facts-v1'),
+    command_id UUID NOT NULL REFERENCES qd_durable_entry_specifications(command_id) ON DELETE RESTRICT,
+    risk_input_snapshot_id UUID NOT NULL REFERENCES qd_durable_risk_input_snapshots(id) ON DELETE RESTRICT,
+    risk_decision_id UUID NOT NULL REFERENCES qd_durable_risk_decisions(id) ON DELETE RESTRICT,
+    source_kind VARCHAR(32) NOT NULL CHECK (source_kind IN ('POLICY','ACCOUNT','MARKET','KILL_SWITCH_GLOBAL','KILL_SWITCH_ACCOUNT','KILL_SWITCH_STRATEGY','RECONCILIATION','ACTIVE_RESERVATIONS')),
+    source_identity VARCHAR(160) NOT NULL CHECK (source_identity <> ''),
+    source_version VARCHAR(160) NOT NULL CHECK (source_version <> ''),
+    source_fingerprint VARCHAR(64) NOT NULL CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
+    source_observed_at TIMESTAMPTZ NOT NULL,
+    selection_anchor TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (source_observed_at <= selection_anchor),
+    UNIQUE (risk_decision_id, source_kind),
+    UNIQUE (command_id, risk_decision_id, source_kind, source_identity, source_version, source_fingerprint)
+);
+
+CREATE OR REPLACE FUNCTION qd_reject_authoritative_risk_fact_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'authoritative risk facts are append-only' USING ERRCODE = '55000';
+END; $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_authoritative_risk_policies_append_only') THEN
+        CREATE TRIGGER trg_qd_authoritative_risk_policies_append_only BEFORE UPDATE OR DELETE ON qd_authoritative_risk_policies FOR EACH ROW EXECUTE FUNCTION qd_reject_authoritative_risk_fact_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_authoritative_account_risk_facts_append_only') THEN
+        CREATE TRIGGER trg_qd_authoritative_account_risk_facts_append_only BEFORE UPDATE OR DELETE ON qd_authoritative_account_risk_facts FOR EACH ROW EXECUTE FUNCTION qd_reject_authoritative_risk_fact_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_authoritative_market_observations_append_only') THEN
+        CREATE TRIGGER trg_qd_authoritative_market_observations_append_only BEFORE UPDATE OR DELETE ON qd_authoritative_market_observations FOR EACH ROW EXECUTE FUNCTION qd_reject_authoritative_risk_fact_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_authoritative_kill_switch_observations_append_only') THEN
+        CREATE TRIGGER trg_qd_authoritative_kill_switch_observations_append_only BEFORE UPDATE OR DELETE ON qd_authoritative_kill_switch_observations FOR EACH ROW EXECUTE FUNCTION qd_reject_authoritative_risk_fact_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_risk_fact_provenance_append_only') THEN
+        CREATE TRIGGER trg_qd_durable_risk_fact_provenance_append_only BEFORE UPDATE OR DELETE ON qd_durable_risk_fact_provenance FOR EACH ROW EXECUTE FUNCTION qd_reject_authoritative_risk_fact_mutation();
+    END IF;
+END $$;
+
+-- RF-01B: persisted, versioned conversion rules for authoritative risk demand.
+-- Expand-only.  Provider code supports only explicit linear quote conversion.
+
+CREATE TABLE IF NOT EXISTS qd_authoritative_instrument_risk_rules (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL CHECK (contract_version = 'authoritative-risk-facts-v1'),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    instrument_id VARCHAR(100) NOT NULL CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    valuation_currency VARCHAR(32) NOT NULL CHECK (valuation_currency <> '' AND valuation_currency = UPPER(valuation_currency)),
+    source_identity VARCHAR(160) NOT NULL CHECK (source_identity <> ''),
+    source_version VARCHAR(160) NOT NULL CHECK (source_version <> ''),
+    source_fingerprint VARCHAR(64) NOT NULL CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
+    observed_at TIMESTAMPTZ NOT NULL,
+    max_age_seconds INTEGER NOT NULL CHECK (max_age_seconds >= 0),
+    quantity_to_quote_multiplier NUMERIC(38,18) NOT NULL CHECK (quantity_to_quote_multiplier > 0),
+    initial_margin_ratio NUMERIC(38,18) NOT NULL CHECK (initial_margin_ratio > 0 AND initial_margin_ratio <= 1),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, credential_id, account_scope, instrument_id, market_type,
+        source_identity, source_version, source_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_authoritative_instrument_risk_rules_select
+    ON qd_authoritative_instrument_risk_rules
+    (tenant_id, credential_id, account_scope, instrument_id, market_type, observed_at DESC);
+
+ALTER TABLE qd_reconciliation_checkpoints
+    ADD COLUMN IF NOT EXISTS risk_max_age_seconds INTEGER;
+ALTER TABLE qd_reconciliation_checkpoints
+    DROP CONSTRAINT IF EXISTS chk_qd_reconciliation_checkpoints_risk_max_age;
+ALTER TABLE qd_reconciliation_checkpoints
+    ADD CONSTRAINT chk_qd_reconciliation_checkpoints_risk_max_age
+    CHECK (risk_max_age_seconds IS NULL OR risk_max_age_seconds >= 0);
+
+ALTER TABLE qd_authoritative_market_observations
+    ADD COLUMN IF NOT EXISTS market_data_health VARCHAR(16);
+ALTER TABLE qd_authoritative_market_observations
+    DROP CONSTRAINT IF EXISTS chk_qd_authoritative_market_observations_health;
+ALTER TABLE qd_authoritative_market_observations
+    ADD CONSTRAINT chk_qd_authoritative_market_observations_health
+    CHECK (market_data_health IS NULL OR market_data_health IN ('FRESH','STALE','UNKNOWN'));
+
+ALTER TABLE qd_durable_risk_fact_provenance
+    DROP CONSTRAINT IF EXISTS qd_durable_risk_fact_provenance_source_kind_check;
+ALTER TABLE qd_durable_risk_fact_provenance
+    ADD CONSTRAINT qd_durable_risk_fact_provenance_source_kind_check
+    CHECK (source_kind IN ('POLICY','ACCOUNT','MARKET','KILL_SWITCH_GLOBAL','KILL_SWITCH_ACCOUNT','KILL_SWITCH_STRATEGY','RECONCILIATION','ACTIVE_RESERVATIONS','INSTRUMENT_RULES'));
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_authoritative_instrument_risk_rules_append_only') THEN
+        CREATE TRIGGER trg_qd_authoritative_instrument_risk_rules_append_only
+        BEFORE UPDATE OR DELETE ON qd_authoritative_instrument_risk_rules
+        FOR EACH ROW EXECUTE FUNCTION qd_reject_authoritative_risk_fact_mutation();
+    END IF;
+END $$;
+
+-- REF-01C: persisted, immutable authority facts for Runtime Entry V1.
+-- Expand-only.  These tables validate ingress scope and position subjects;
+-- they neither create an exchange client nor authorise execution.
+
+CREATE TABLE IF NOT EXISTS qd_runtime_entry_scope_bindings (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL
+        CHECK (contract_version = 'runtime-entry-authority-v1'),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    exchange_id VARCHAR(50) NOT NULL
+        CHECK (exchange_id <> '' AND exchange_id = LOWER(exchange_id)),
+    source_identity VARCHAR(160) NOT NULL CHECK (source_identity <> ''),
+    source_version VARCHAR(160) NOT NULL CHECK (source_version <> ''),
+    source_fingerprint VARCHAR(64) NOT NULL
+        CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
+    observed_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, credential_id),
+    UNIQUE (tenant_id, credential_id, account_scope, exchange_id,
+        source_identity, source_version, source_fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS qd_runtime_entry_instrument_authorities (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL
+        CHECK (contract_version = 'runtime-entry-authority-v1'),
+    scope_binding_id UUID NOT NULL REFERENCES qd_runtime_entry_scope_bindings(id) ON DELETE RESTRICT,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    exchange_id VARCHAR(50) NOT NULL
+        CHECK (exchange_id <> '' AND exchange_id = LOWER(exchange_id)),
+    instrument_id VARCHAR(100) NOT NULL
+        CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL
+        CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    instrument_rule_snapshot_id UUID NOT NULL
+        REFERENCES qd_instrument_rule_snapshots(id) ON DELETE RESTRICT,
+    source_identity VARCHAR(160) NOT NULL CHECK (source_identity <> ''),
+    source_version VARCHAR(160) NOT NULL CHECK (source_version <> ''),
+    source_fingerprint VARCHAR(64) NOT NULL
+        CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
+    observed_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (scope_binding_id, instrument_id, market_type),
+    UNIQUE (id, tenant_id, credential_id, account_scope, instrument_id, market_type)
+);
+
+CREATE TABLE IF NOT EXISTS qd_runtime_entry_position_subjects (
+    id UUID PRIMARY KEY,
+    contract_version VARCHAR(64) NOT NULL
+        CHECK (contract_version = 'runtime-entry-authority-v1'),
+    scope_binding_id UUID NOT NULL REFERENCES qd_runtime_entry_scope_bindings(id) ON DELETE RESTRICT,
+    instrument_authority_id UUID NOT NULL
+        REFERENCES qd_runtime_entry_instrument_authorities(id) ON DELETE RESTRICT,
+    reconciliation_checkpoint_id UUID NOT NULL
+        REFERENCES qd_reconciliation_checkpoints(id) ON DELETE RESTRICT,
+    position_projection_id UUID NOT NULL
+        REFERENCES qd_position_projections(id) ON DELETE RESTRICT,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    exchange_id VARCHAR(50) NOT NULL
+        CHECK (exchange_id <> '' AND exchange_id = LOWER(exchange_id)),
+    instrument_id VARCHAR(100) NOT NULL
+        CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL
+        CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    position_side VARCHAR(8) NOT NULL CHECK (position_side IN ('LONG','SHORT')),
+    source_fingerprint VARCHAR(64) NOT NULL
+        CHECK (source_fingerprint ~ '^[0-9a-f]{64}$'),
+    observed_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (instrument_authority_id, position_side, position_projection_id,
+        reconciliation_checkpoint_id),
+    UNIQUE (id, tenant_id, credential_id, account_scope, instrument_id, market_type, position_side)
+);
+
+CREATE TABLE IF NOT EXISTS qd_runtime_entry_ingresses (
+    command_id UUID PRIMARY KEY
+        REFERENCES qd_durable_entry_specifications(command_id) ON DELETE RESTRICT,
+    contract_version VARCHAR(64) NOT NULL
+        CHECK (contract_version = 'runtime-entry-authority-v1'),
+    scope_binding_id UUID NOT NULL REFERENCES qd_runtime_entry_scope_bindings(id) ON DELETE RESTRICT,
+    instrument_authority_id UUID NOT NULL
+        REFERENCES qd_runtime_entry_instrument_authorities(id) ON DELETE RESTRICT,
+    position_subject_id UUID REFERENCES qd_runtime_entry_position_subjects(id) ON DELETE RESTRICT,
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    instrument_id VARCHAR(100) NOT NULL
+        CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    market_type VARCHAR(20) NOT NULL
+        CHECK (market_type <> '' AND market_type = LOWER(market_type)),
+    action VARCHAR(20) NOT NULL CHECK (action IN (
+        'OPEN','INCREASE','REDUCE','CLOSE','CANCEL','EMERGENCY_CLOSE','PROTECTION')),
+    actor_type VARCHAR(16) NOT NULL CHECK (actor_type IN (
+        'STRATEGY','HUMAN','AGENT','MCP','GRID','PROTECTION','ADMIN')),
+    actor_id VARCHAR(160) NOT NULL CHECK (actor_id <> ''),
+    source VARCHAR(16) NOT NULL CHECK (source IN (
+        'REST','MANUAL','STRATEGY','AGENT','MCP','GRID','PROTECTION')),
+    mode VARCHAR(16) NOT NULL CHECK (mode IN ('DISABLED','PAPER','SHADOW')),
+    idempotency_key VARCHAR(160) NOT NULL CHECK (idempotency_key <> ''),
+    economic_fingerprint VARCHAR(64) NOT NULL
+        CHECK (economic_fingerprint ~ '^[0-9a-f]{64}$'),
+    request_fingerprint VARCHAR(64) NOT NULL
+        CHECK (request_fingerprint ~ '^[0-9a-f]{64}$'),
+    correlation_id VARCHAR(160) NOT NULL CHECK (correlation_id <> ''),
+    occurred_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, credential_id, account_scope, idempotency_key, contract_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qd_runtime_entry_instrument_authorities_scope
+    ON qd_runtime_entry_instrument_authorities
+        (tenant_id, credential_id, account_scope, instrument_id, market_type);
+CREATE INDEX IF NOT EXISTS idx_qd_runtime_entry_position_subjects_lookup
+    ON qd_runtime_entry_position_subjects
+        (tenant_id, credential_id, account_scope, instrument_id, market_type, position_side);
+CREATE INDEX IF NOT EXISTS idx_qd_runtime_entry_ingresses_scope
+    ON qd_runtime_entry_ingresses
+        (tenant_id, credential_id, account_scope, created_at DESC);
+
+CREATE OR REPLACE FUNCTION qd_reject_runtime_entry_authority_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'runtime entry authority facts are append-only' USING ERRCODE = '55000';
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_assert_runtime_entry_scope_binding()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    credential_user_id INTEGER;
+    credential_exchange_id VARCHAR(50);
+BEGIN
+    SELECT user_id, LOWER(exchange_id)
+      INTO credential_user_id, credential_exchange_id
+      FROM qd_exchange_credentials
+     WHERE id = NEW.credential_id;
+    IF NOT FOUND
+       OR credential_user_id <> NEW.tenant_id
+       OR credential_exchange_id <> NEW.exchange_id THEN
+        RAISE EXCEPTION 'runtime entry scope binding does not match credential ownership'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_assert_runtime_entry_instrument_authority()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    binding_tenant_id INTEGER;
+    binding_credential_id INTEGER;
+    binding_account_scope VARCHAR(160);
+    binding_exchange_id VARCHAR(50);
+    rule_exchange VARCHAR(50);
+    rule_market_type VARCHAR(20);
+    rule_instrument_id VARCHAR(100);
+BEGIN
+    SELECT tenant_id, credential_id, account_scope, exchange_id
+      INTO binding_tenant_id, binding_credential_id, binding_account_scope, binding_exchange_id
+      FROM qd_runtime_entry_scope_bindings WHERE id = NEW.scope_binding_id;
+    SELECT LOWER(exchange), market_type, instrument_id
+      INTO rule_exchange, rule_market_type, rule_instrument_id
+      FROM qd_instrument_rule_snapshots WHERE id = NEW.instrument_rule_snapshot_id;
+    IF binding_tenant_id IS NULL
+       OR rule_exchange IS NULL
+       OR ROW(NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.exchange_id)
+          IS DISTINCT FROM ROW(binding_tenant_id, binding_credential_id, binding_account_scope, binding_exchange_id)
+       OR ROW(NEW.exchange_id, NEW.market_type, NEW.instrument_id)
+          IS DISTINCT FROM ROW(rule_exchange, rule_market_type, rule_instrument_id) THEN
+        RAISE EXCEPTION 'runtime entry instrument authority scope does not match binding or rule snapshot'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_assert_runtime_entry_position_subject()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    binding_record qd_runtime_entry_scope_bindings%ROWTYPE;
+    authority_record qd_runtime_entry_instrument_authorities%ROWTYPE;
+    checkpoint_record qd_reconciliation_checkpoints%ROWTYPE;
+    projection_record qd_position_projections%ROWTYPE;
+BEGIN
+    SELECT * INTO binding_record FROM qd_runtime_entry_scope_bindings WHERE id = NEW.scope_binding_id;
+    SELECT * INTO authority_record FROM qd_runtime_entry_instrument_authorities WHERE id = NEW.instrument_authority_id;
+    SELECT * INTO checkpoint_record FROM qd_reconciliation_checkpoints WHERE id = NEW.reconciliation_checkpoint_id;
+    SELECT * INTO projection_record FROM qd_position_projections WHERE id = NEW.position_projection_id;
+    IF binding_record.id IS NULL
+       OR authority_record.id IS NULL
+       OR checkpoint_record.id IS NULL
+       OR projection_record.id IS NULL
+       OR ROW(NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.exchange_id)
+          IS DISTINCT FROM ROW(binding_record.tenant_id, binding_record.credential_id, binding_record.account_scope, binding_record.exchange_id)
+       OR ROW(NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.exchange_id, NEW.instrument_id, NEW.market_type)
+          IS DISTINCT FROM ROW(authority_record.tenant_id, authority_record.credential_id, authority_record.account_scope, authority_record.exchange_id, authority_record.instrument_id, authority_record.market_type)
+       OR ROW(NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.exchange_id, NEW.instrument_id, NEW.market_type)
+          IS DISTINCT FROM ROW(checkpoint_record.tenant_id, checkpoint_record.credential_id, checkpoint_record.account_scope, LOWER(checkpoint_record.exchange), checkpoint_record.instrument_id, checkpoint_record.market_type)
+       OR checkpoint_record.status <> 'HEALTHY'
+       OR ROW(NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.instrument_id, NEW.position_side)
+          IS DISTINCT FROM ROW(projection_record.tenant_id, projection_record.credential_id, projection_record.account_scope, projection_record.instrument_id, projection_record.side)
+       OR projection_record.quantity <= 0 THEN
+        RAISE EXCEPTION 'runtime entry position subject does not match persisted position and reconciliation facts'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_assert_runtime_entry_ingress()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    entry_record qd_durable_entry_specifications%ROWTYPE;
+    binding_record qd_runtime_entry_scope_bindings%ROWTYPE;
+    authority_record qd_runtime_entry_instrument_authorities%ROWTYPE;
+    position_record qd_runtime_entry_position_subjects%ROWTYPE;
+BEGIN
+    SELECT * INTO entry_record FROM qd_durable_entry_specifications WHERE command_id = NEW.command_id;
+    SELECT * INTO binding_record FROM qd_runtime_entry_scope_bindings WHERE id = NEW.scope_binding_id;
+    SELECT * INTO authority_record FROM qd_runtime_entry_instrument_authorities WHERE id = NEW.instrument_authority_id;
+    IF entry_record.command_id IS NULL
+       OR binding_record.id IS NULL
+       OR authority_record.id IS NULL
+       OR ROW(NEW.tenant_id, NEW.credential_id, NEW.account_scope)
+          IS DISTINCT FROM ROW(binding_record.tenant_id, binding_record.credential_id, binding_record.account_scope)
+       OR ROW(NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.instrument_id, NEW.market_type)
+          IS DISTINCT FROM ROW(authority_record.tenant_id, authority_record.credential_id, authority_record.account_scope, authority_record.instrument_id, authority_record.market_type)
+       OR ROW(NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.instrument_id, NEW.market_type,
+           NEW.action, NEW.actor_type, NEW.actor_id, NEW.source, NEW.mode, NEW.idempotency_key,
+           NEW.economic_fingerprint, NEW.request_fingerprint, NEW.correlation_id, NEW.occurred_at)
+          IS DISTINCT FROM ROW(entry_record.tenant_id, entry_record.credential_id, entry_record.account_scope, entry_record.instrument_id, entry_record.market_type,
+              entry_record.action, entry_record.actor_type, entry_record.actor_id, entry_record.source, entry_record.mode, entry_record.idempotency_key,
+              entry_record.economic_fingerprint, entry_record.request_fingerprint, entry_record.correlation_id, entry_record.occurred_at)
+       OR (entry_record.action IN ('REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION') AND NEW.position_subject_id IS NULL)
+       OR (entry_record.action NOT IN ('REDUCE','CLOSE','EMERGENCY_CLOSE','PROTECTION') AND NEW.position_subject_id IS NOT NULL) THEN
+        RAISE EXCEPTION 'runtime entry ingress does not match durable entry authority facts'
+            USING ERRCODE = '23514';
+    END IF;
+    IF NEW.position_subject_id IS NOT NULL THEN
+        SELECT * INTO position_record FROM qd_runtime_entry_position_subjects WHERE id = NEW.position_subject_id;
+        IF position_record.id IS NULL
+           OR ROW(position_record.tenant_id, position_record.credential_id, position_record.account_scope,
+               position_record.instrument_id, position_record.market_type)
+              IS DISTINCT FROM ROW(NEW.tenant_id, NEW.credential_id, NEW.account_scope, NEW.instrument_id, NEW.market_type)
+           OR position_record.id::text <> entry_record.target_position_id THEN
+            RAISE EXCEPTION 'runtime entry ingress position subject does not match durable entry'
+                USING ERRCODE = '23514';
+        END IF;
+    END IF;
+    RETURN NEW;
+END; $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_runtime_entry_scope_bindings_validate') THEN
+        CREATE TRIGGER trg_qd_runtime_entry_scope_bindings_validate BEFORE INSERT ON qd_runtime_entry_scope_bindings FOR EACH ROW EXECUTE FUNCTION qd_assert_runtime_entry_scope_binding();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_runtime_entry_instrument_authorities_validate') THEN
+        CREATE TRIGGER trg_qd_runtime_entry_instrument_authorities_validate BEFORE INSERT ON qd_runtime_entry_instrument_authorities FOR EACH ROW EXECUTE FUNCTION qd_assert_runtime_entry_instrument_authority();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_runtime_entry_position_subjects_validate') THEN
+        CREATE TRIGGER trg_qd_runtime_entry_position_subjects_validate BEFORE INSERT ON qd_runtime_entry_position_subjects FOR EACH ROW EXECUTE FUNCTION qd_assert_runtime_entry_position_subject();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_runtime_entry_ingresses_validate') THEN
+        CREATE TRIGGER trg_qd_runtime_entry_ingresses_validate BEFORE INSERT ON qd_runtime_entry_ingresses FOR EACH ROW EXECUTE FUNCTION qd_assert_runtime_entry_ingress();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_runtime_entry_scope_bindings_append_only') THEN
+        CREATE TRIGGER trg_qd_runtime_entry_scope_bindings_append_only BEFORE UPDATE OR DELETE ON qd_runtime_entry_scope_bindings FOR EACH ROW EXECUTE FUNCTION qd_reject_runtime_entry_authority_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_runtime_entry_instrument_authorities_append_only') THEN
+        CREATE TRIGGER trg_qd_runtime_entry_instrument_authorities_append_only BEFORE UPDATE OR DELETE ON qd_runtime_entry_instrument_authorities FOR EACH ROW EXECUTE FUNCTION qd_reject_runtime_entry_authority_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_runtime_entry_position_subjects_append_only') THEN
+        CREATE TRIGGER trg_qd_runtime_entry_position_subjects_append_only BEFORE UPDATE OR DELETE ON qd_runtime_entry_position_subjects FOR EACH ROW EXECUTE FUNCTION qd_reject_runtime_entry_authority_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_runtime_entry_ingresses_append_only') THEN
+        CREATE TRIGGER trg_qd_runtime_entry_ingresses_append_only BEFORE UPDATE OR DELETE ON qd_runtime_entry_ingresses FOR EACH ROW EXECUTE FUNCTION qd_reject_runtime_entry_authority_mutation();
+    END IF;
+END $$;
+
+-- SC-14 R02: append-only and canonical consumer inbox facts.
+-- This migration is expand-only.  It does not wire a projection consumer or
+-- change any runtime trading path.
+
+-- The domain contract permits 160 canonical ASCII characters.  Widening the
+-- original VARCHAR(96) column is non-destructive for existing rows.
+ALTER TABLE qd_consumer_inbox
+    ALTER COLUMN consumer_name TYPE VARCHAR(160);
+
+ALTER TABLE qd_consumer_inbox
+    ALTER COLUMN result_hash DROP DEFAULT;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_consumer_inbox_consumer_name_canonical'
+    ) THEN
+        ALTER TABLE qd_consumer_inbox
+            ADD CONSTRAINT chk_qd_consumer_inbox_consumer_name_canonical
+            CHECK (
+                consumer_name <> ''
+                AND consumer_name = btrim(consumer_name)
+                AND consumer_name = lower(consumer_name)
+                AND consumer_name ~ '^[a-z0-9][a-z0-9._:/-]*$'
+            ) NOT VALID;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_consumer_inbox_result_hash_sha256'
+    ) THEN
+        ALTER TABLE qd_consumer_inbox
+            ADD CONSTRAINT chk_qd_consumer_inbox_result_hash_sha256
+            CHECK (result_hash ~ '^[0-9a-f]{64}$') NOT VALID;
+    END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION qd_reject_consumer_inbox_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'consumer inbox facts are append-only'
+        USING ERRCODE = '55000';
+END;
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'trg_qd_consumer_inbox_append_only'
+    ) THEN
+        CREATE TRIGGER trg_qd_consumer_inbox_append_only
+            BEFORE UPDATE OR DELETE ON qd_consumer_inbox
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_consumer_inbox_mutation();
+    END IF;
+END $$;
+
+-- V8: durable PAPER execution facts and restart checkpoints.
+-- Expand-only; no Gate client, runtime, worker or live-trading wiring.
+
+CREATE TABLE IF NOT EXISTS qd_paper_execution_orders (
+    id UUID PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    idempotency_key VARCHAR(160) NOT NULL,
+    request_fingerprint VARCHAR(128) NOT NULL CHECK (request_fingerprint <> ''),
+    order_fingerprint VARCHAR(128) NOT NULL CHECK (order_fingerprint <> ''),
+    market VARCHAR(40) NOT NULL,
+    symbol VARCHAR(100) NOT NULL,
+    market_type VARCHAR(20) NOT NULL CHECK (market_type IN ('spot','perpetual')),
+    side VARCHAR(8) NOT NULL CHECK (side IN ('BUY','SELL')),
+    order_type VARCHAR(16) NOT NULL CHECK (order_type IN ('MARKET','LIMIT')),
+    quantity NUMERIC(38,18) NOT NULL CHECK (quantity > 0),
+    limit_price NUMERIC(38,18),
+    status VARCHAR(24) NOT NULL CHECK (status IN ('CREATED','REPLAYED','SUBMITTED','PARTIALLY_FILLED','FILLED','CANCELLED','REJECTED')),
+    fill_quantity NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (fill_quantity >= 0 AND fill_quantity <= quantity),
+    fill_price NUMERIC(38,18),
+    fee_amount NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (fee_amount >= 0),
+    fee_asset VARCHAR(20) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK ((order_type = 'LIMIT' AND limit_price IS NOT NULL AND limit_price > 0) OR (order_type = 'MARKET' AND limit_price IS NULL)),
+    CHECK ((status IN ('PARTIALLY_FILLED','FILLED') AND fill_price IS NOT NULL AND fill_price > 0) OR status NOT IN ('PARTIALLY_FILLED','FILLED')),
+    UNIQUE(user_id, idempotency_key),
+    UNIQUE(order_fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qd_paper_execution_orders_user
+    ON qd_paper_execution_orders(user_id, created_at DESC, id);
+
+CREATE TABLE IF NOT EXISTS qd_paper_execution_order_events (
+    id UUID PRIMARY KEY,
+    order_id UUID NOT NULL REFERENCES qd_paper_execution_orders(id) ON DELETE RESTRICT,
+    event_seq INTEGER NOT NULL CHECK (event_seq >= 1),
+    event_type VARCHAR(24) NOT NULL CHECK (event_type IN ('SUBMITTED','CANCEL_REQUESTED','CANCELLED','REJECTED')),
+    occurred_at TIMESTAMPTZ NOT NULL,
+    event_fingerprint VARCHAR(128) NOT NULL UNIQUE CHECK (event_fingerprint <> ''),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(order_id, event_seq)
+);
+CREATE INDEX IF NOT EXISTS idx_qd_paper_execution_order_events_order
+    ON qd_paper_execution_order_events(order_id, event_seq);
+
+CREATE TABLE IF NOT EXISTS qd_paper_execution_fills (
+    id UUID PRIMARY KEY,
+    order_id UUID NOT NULL REFERENCES qd_paper_execution_orders(id) ON DELETE RESTRICT,
+    quantity NUMERIC(38,18) NOT NULL CHECK (quantity > 0),
+    price NUMERIC(38,18) NOT NULL CHECK (price > 0),
+    fee_amount NUMERIC(38,18) NOT NULL CHECK (fee_amount >= 0),
+    fee_asset VARCHAR(20) NOT NULL,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    fill_fingerprint VARCHAR(128) NOT NULL UNIQUE CHECK (fill_fingerprint <> ''),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_qd_paper_execution_fills_order
+    ON qd_paper_execution_fills(order_id, occurred_at, id);
+
+CREATE TABLE IF NOT EXISTS qd_paper_recovery_checkpoints (
+    id BIGSERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    checkpoint_version BIGINT NOT NULL CHECK (checkpoint_version >= 0),
+    last_order_id UUID REFERENCES qd_paper_execution_orders(id) ON DELETE RESTRICT,
+    snapshot_fingerprint VARCHAR(128) NOT NULL CHECK (snapshot_fingerprint <> ''),
+    status VARCHAR(16) NOT NULL CHECK (status IN ('READY','STALE','FAILED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, checkpoint_version)
+);
+
+CREATE OR REPLACE FUNCTION qd_reject_paper_execution_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'paper execution facts are append-only' USING ERRCODE = '55000';
+END;
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_paper_execution_orders_append_only') THEN
+        CREATE TRIGGER trg_qd_paper_execution_orders_append_only
+            BEFORE UPDATE OR DELETE ON qd_paper_execution_orders
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_paper_execution_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_paper_execution_fills_append_only') THEN
+        CREATE TRIGGER trg_qd_paper_execution_fills_append_only
+            BEFORE UPDATE OR DELETE ON qd_paper_execution_fills
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_paper_execution_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_paper_execution_order_events_append_only') THEN
+        CREATE TRIGGER trg_qd_paper_execution_order_events_append_only
+            BEFORE UPDATE OR DELETE ON qd_paper_execution_order_events
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_paper_execution_mutation();
+    END IF;
+END $$;
+
 -- =============================================================================
 -- Completion Notice
 -- =============================================================================
@@ -2291,3 +4786,190 @@ DO $$
 BEGIN
     RAISE NOTICE 'QuantDinger PostgreSQL schema initialized successfully!';
 END $$;
+-- Durable Entry V2 -> immutable fill-ledger bridge.
+-- Expand-only: canonical fills use their durable command identity and never
+-- invent qd_order_intents_v2 or qd_economic_orders rows.
+
+ALTER TABLE qd_ledger_entries
+    ADD COLUMN IF NOT EXISTS durable_entry_command_id UUID
+        REFERENCES qd_durable_entry_specifications(command_id) ON DELETE RESTRICT;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_qd_ledger_entries_single_order_identity'
+    ) THEN
+        ALTER TABLE qd_ledger_entries
+            ADD CONSTRAINT chk_qd_ledger_entries_single_order_identity
+            CHECK (durable_entry_command_id IS NULL OR economic_order_id IS NULL)
+            NOT VALID;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_qd_ledger_entries_durable_command
+    ON qd_ledger_entries(durable_entry_command_id, transaction_id)
+    WHERE durable_entry_command_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS qd_durable_entry_fill_events (
+    id UUID PRIMARY KEY,
+    key_version VARCHAR(32) NOT NULL CHECK (key_version <> ''),
+    dedupe_key VARCHAR(256) NOT NULL CHECK (dedupe_key <> ''),
+    exchange VARCHAR(50) NOT NULL CHECK (exchange <> '' AND exchange = LOWER(exchange)),
+    tenant_id INTEGER NOT NULL REFERENCES qd_users(id) ON DELETE RESTRICT,
+    credential_id INTEGER NOT NULL REFERENCES qd_exchange_credentials(id) ON DELETE RESTRICT,
+    account_scope VARCHAR(160) NOT NULL CHECK (account_scope <> ''),
+    market_type VARCHAR(20) NOT NULL CHECK (market_type IN ('spot','perpetual')),
+    command_id UUID NOT NULL REFERENCES qd_durable_entry_specifications(command_id) ON DELETE RESTRICT,
+    economic_order_id UUID NOT NULL,
+    exchange_order_id VARCHAR(160) NOT NULL DEFAULT '',
+    exchange_fill_id VARCHAR(160) NOT NULL DEFAULT '',
+    venue_trade_sequence VARCHAR(160) NOT NULL DEFAULT '',
+    instrument_id VARCHAR(100) NOT NULL CHECK (instrument_id <> '' AND instrument_id = UPPER(instrument_id)),
+    side VARCHAR(8) NOT NULL CHECK (side IN ('BUY','SELL')),
+    position_side VARCHAR(12) NOT NULL DEFAULT '' CHECK (position_side IN ('','LONG','SHORT')),
+    liquidity_role VARCHAR(16) NOT NULL DEFAULT '',
+    price NUMERIC(38,18) NOT NULL CHECK (price > 0),
+    quantity NUMERIC(38,18) NOT NULL CHECK (quantity > 0),
+    quote_quantity NUMERIC(38,18) NOT NULL CHECK (quote_quantity >= 0),
+    quote_quantity_origin VARCHAR(16) NOT NULL CHECK (quote_quantity_origin IN ('VENUE','DERIVED')),
+    quote_quantity_policy_version VARCHAR(64),
+    quote_quantity_evidence_hash VARCHAR(128) NOT NULL CHECK (quote_quantity_evidence_hash <> ''),
+    fee_summary_state VARCHAR(24) NOT NULL CHECK (fee_summary_state IN ('NONE','SINGLE_COMPONENT','MULTI_COMPONENT')),
+    fee_amount NUMERIC(38,18) NOT NULL DEFAULT 0 CHECK (fee_amount >= 0),
+    fee_asset VARCHAR(20) NOT NULL DEFAULT '',
+    fee_quote_amount NUMERIC(38,18),
+    exchange_event_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL,
+    source VARCHAR(16) NOT NULL CHECK (source IN ('WS','REST','BACKFILL','MANUAL')),
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    raw_payload_hash VARCHAR(128) NOT NULL CHECK (raw_payload_hash <> ''),
+    normalizer_version VARCHAR(64) NOT NULL CHECK (normalizer_version <> ''),
+    instrument_rule_version VARCHAR(100) NOT NULL CHECK (instrument_rule_version <> ''),
+    quarantine_state VARCHAR(32) NOT NULL DEFAULT 'CLEAR'
+        CHECK (quarantine_state IN ('CLEAR','QUARANTINED','RECONCILIATION_REQUIRED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(exchange, credential_id, dedupe_key, key_version),
+    UNIQUE(id, command_id, tenant_id, credential_id, account_scope, instrument_id, market_type),
+    CHECK (
+        (quote_quantity_origin = 'VENUE' AND quote_quantity_policy_version IS NULL)
+        OR (quote_quantity_origin = 'DERIVED' AND quote_quantity_policy_version IS NOT NULL
+            AND btrim(quote_quantity_policy_version) <> '')
+    ),
+    CHECK (
+        (fee_summary_state = 'NONE' AND fee_amount = 0 AND fee_asset = '' AND fee_quote_amount IS NULL)
+        OR fee_summary_state = 'SINGLE_COMPONENT'
+        OR (fee_summary_state = 'MULTI_COMPONENT' AND fee_amount = 0 AND fee_asset = ''
+            AND fee_quote_amount IS NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_qd_durable_entry_fill_events_scope
+    ON qd_durable_entry_fill_events(credential_id, account_scope, instrument_id, market_type, exchange_event_at);
+CREATE INDEX IF NOT EXISTS idx_qd_durable_entry_fill_events_command
+    ON qd_durable_entry_fill_events(command_id, exchange_event_at, id);
+
+CREATE TABLE IF NOT EXISTS qd_durable_entry_ledger_valuation_evidence (
+    id UUID PRIMARY KEY,
+    fill_event_id UUID NOT NULL REFERENCES qd_durable_entry_fill_events(id) ON DELETE RESTRICT,
+    asset VARCHAR(20) NOT NULL CHECK (asset <> '' AND asset = UPPER(asset)),
+    valuation_ccy VARCHAR(20) NOT NULL CHECK (valuation_ccy <> '' AND valuation_ccy = UPPER(valuation_ccy)),
+    price NUMERIC(38,18) NOT NULL CHECK (price > 0),
+    evidence_source VARCHAR(32) NOT NULL CHECK (evidence_source IN ('VENUE','ORACLE','MANUAL_APPROVED','IDENTITY')),
+    policy_version VARCHAR(64) NOT NULL CHECK (policy_version <> ''),
+    observed_at TIMESTAMPTZ NOT NULL,
+    payload_hash VARCHAR(128) NOT NULL CHECK (payload_hash <> ''),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (
+        (evidence_source = 'IDENTITY' AND asset = valuation_ccy AND price = 1)
+        OR (evidence_source <> 'IDENTITY' AND asset <> valuation_ccy)
+    ),
+    UNIQUE(id, fill_event_id, asset, valuation_ccy),
+    UNIQUE(fill_event_id, asset, valuation_ccy, evidence_source, policy_version, observed_at, payload_hash)
+);
+
+CREATE TABLE IF NOT EXISTS qd_durable_entry_fill_fee_components (
+    fill_event_id UUID NOT NULL REFERENCES qd_durable_entry_fill_events(id) ON DELETE RESTRICT,
+    fee_seq INTEGER NOT NULL CHECK (fee_seq >= 1),
+    asset VARCHAR(20) NOT NULL CHECK (asset <> '' AND asset = UPPER(asset)),
+    amount NUMERIC(38,18) NOT NULL CHECK (amount > 0),
+    fee_quote_amount NUMERIC(38,18),
+    valuation_ccy VARCHAR(20),
+    valuation_evidence_id UUID,
+    raw_component_hash VARCHAR(128) NOT NULL CHECK (raw_component_hash <> ''),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(fill_event_id, fee_seq),
+    UNIQUE(fill_event_id, raw_component_hash),
+    FOREIGN KEY(valuation_evidence_id, fill_event_id, asset, valuation_ccy)
+        REFERENCES qd_durable_entry_ledger_valuation_evidence(id, fill_event_id, asset, valuation_ccy)
+        ON DELETE RESTRICT,
+    CHECK (valuation_ccy IS NULL OR valuation_ccy = UPPER(valuation_ccy)),
+    CHECK (
+        (fee_quote_amount IS NULL AND valuation_evidence_id IS NULL AND valuation_ccy IS NULL)
+        OR (fee_quote_amount IS NOT NULL AND fee_quote_amount >= 0
+            AND valuation_evidence_id IS NOT NULL AND valuation_ccy IS NOT NULL)
+    )
+);
+
+CREATE OR REPLACE FUNCTION qd_assert_durable_entry_fill_scope()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+    entry_record qd_durable_entry_specifications%ROWTYPE;
+    credential_user_id INTEGER;
+    credential_exchange_id VARCHAR(50);
+BEGIN
+    SELECT * INTO entry_record
+      FROM qd_durable_entry_specifications
+     WHERE command_id = NEW.command_id;
+    SELECT user_id, LOWER(exchange_id)
+      INTO credential_user_id, credential_exchange_id
+      FROM qd_exchange_credentials
+     WHERE id = NEW.credential_id;
+    IF entry_record.command_id IS NULL
+       OR entry_record.action = 'CANCEL'
+       OR entry_record.economic_order_id IS NULL
+       OR entry_record.economic_order_id <> NEW.economic_order_id
+       OR ROW(NEW.tenant_id, NEW.credential_id, NEW.account_scope,
+              NEW.instrument_id, NEW.market_type)
+          IS DISTINCT FROM ROW(entry_record.tenant_id, entry_record.credential_id,
+              entry_record.account_scope, entry_record.instrument_id, entry_record.market_type)
+       OR credential_user_id <> NEW.tenant_id
+       OR credential_exchange_id <> NEW.exchange THEN
+        RAISE EXCEPTION 'durable entry fill scope does not match canonical entry facts'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END; $$;
+
+CREATE OR REPLACE FUNCTION qd_reject_durable_entry_fill_mutation()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'durable entry fill facts are append-only' USING ERRCODE = '55000';
+END; $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_entry_fill_scope') THEN
+        CREATE TRIGGER trg_qd_durable_entry_fill_scope
+            BEFORE INSERT ON qd_durable_entry_fill_events
+            FOR EACH ROW EXECUTE FUNCTION qd_assert_durable_entry_fill_scope();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_entry_fill_events_append_only') THEN
+        CREATE TRIGGER trg_qd_durable_entry_fill_events_append_only
+            BEFORE UPDATE OR DELETE ON qd_durable_entry_fill_events
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_durable_entry_fill_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_entry_fill_evidence_append_only') THEN
+        CREATE TRIGGER trg_qd_durable_entry_fill_evidence_append_only
+            BEFORE UPDATE OR DELETE ON qd_durable_entry_ledger_valuation_evidence
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_durable_entry_fill_mutation();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_qd_durable_entry_fee_components_append_only') THEN
+        CREATE TRIGGER trg_qd_durable_entry_fee_components_append_only
+            BEFORE UPDATE OR DELETE ON qd_durable_entry_fill_fee_components
+            FOR EACH ROW EXECUTE FUNCTION qd_reject_durable_entry_fill_mutation();
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_qd_durable_entry_fill_fee_components_asset
+    ON qd_durable_entry_fill_fee_components(asset, fill_event_id);

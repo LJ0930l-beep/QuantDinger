@@ -47,10 +47,6 @@ from app.services.quick_trade.symbols import (
     is_supported_crypto_exchange,
     symbols_match as quick_trade_symbols_match,
 )
-from app.services.live_trading.position_row_parse import (
-    extract_signed_position_qty,
-    infer_position_side_from_row,
-)
 from app.utils.request_guard import RequestGuardError, cache_key, guarded_cached
 
 logger = get_logger(__name__)
@@ -263,7 +259,6 @@ def _record_quick_trade(
     commission: float = 0.0,
     commission_ccy: str = "",
     commission_quote: Optional[float] = None,
-    client_order_id: str = "",
 ):
     """Insert a quick trade record into the database."""
     from app.services.live_trading.partner_attribution import redact_partner_attribution
@@ -295,24 +290,7 @@ def _record_quick_trade(
             row = cur.fetchone()
             db.commit()
             cur.close()
-            trade_id = int((row or {}).get("id") or 0)
-            if trade_id > 0 and exchange_order_id:
-                from app.services.execution_streams.repository import ExecutionEventRepository
-
-                ExecutionEventRepository().register_binding(
-                    credential_id=int(credential_id or 0),
-                    exchange_id=str(exchange_id or ""),
-                    market_type=str(market_type or "swap"),
-                    owner_type="quick_trade",
-                    owner_id=trade_id,
-                    user_id=int(user_id or 1),
-                    symbol=str(symbol or ""),
-                    signal_type=str(side or ""),
-                    client_order_id=str(client_order_id or ""),
-                    exchange_order_id=str(exchange_order_id or ""),
-                    observed_filled=float(filled or 0.0),
-                )
-            return trade_id
+            return (row or {}).get("id")
     except Exception as e:
         logger.error(f"Failed to record quick trade: {e}")
         return None
@@ -324,24 +302,15 @@ def _record_quick_trade(
 @login_required
 @quick_trade_blp.arguments(QuickTradeOrderRequestSchema, location="json")
 def place_order(body):
-    """
-    Place a quick market or limit order.
+    """Reject the retired legacy quick-trade order mutation endpoint."""
+    # The legacy body carries ambiguous amount/leverage semantics and has no
+    # authoritative scope, instrument, or position subject.  It must not be
+    # silently translated into Canonical Entry V2 or reach an exchange client.
+    return jsonify({
+        "code": "LEGACY_QUICK_TRADE_DISABLED",
+        "msg": "Legacy quick trade is disabled pending canonical entry migration.",
+    }), 410
 
-    Body JSON:
-      credential_id  (int)    - saved exchange credential ID
-      symbol         (str)    - e.g. "BTC/USDT"
-      side           (str)    - "buy" or "sell"
-      order_type     (str)    - "market" or "limit"  (default: market)
-      amount         (float)  - spot quote amount or swap margin amount in USDT
-      price          (float)  - limit price (required for limit orders)
-      leverage       (int)    - leverage multiplier (default: 1)
-                                - leverage = 1: spot market
-                                - leverage > 1: swap (perpetual futures) market
-      market_type    (str)    - "swap" / "spot" (optional, auto-determined by leverage if not provided)
-      tp_price       (float)  - take-profit price (optional, for record only)
-      sl_price       (float)  - stop-loss price (optional, for record only)
-      source         (str)    - "ai_radar" / "ai_analysis" / "indicator" / "manual"
-    """
     try:
         user_id = g.user_id
         credential_id = int(body.get("credential_id") or 0)
@@ -672,7 +641,6 @@ def place_order(body):
             commission=commission,
             commission_ccy=commission_ccy,
             commission_quote=commission_quote,
-            client_order_id=client_order_id,
         )
 
         return jsonify({
@@ -1092,7 +1060,7 @@ def _fetch_exchange_positions_raw(
                     q["positionAmt"] = base_amt
                     # Preserve direction for _parse_positions. Gate encodes short as
                     # negative contract size but positionAmt is always positive.
-                    q["positionSide"] = infer_position_side_from_row(q).upper()
+                    q["positionSide"] = "LONG" if ct_sz > 0 else "SHORT"
             out.append(q)
         logger.info("Gate filtered positions for %s: %d items, sizes=%s", c, len(out),
                      [(p.get("size"), p.get("positionAmt")) for p in out])
@@ -1252,10 +1220,14 @@ def _normalize_okx_positions_raw(raw: Any) -> Any:
 
 
 def _extract_signed_position_qty(item: dict) -> float:
+    from app.services.live_trading.position_row_parse import extract_signed_position_qty
+
     return extract_signed_position_qty(item)
 
 
 def _infer_position_side_from_row(item: dict) -> str:
+    from app.services.live_trading.position_row_parse import infer_position_side_from_row
+
     return infer_position_side_from_row(item)
 
 
@@ -1424,18 +1396,14 @@ def _quick_trade_net_base_qty(
 @login_required
 @quick_trade_blp.arguments(QuickTradeCloseRequestSchema, location="json")
 def close_position(body):
-    """
-    Close an existing position.
-    
-    Body JSON:
-      credential_id  (int)    - saved exchange credential ID
-      symbol         (str)    - e.g. "BTC/USDT"
-      market_type    (str)    - "swap" / "spot" (default: swap)
-      size           (float)  - position size to close (optional, defaults to full position)
-      close_scope    (str)    - "full" (default) or "system_tracked" (swap only: min(position, net from qd_quick_trades))
-      position_side  (str)    - optional "long" / "short"; required when both directions exist for the same symbol
-      source         (str)    - "ai_radar" / "ai_analysis" / "indicator" / "manual"
-    """
+    """Reject the retired legacy quick-trade position mutation endpoint."""
+    # Closing must also wait for a persisted target-position authority; the
+    # legacy body cannot prove it and must fail closed before any venue call.
+    return jsonify({
+        "code": "LEGACY_QUICK_TRADE_DISABLED",
+        "msg": "Legacy quick trade is disabled pending canonical entry migration.",
+    }), 410
+
     try:
         user_id = g.user_id
         credential_id = int(body.get("credential_id") or 0)
@@ -1793,3 +1761,4 @@ def get_history():
 
 # openapi-compat: legacy import name
 quick_trade_bp = quick_trade_blp
+

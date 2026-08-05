@@ -1,6 +1,6 @@
 """
 加密货币数据源
-使用 CCXT 获取数据
+使用 CCXT (Coinbase) 获取数据
 """
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta, timezone
@@ -17,14 +17,8 @@ logger = get_logger(__name__)
 
 # Live-trading scoped instances: one CCXT client per (exchange, spot|swap).
 _SCOPED_INSTANCES: Dict[str, "CryptoDataSource"] = {}
-_PUBLIC_MARKET_INSTANCES: Dict[str, "CryptoDataSource"] = {}
 _INVALID_SYMBOL_UNTIL: Dict[str, float] = {}
 PUBLIC_KLINE_EXCHANGE_IDS = ("binance", "bitget", "bybit", "okx", "gate", "htx")
-PUBLIC_KLINE_FALLBACK_IDS = ("bitget", "okx", "gate", "htx", "bybit", "binance")
-
-
-class _PublicKlineUnavailable(RuntimeError):
-    """Signal an empty provider result so an unscoped source can fail over."""
 
 
 def apply_public_ccxt_endpoint_config(config: Dict[str, Any], exchange_id: str) -> Dict[str, Any]:
@@ -147,12 +141,8 @@ class CryptoDataSource(BaseDataSource):
     COMMON_QUOTES = ['USDT', 'USD', 'BTC', 'ETH', 'BUSD', 'USDC', 'BNB', 'EUR', 'GBP']
     
     def __init__(self):
-        # Unscoped chart/backtest data may fail over between public providers.
-        # A live-venue scoped source must always remain on its requested venue.
-        self._allow_public_fallback = True
         self._scoped_exchange_id = ""
         self._scoped_market_type = "spot"
-        self._preferred_public_exchange_id = ""
         self._markets_load_lock = threading.Lock()
         default_ex = (CCXTConfig.DEFAULT_EXCHANGE or "binance").strip().lower()
         if default_ex == "huobi":
@@ -173,10 +163,8 @@ class CryptoDataSource(BaseDataSource):
         if cached is not None:
             return cached
         inst = object.__new__(cls)
-        inst._allow_public_fallback = False
         inst._scoped_exchange_id = (exchange_id or "").strip().lower()
         inst._scoped_market_type = mt
-        inst._preferred_public_exchange_id = ""
         inst._markets_load_lock = threading.Lock()
         inst._init_ccxt_exchange(ccxt_id, options)
         _SCOPED_INSTANCES[cache_key] = inst
@@ -187,48 +175,6 @@ class CryptoDataSource(BaseDataSource):
             ccxt_id,
             options,
         )
-        return inst
-
-    @classmethod
-    def for_public_market(
-        cls,
-        market_type: str = "spot",
-        preferred_exchange_id: str = "",
-    ) -> "CryptoDataSource":
-        """Return an uncredentialed source that may fail over across public venues.
-
-        Backtests still need the requested product type (spot versus perpetual),
-        but must not become unavailable merely because the default public venue is
-        blocked or temporarily down.  Live-trading callers continue to use
-        :meth:`for_exchange`, which intentionally never crosses venues.
-        """
-        mt = (market_type or "spot").strip().lower()
-        if mt in ("futures", "future", "perp", "perpetual"):
-            mt = "swap"
-        if mt not in ("spot", "swap"):
-            mt = "spot"
-        exchange_id = (
-            preferred_exchange_id
-            or CCXTConfig.DEFAULT_EXCHANGE
-            or "binance"
-        ).strip().lower()
-        if exchange_id == "huobi":
-            exchange_id = "htx"
-        if exchange_id not in PUBLIC_KLINE_EXCHANGE_IDS:
-            exchange_id = "binance"
-        cache_key = f"{exchange_id}|{mt}"
-        cached = _PUBLIC_MARKET_INSTANCES.get(cache_key)
-        if cached is not None:
-            return cached
-        ccxt_id, options = resolve_ccxt_for_live_trading(exchange_id, mt)
-        inst = object.__new__(cls)
-        inst._allow_public_fallback = True
-        inst._scoped_exchange_id = exchange_id
-        inst._scoped_market_type = mt
-        inst._preferred_public_exchange_id = ""
-        inst._markets_load_lock = threading.Lock()
-        inst._init_ccxt_exchange(ccxt_id, options)
-        _PUBLIC_MARKET_INSTANCES[cache_key] = inst
         return inst
 
     def _init_ccxt_exchange(self, ccxt_exchange_id: str, options: Optional[Dict[str, Any]] = None) -> None:
@@ -386,7 +332,8 @@ class CryptoDataSource(BaseDataSource):
         不同交易所的符号格式要求：
         - Binance: BTC/USDT (标准格式)
         - OKX: BTC/USDT (标准格式，但某些币种可能不支持)
-        Different providers may use different quote currencies or asset aliases.
+        - Coinbase: BTC/USD (通常使用 USD 而不是 USDT)
+        - Kraken: XBT/USD (BTC 映射为 XBT)
         """
         normalized, base = self._normalize_symbol(symbol)
         
@@ -413,28 +360,6 @@ class CryptoDataSource(BaseDataSource):
         """
         if not symbol or not symbol.strip():
             return {'last': 0, 'symbol': symbol}
-
-        preferred_exchange = str(
-            getattr(self, "_preferred_public_exchange_id", "") or ""
-        ).strip().lower()
-        current_exchange = str(
-            getattr(self.exchange, "id", "") or ""
-        ).strip().lower()
-        fallback_market_type = str(
-            getattr(self, "_scoped_market_type", "") or "spot"
-        ).strip().lower()
-        if (
-            bool(getattr(self, "_allow_public_fallback", False))
-            and preferred_exchange
-            and preferred_exchange != current_exchange
-        ):
-            preferred_ticker = type(self).for_exchange(
-                preferred_exchange,
-                fallback_market_type,
-            ).get_ticker(symbol)
-            if float((preferred_ticker or {}).get("last") or 0) > 0:
-                return preferred_ticker
-            self._preferred_public_exchange_id = ""
         
         normalized = self._symbol_for_scoped_market(symbol)
 
@@ -474,24 +399,6 @@ class CryptoDataSource(BaseDataSource):
                     f"Error: {str(e)[:100]}"
                 )
         
-        if bool(getattr(self, "_allow_public_fallback", False)):
-            for exchange_id in PUBLIC_KLINE_FALLBACK_IDS:
-                if exchange_id == current_exchange:
-                    continue
-                fallback_ticker = type(self).for_exchange(
-                    exchange_id,
-                    fallback_market_type,
-                ).get_ticker(symbol)
-                if float((fallback_ticker or {}).get("last") or 0) > 0:
-                    self._preferred_public_exchange_id = exchange_id
-                    logger.warning(
-                        "Public crypto ticker provider failed over from %s to %s for %s",
-                        current_exchange or "default",
-                        exchange_id,
-                        symbol,
-                    )
-                    return fallback_ticker
-
         return {'last': 0, 'symbol': symbol}
     
     def get_kline(
@@ -505,36 +412,6 @@ class CryptoDataSource(BaseDataSource):
         """获取加密货币K线数据"""
         klines = []
         symbol_pair = ""
-
-        # A public source is cached and reused by chart/backtest/signal
-        # runtimes. Once its configured venue has failed and another venue has
-        # returned valid candles, reuse that known-good venue on subsequent
-        # calls. Without this small circuit breaker every strategy cycle first
-        # waits for the same geo-blocked/down provider and only then falls back.
-        # Live venue-scoped sources never enter this path.
-        preferred_exchange = str(
-            getattr(self, "_preferred_public_exchange_id", "") or ""
-        ).strip().lower()
-        current_exchange = str(
-            getattr(self.exchange, "id", "") or ""
-        ).strip().lower()
-        fallback_market_type = str(
-            getattr(self, "_scoped_market_type", "") or "spot"
-        ).strip().lower()
-        if (
-            bool(getattr(self, "_allow_public_fallback", False))
-            and preferred_exchange
-            and preferred_exchange != current_exchange
-        ):
-            preferred_rows = type(self).for_exchange(
-                preferred_exchange,
-                fallback_market_type,
-            ).get_kline(symbol, timeframe, limit, before_time, after_time)
-            if preferred_rows:
-                return preferred_rows
-            # The promoted provider has also become unavailable. Clear it and
-            # run the normal ordered failover below.
-            self._preferred_public_exchange_id = ""
         
         try:
             ccxt_timeframe = self.TIMEFRAME_MAP.get(timeframe, '1d')
@@ -553,7 +430,7 @@ class CryptoDataSource(BaseDataSource):
                         f"and no finer supported granularity is available for resampling. "
                         f"Supported: {sorted(exchange_timeframes.keys())}"
                     )
-                    raise _PublicKlineUnavailable
+                    return []
                 source_ccxt_tf, bucket = picked
                 fetch_ccxt_timeframe = source_ccxt_tf
                 fetch_qd_timeframe = self._ccxt_to_qd_timeframe(source_ccxt_tf, timeframe)
@@ -569,10 +446,10 @@ class CryptoDataSource(BaseDataSource):
 
             if not symbol_pair:
                 logger.warning(f"Failed to normalize symbol for K-line: {symbol}")
-                raise _PublicKlineUnavailable
+                return []
 
             if self._is_invalid_symbol_cached(symbol_pair):
-                raise _PublicKlineUnavailable
+                return []
 
             ohlcv = self._fetch_ohlcv(
                 symbol_pair, fetch_ccxt_timeframe, fetch_limit,
@@ -581,7 +458,7 @@ class CryptoDataSource(BaseDataSource):
 
             if not ohlcv:
                 logger.warning(f"CCXT returned no K-lines: {symbol_pair}")
-                raise _PublicKlineUnavailable
+                return []
 
             if resample_bucket > 1:
                 ohlcv = self._resample_ohlcv(ohlcv, resample_bucket)
@@ -590,7 +467,7 @@ class CryptoDataSource(BaseDataSource):
                         f"Resampling produced no candles for {symbol_pair} "
                         f"(bucket={resample_bucket}, source len was less than one bucket)"
                     )
-                    raise _PublicKlineUnavailable
+                    return []
 
             for candle in ohlcv:
                 if len(candle) < 6:
@@ -627,52 +504,11 @@ class CryptoDataSource(BaseDataSource):
                 except Exception:
                     pass
 
-        except _PublicKlineUnavailable:
-            pass
         except Exception as e:
             logger.error(f"Failed to fetch crypto K-lines {symbol}: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
-
-        if not klines and bool(getattr(self, "_allow_public_fallback", False)):
-            current_exchange = str(getattr(self.exchange, "id", "") or "").strip().lower()
-            fallback_market_type = str(
-                getattr(self, "_scoped_market_type", "") or "spot"
-            ).strip().lower()
-            for exchange_id in PUBLIC_KLINE_FALLBACK_IDS:
-                if exchange_id == current_exchange:
-                    continue
-                try:
-                    fallback_source = type(self).for_exchange(
-                        exchange_id,
-                        fallback_market_type,
-                    )
-                    fallback_rows = fallback_source.get_kline(
-                        symbol,
-                        timeframe,
-                        limit,
-                        before_time,
-                        after_time,
-                    )
-                    if fallback_rows:
-                        self._preferred_public_exchange_id = exchange_id
-                        logger.warning(
-                            "Public crypto K-line provider failed over from %s to %s for %s %s",
-                            current_exchange or "default",
-                            exchange_id,
-                            symbol,
-                            timeframe,
-                        )
-                        return fallback_rows
-                except Exception as exc:
-                    logger.warning(
-                        "Public crypto K-line fallback %s failed for %s %s: %s",
-                        exchange_id,
-                        symbol,
-                        timeframe,
-                        str(exc),
-                    )
-
+        
         return klines
 
     @classmethod
@@ -780,7 +616,7 @@ class CryptoDataSource(BaseDataSource):
                         since = earliest_supported_ms
 
                 all_ohlcv: List[List[Any]] = []
-                batch_limit = 300  # Conservative cross-provider request limit.
+                batch_limit = 300  # Coinbase limit is often 300, safer than 1000
                 current_since = since
                 max_batches = 6000
                 empty_streak = 0
@@ -958,3 +794,4 @@ class CryptoDataSource(BaseDataSource):
             else:
                 logger.error("Recent-candle fallback also failed for %s: %s", symbol_pair, str(e))
         return []
+

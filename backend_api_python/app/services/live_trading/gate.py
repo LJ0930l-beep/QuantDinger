@@ -23,6 +23,7 @@ from urllib.parse import urlencode
 
 from app.services.live_trading.base import BaseRestClient, LiveOrderResult, LiveTradingError
 from app.services.live_trading.symbols import to_gate_currency_pair
+from app.domain.gate_leverage_contracts import validate_gate_crypto_swap_leverage
 
 logger = logging.getLogger(__name__)
 
@@ -77,19 +78,23 @@ class _GateBase(BaseRestClient):
         return headers
 
     def _format_text(self, client_order_id: Optional[str]) -> str:
-        raw = str(client_order_id or "").strip()
+        raw = str(client_order_id or "")
         if not raw:
             return ""
-        normalized = []
-        for ch in raw:
-            if ch.isalnum() or ch in ("-", "_", "."):
-                normalized.append(ch)
-        text = "".join(normalized).strip()
-        if not text:
-            return ""
+        # Gate's user-defined ``text`` is part of the order identity.  Never
+        # strip, rewrite, or truncate it: doing so would break idempotent
+        # replay and make the submitted order impossible to correlate safely.
+        if raw != raw.strip() or not raw.isascii() or any(
+            ch not in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_-." for ch in raw
+        ):
+            raise LiveTradingError("Gate client order id contains unsupported characters")
+        text = raw
         if not text.startswith("t-"):
             text = f"t-{text}"
-        return text[:28]
+        content = text[2:]
+        if not content or len(content.encode("ascii")) > 28:
+            raise LiveTradingError("Gate client order id exceeds 28 bytes")
+        return text
 
     def _signed_request(
         self,
@@ -329,8 +334,6 @@ class GateUsdtFuturesClient(_GateBase):
         # Best-effort cache for contract metadata to convert base qty -> contracts.
         self._contract_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
         self._contract_cache_ttl_sec = 300.0
-        self._position_mode_cache: Tuple[float, str] = (0.0, "")
-        self._position_mode_cache_ttl_sec = 30.0
 
     @staticmethod
     def _to_dec(x: Any) -> Decimal:
@@ -451,7 +454,7 @@ class GateUsdtFuturesClient(_GateBase):
             step = Decimal(10) ** (-dp)
             q = contracts.quantize(step, rounding=ROUND_DOWN)
             if q < order_min and contracts > 0:
-                return ("0", {"X-Gate-Size-Decimal": "1"})
+                q = order_min
             signed_q = q * sign
             s = format(signed_q, "f")
             if "." in s:
@@ -462,7 +465,7 @@ class GateUsdtFuturesClient(_GateBase):
             iv = int(self._floor(contracts))
             int_min = max(1, int(order_min))
             if iv < int_min and contracts > 0:
-                return ("0", None)
+                iv = int_min
             signed_iv = int(Decimal(iv) * sign)
             return (str(signed_iv), None)
 
@@ -505,52 +508,9 @@ class GateUsdtFuturesClient(_GateBase):
     def get_accounts(self) -> Any:
         return self._signed_request("GET", "/api/v4/futures/usdt/accounts")
 
-    def get_position_mode(self) -> str:
-        """Return Gate futures ``single`` / ``dual`` / ``dual_plus`` mode."""
-        now = time.time()
-        cached_at, cached_mode = getattr(self, "_position_mode_cache", (0.0, ""))
-        ttl = float(getattr(self, "_position_mode_cache_ttl_sec", 30.0) or 30.0)
-        if cached_mode and (now - float(cached_at or 0.0)) <= ttl:
-            return cached_mode
-
-        account = self.get_accounts() or {}
-        if not isinstance(account, dict):
-            return ""
-        mode = str(account.get("position_mode") or "").strip().lower()
-        if mode not in ("single", "dual", "dual_plus"):
-            dual = account.get("in_dual_mode")
-            if dual is True:
-                mode = "dual"
-            elif dual is False:
-                mode = "single"
-            else:
-                mode = ""
-        if mode:
-            self._position_mode_cache = (now, mode)
-        return mode
-
-    def is_hedge_position_mode(self, *, symbol: str = "") -> Optional[bool]:
-        _ = symbol
-        mode = self.get_position_mode()
-        if mode == "dual":
-            return True
-        if mode == "single":
-            return False
-        # dual_plus is Gate's split-position mode. It can create multiple
-        # independent same-side positions and requires position/margin routing
-        # fields that do not map to this system's one-long + one-short ledger.
-        # Do not misreport it as the standard dual mode.
-        return None
-
     def get_positions(self) -> Any:
-        mode = self.get_position_mode()
-        path = (
-            "/api/v4/futures/usdt/dual_comp/positions"
-            if mode == "dual"
-            else "/api/v4/futures/usdt/positions"
-        )
         return self._signed_request(
-            "GET", path,
+            "GET", "/api/v4/futures/usdt/positions",
             extra_headers={"X-Gate-Size-Decimal": "1"},
         )
 
@@ -559,30 +519,11 @@ class GateUsdtFuturesClient(_GateBase):
         if not c:
             return False
         try:
-            lv = int(float(leverage or 1.0))
-        except Exception:
-            lv = 1
-        if lv < 1:
-            lv = 1
-        try:
-            meta = self.get_contract(contract=c) or {}
-        except Exception:
-            meta = {}
-        try:
-            max_leverage = int(float(meta.get("leverage_max") or meta.get("leverageMax") or 0))
-        except (TypeError, ValueError):
-            max_leverage = 0
-        if max_leverage > 0 and lv > max_leverage:
-            raise LiveTradingError(
-                f"Gate leverage {lv}x exceeds the current {c} maximum {max_leverage}x"
-            )
-
-        position_mode = self.get_position_mode()
-        if position_mode in ("dual", "dual_plus"):
-            path = f"/api/v4/futures/usdt/dual_comp/positions/{c}/leverage"
-        else:
-            path = f"/api/v4/futures/usdt/positions/{c}/leverage"
-        lv_s = str(lv)
+            lv = validate_gate_crypto_swap_leverage(leverage)
+        except Exception as exc:
+            raise LiveTradingError(str(exc)) from exc
+        path = f"/api/v4/futures/usdt/positions/{c}/leverage"
+        lv_s = format(lv, "f")
         # Gate expects ``leverage`` / ``cross_leverage_limit`` as **query parameters**, not JSON body
         # (see gateapi-python: update_position_leverage). Cross / portfolio mode: leverage=0 + cross_leverage_limit.
         mode = str(margin_mode or "cross").strip().lower()
@@ -592,25 +533,18 @@ class GateUsdtFuturesClient(_GateBase):
             params = {"leverage": lv_s}
         else:
             return False
-        response = self._signed_request("POST", path, params=params, json_body=None)
-        if isinstance(response, dict):
-            effective_raw = (
-                response.get("cross_leverage_limit")
-                if mode in ("cross", "crossed")
-                else response.get("leverage")
+        try:
+            self._signed_request("POST", path, params=params, json_body=None)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Gate set_leverage failed contract=%s leverage=%s margin_mode=%s: %s",
+                c,
+                lv,
+                mode,
+                exc,
             )
-            if effective_raw not in (None, ""):
-                try:
-                    effective = int(float(effective_raw))
-                except (TypeError, ValueError) as exc:
-                    raise LiveTradingError(
-                        f"Gate returned an invalid effective leverage: {effective_raw}"
-                    ) from exc
-                if effective != lv:
-                    raise LiveTradingError(
-                        f"Gate applied {effective}x instead of requested {lv}x leverage"
-                    )
-        return True
+            return False
 
     def place_market_order(
         self,
@@ -809,3 +743,4 @@ class GateUsdtFuturesClient(_GateBase):
             if timed_out:
                 return {"filled": filled, "avg_price": avg_price, "fee": fee, "fee_ccy": fee_ccy, "status": status, "order": last}
             time.sleep(float(poll_interval_sec or 0.5))
+

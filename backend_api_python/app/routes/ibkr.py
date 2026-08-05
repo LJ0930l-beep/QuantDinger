@@ -218,6 +218,11 @@ def place_order():
         orderType (optional, default market): market or limit
         price (required for limit orders): Limit price
     """
+    return jsonify({
+        "success": False,
+        "error": "IBKR direct order entry is permanently disabled",
+    }), 410
+
     try:
         client, err = _require_connected_client()
         if err is not None:
@@ -291,6 +296,11 @@ def place_order():
 @login_required
 def cancel_order(order_id: int):
     """Cancel an IBKR order by ID."""
+    return jsonify({
+        "success": False,
+        "error": "IBKR direct order entry is permanently disabled",
+    }), 410
+
     try:
         client, err = _require_connected_client()
         if err is not None:

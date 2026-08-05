@@ -33,11 +33,10 @@ def _token(scopes: str = "R,W") -> dict:
     }
 
 
-def _headers(idempotency_key: str = "test-source-write") -> dict:
+def _headers() -> dict:
     return {
         "Authorization": "Bearer qd_agent_SOURCEWORKSPACE12345",
         "Content-Type": "application/json",
-        "Idempotency-Key": idempotency_key,
     }
 
 
@@ -46,8 +45,6 @@ def _authorize(monkeypatch, scopes: str = "R,W") -> None:
     monkeypatch.setattr(agent_auth, "_lookup_token", lambda raw: _token(scopes))
     monkeypatch.setattr(agent_auth, "_touch_token_last_used", lambda *_: None)
     monkeypatch.setattr(agent_auth, "_audit", lambda *a, **kw: None)
-    monkeypatch.setattr(agent_auth, "_reserve_idempotency", lambda *_: ("reserved", None))
-    monkeypatch.setattr(agent_auth, "_complete_idempotency", lambda *_: None)
 
 
 class _SourceService:
@@ -128,7 +125,7 @@ def test_strategy_source_compile_and_create(client, monkeypatch, source_service)
 
     created = client.post(
         "/api/agent/v1/strategy-sources",
-        headers=_headers("source-create"),
+        headers=_headers(),
         json={"name": "SPY trend", "code": code, "metadata": {"owner": "agent"}},
     )
     assert created.status_code == 200
@@ -143,7 +140,7 @@ def test_strategy_authoring_contract_is_source_owned(client, monkeypatch):
 
     response = client.get(
         "/api/agent/v1/strategy-sources/authoring-contract",
-        headers=_headers("source-restore-confirm"),
+        headers=_headers(),
     )
 
     assert response.status_code == 200
@@ -183,14 +180,14 @@ def test_restore_strategy_source_requires_confirmation(client, monkeypatch, sour
 
     rejected = client.post(
         "/api/agent/v1/strategy-sources/12/versions/44/restore",
-        headers=_headers("source-restore-reject"),
+        headers=_headers(),
         json={"confirm": False},
     )
     assert rejected.status_code == 400
 
     restored = client.post(
         "/api/agent/v1/strategy-sources/12/versions/44/restore",
-        headers=_headers("source-restore-confirm"),
+        headers=_headers(),
         json={"confirm": True},
     )
     assert restored.status_code == 200

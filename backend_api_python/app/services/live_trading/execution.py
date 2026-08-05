@@ -2,7 +2,7 @@
 Translate a strategy signal into a direct-exchange order call.
 
 Supports:
-- Crypto exchanges: Binance, OKX, Bitget, Bybit, Gate, HTX
+- Crypto exchanges: Binance, OKX, Bitget, Bybit, Coinbase, Kraken, Gate, HTX
 - Traditional brokers: Interactive Brokers (IBKR) and Alpaca
 """
 
@@ -18,6 +18,9 @@ from app.services.live_trading.okx import OkxClient
 from app.services.live_trading.bitget import BitgetMixClient
 from app.services.live_trading.bitget_spot import BitgetSpotClient
 from app.services.live_trading.bybit import BybitClient
+from app.services.live_trading.coinbase_exchange import CoinbaseExchangeClient
+from app.services.live_trading.kraken import KrakenClient
+from app.services.live_trading.kraken_futures import KrakenFuturesClient
 from app.services.live_trading.gate import GateSpotClient, GateUsdtFuturesClient
 
 # Lazy import HTX
@@ -234,6 +237,10 @@ def place_order_from_signal(
             pos_side=pos_side,
             client_order_id=client_order_id,
         )
+    if isinstance(client, CoinbaseExchangeClient):
+        return client.place_market_order(symbol=symbol, side=side, size=qty, client_order_id=client_order_id)
+    if isinstance(client, KrakenClient):
+        return client.place_market_order(symbol=symbol, side=side, size=qty, client_order_id=client_order_id)
     if isinstance(client, GateSpotClient):
         gate_size = qty
         if side == "buy":
@@ -242,6 +249,8 @@ def place_order_from_signal(
             )
         return client.place_market_order(symbol=symbol, side=side, size=gate_size, client_order_id=client_order_id)
     if isinstance(client, GateUsdtFuturesClient):
+        return client.place_market_order(symbol=symbol, side=side, size=qty, reduce_only=reduce_only, client_order_id=client_order_id)
+    if isinstance(client, KrakenFuturesClient):
         return client.place_market_order(symbol=symbol, side=side, size=qty, reduce_only=reduce_only, client_order_id=client_order_id)
 
     global HtxClient

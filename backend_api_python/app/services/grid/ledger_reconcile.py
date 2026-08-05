@@ -116,9 +116,7 @@ def clear_phantom_grid_ledger(
         return report
 
     tc = sc.get("trading_config") if isinstance(sc.get("trading_config"), dict) else {}
-    from app.services.strategy_runtime.bot_type import resolve_bot_type
-
-    bot_type = resolve_bot_type(sc, tc)
+    bot_type = str(sc.get("bot_type") or tc.get("bot_type") or "").strip().lower()
     if bot_type != "grid":
         report["reason"] = f"not a grid strategy (bot_type={bot_type or 'unknown'})"
         return report

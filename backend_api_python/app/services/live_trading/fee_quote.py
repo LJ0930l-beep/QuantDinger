@@ -26,9 +26,7 @@ def fee_to_quote(
     fee_ccy: str,
     fill_price: float,
 ) -> Optional[float]:
-    raw_amount = float(fee or 0.0)
-    sign = -1.0 if raw_amount < 0 else 1.0
-    amount = abs(raw_amount)
+    amount = abs(float(fee or 0.0))
     if amount <= 0:
         return 0.0
     ccy = str(fee_ccy or "").strip().upper()
@@ -36,11 +34,11 @@ def fee_to_quote(
     if not ccy:
         return None
     if not quote and ccy in STABLE_QUOTES:
-        return sign * amount
+        return amount
     if ccy == quote or (ccy in STABLE_QUOTES and quote in STABLE_QUOTES):
-        return sign * amount
+        return amount
     if ccy == base and float(fill_price or 0.0) > 0:
-        return sign * amount * float(fill_price)
+        return amount * float(fill_price)
     if not quote or not hasattr(client, "get_ticker"):
         return None
     try:
@@ -60,5 +58,5 @@ def fee_to_quote(
         except Exception:
             price = 0.0
         if price > 0:
-            return sign * amount * price
+            return amount * price
     return None

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from flask import g
 
-from app.routes.agent_v1.backtests import _validate_request
+from app.routes.agent_v1.backtests import _run_backtest, _validate_request
 from app.routes.agent_v1.quick_trade import _paper_fill_outcome
 from app.utils import agent_auth
 
@@ -63,16 +63,37 @@ def test_backtest_rejects_dynamic_universe_for_restricted_token(app):
         assert "Dynamic universes" in err[0].get_json()["message"]
 
 
+def test_agent_backtest_preserves_raw_leverage_for_typed_strategy_validation(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return None, {"status": "ok"}
+
+    monkeypatch.setattr("app.routes.agent_v1.backtests._backtest.run", fake_run)
+    result = _run_backtest({
+        "code": STATIC_CODE,
+        "startDate": "2025-01-01",
+        "endDate": "2025-01-02",
+        "initialCapital": "10000",
+        "leverageEnabled": True,
+        "leverage": "not-a-number",
+        "params": {},
+    })
+
+    assert result == {"status": "ok"}
+    assert captured["leverage_enabled"] is True
+    assert captured["leverage"] == "not-a-number"
+
+
 @pytest.fixture(autouse=True)
-def _reset_agent_auth(monkeypatch):
+def _reset_agent_auth():
     agent_auth._rate_state.clear()
-    monkeypatch.setattr(agent_auth, "_reserve_idempotency", lambda *_: ("reserved", None))
-    monkeypatch.setattr(agent_auth, "_complete_idempotency", lambda *_: None)
     yield
     agent_auth._rate_state.clear()
 
 
-def test_live_capable_token_never_silently_falls_back_to_paper(client, monkeypatch):
+def test_live_capable_token_is_fail_closed_when_agent_execution_is_retired(client, monkeypatch):
     token = {
         "id": 9,
         "user_id": 1,
@@ -93,14 +114,11 @@ def test_live_capable_token_never_silently_falls_back_to_paper(client, monkeypat
 
     response = client.post(
         "/api/agent/v1/quick-trade/orders",
-        headers={
-            "Authorization": "Bearer qd_agent_TESTTOKEN12345",
-            "Idempotency-Key": "live-disabled-check",
-        },
+        headers={"Authorization": "Bearer qd_agent_TESTTOKEN12345"},
         json={"market": "Crypto", "symbol": "BTC/USDT", "side": "buy", "qty": 0.01},
     )
-    assert response.status_code == 501
-    assert "AGENT_LIVE_TRADING_ENABLED" in response.get_json()["message"]
+    assert response.status_code == 410
+    assert "permanently disabled" in response.get_json()["message"].lower()
 
 
 def test_paper_limit_order_only_fills_when_marketable():

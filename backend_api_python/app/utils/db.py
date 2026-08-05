@@ -36,7 +36,6 @@ _CRITICAL_TABLES = (
     'pending_orders',
     'qd_strategy_equity_snapshots',
     'qd_strategy_positions',
-    'qd_position_reservations',
     'qd_strategies_trading',
     'qd_analysis_memory',
     'qd_strategy_commands',

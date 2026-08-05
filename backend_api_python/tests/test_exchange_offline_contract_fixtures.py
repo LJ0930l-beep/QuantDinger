@@ -15,6 +15,9 @@ from app.services.live_trading.bitget_spot import BitgetSpotClient
 from app.services.live_trading.bybit import BybitClient
 from app.services.live_trading.gate import GateSpotClient, GateUsdtFuturesClient
 from app.services.live_trading.htx import HtxClient
+from app.services.live_trading.coinbase_exchange import CoinbaseExchangeClient
+from app.services.live_trading.kraken import KrakenClient
+from app.services.live_trading.kraken_futures import KrakenFuturesClient
 from app.services.live_trading.okx import OkxClient
 
 
@@ -27,8 +30,11 @@ CLIENTS: Dict[str, Type] = {
     "BitgetMixClient": BitgetMixClient,
     "BitgetSpotClient": BitgetSpotClient,
     "BybitClient": BybitClient,
+    "CoinbaseExchangeClient": CoinbaseExchangeClient,
     "GateSpotClient": GateSpotClient,
     "GateUsdtFuturesClient": GateUsdtFuturesClient,
+    "KrakenClient": KrakenClient,
+    "KrakenFuturesClient": KrakenFuturesClient,
     "HtxClient": HtxClient,
 }
 

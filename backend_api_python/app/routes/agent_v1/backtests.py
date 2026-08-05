@@ -5,7 +5,6 @@ uses the same V2 execution model as the human Backtest Center.
 """
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from app.services.strategy_v2 import StrategyV2BacktestService
@@ -13,7 +12,7 @@ from app.utils.agent_auth import (
     SCOPE_B, agent_required, current_token, current_user_id,
     instrument_allowed, market_allowed, with_idempotency,
 )
-from app.utils.agent_jobs import count_active_jobs, submit_job
+from app.utils.agent_jobs import submit_job
 from app.utils.logger import get_logger
 from flask import request
 
@@ -128,7 +127,7 @@ def _parse_date(s: Any) -> Any:
     raise ValueError(f"Invalid date: {text}")
 
 
-def _run_backtest(payload: dict, on_progress=None) -> Any:
+def _run_backtest(payload: dict) -> Any:
     """Run the canonical Strategy API backtest from an agent job."""
     from app.services.backtest_execution import (
         default_commission_if_missing,
@@ -143,16 +142,16 @@ def _run_backtest(payload: dict, on_progress=None) -> Any:
     end_date = _parse_date(payload.get("endDate"))
     if not start_date or not end_date:
         raise ValueError("start_date and end_date are required (YYYY-MM-DD)")
-    if on_progress:
-        on_progress({"phase": "preparing", "percent": 10})
     params = payload.get("params") or {}
     initial_capital = float(payload.get("initialCapital") or 10000)
     commission = default_commission_if_missing(payload.get("commission"))
     slippage = default_slippage_if_missing(payload.get("slippage"))
     leverage_enabled = bool(payload.get("leverageEnabled"))
-    leverage = float(payload.get("leverage") or 1) if leverage_enabled else 1.0
-    if on_progress:
-        on_progress({"phase": "running_backtest", "percent": 25})
+    # Preserve the caller's raw value so Strategy V2 remains the single typed
+    # leverage-validation boundary.  Coercing here would leak ValueError for
+    # malformed values before the canonical service can return its typed
+    # rejection, and would make the Agent path differ from Backtest Center.
+    leverage = payload.get("leverage", 1) if leverage_enabled else 1.0
     _, result = _backtest.run(
         user_id=int(payload.get("__user_id") or 1),
         code=code,
@@ -166,8 +165,6 @@ def _run_backtest(payload: dict, on_progress=None) -> Any:
         params=params if isinstance(params, dict) else {},
         persist=False,
     )
-    if on_progress:
-        on_progress({"phase": "finalizing", "percent": 95})
     return result
 
 
@@ -183,26 +180,6 @@ def create_backtest():
     if validation_error:
         return validation_error
 
-    token_id = int(current_token().get("id") or 0)
-    tenant_cap = max(1, int(os.getenv("AGENT_MAX_CONCURRENT_JOBS_PER_TENANT", "4")))
-    token_cap = max(1, int(os.getenv("AGENT_MAX_CONCURRENT_JOBS_PER_TOKEN", "2")))
-    if count_active_jobs(user_id=current_user_id()) >= tenant_cap:
-        return error(
-            429,
-            "Tenant concurrent job limit reached",
-            details={"limit": tenant_cap},
-            retriable=True,
-            http=429,
-        )
-    if count_active_jobs(user_id=current_user_id(), agent_token_id=token_id) >= token_cap:
-        return error(
-            429,
-            "Token concurrent job limit reached",
-            details={"limit": token_cap},
-            retriable=True,
-            http=429,
-        )
-
     with with_idempotency("backtest") as existing:
         if existing:
             return envelope({
@@ -215,7 +192,7 @@ def create_backtest():
     payload["__user_id"] = current_user_id()
     job = submit_job(
         user_id=current_user_id(),
-        agent_token_id=token_id,
+        agent_token_id=int(current_token().get("id")),
         kind="backtest",
         request_payload=payload,
         runner=_run_backtest,

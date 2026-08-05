@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from app.services.script_source import get_script_source_service
@@ -10,9 +11,22 @@ from app.services.strategy_direction import (
     direction_mode_position_side,
     normalize_direction_mode,
 )
+from app.services.market_context import normalize_exchange_id
+from app.domain.gate_leverage_contracts import (
+    GATE_CRYPTO_SWAP_LEVERAGE_MAX as _GATE_LEVERAGE_MAX,
+    GATE_CRYPTO_SWAP_LEVERAGE_MIN as _GATE_LEVERAGE_MIN,
+)
 from app.utils.db import get_db_connection
 
-from .contract import StrategyV2ContractError, compile_strategy_v2
+from .contract import (
+    StrategyV2ContractError,
+    compile_strategy_v2,
+    validate_requested_leverage,
+)
+
+
+GATE_CRYPTO_SWAP_LEVERAGE_MIN = float(_GATE_LEVERAGE_MIN)
+GATE_CRYPTO_SWAP_LEVERAGE_MAX = float(_GATE_LEVERAGE_MAX)
 
 
 class StrategyV2DeploymentService:
@@ -31,23 +45,42 @@ class StrategyV2DeploymentService:
             raise StrategyV2ContractError("strategyV2.invalidInitialCapital")
 
         execution_mode = str(payload.get("executionMode") or "signal").strip().lower()
-        if execution_mode not in {"signal", "live"}:
+        if execution_mode not in {"signal", "paper", "live"}:
             raise StrategyV2ContractError("strategyV2.invalidExecutionMode")
         credential_id = int(payload.get("credentialId") or 0)
-        exchange_id = self._credential_exchange(user_id, credential_id) if execution_mode == "live" else ""
-        if execution_mode == "live" and not exchange_id:
+        exchange_id = (
+            normalize_exchange_id(self._credential_exchange(user_id, credential_id))
+            if execution_mode in {"paper", "live"}
+            else ""
+        )
+        if execution_mode in {"paper", "live"} and (not credential_id or not exchange_id):
             raise StrategyV2ContractError("strategyV2.credentialRequired")
         self._validate_execution_account(manifest.markets, exchange_id, execution_mode)
 
         leverage_enabled = bool(payload.get("leverageEnabled"))
-        leverage = float(payload.get("leverage") or 1)
+        leverage_input = payload.get("leverage") or 1
         if leverage_enabled and not self._supports_contract_leverage(manifest.metadata()):
             raise StrategyV2ContractError("strategyV2.leverageCryptoSwapOnly")
-        if leverage_enabled and not manifest.leverage_allowed:
-            raise StrategyV2ContractError("strategyV2.leverageNotAllowed")
-        if leverage_enabled and leverage > manifest.max_leverage:
-            raise StrategyV2ContractError("strategyV2.leverageExceedsStrategyLimit")
-        leverage = max(1.0, leverage if leverage_enabled else 1.0)
+        leverage = validate_requested_leverage(
+            manifest,
+            leverage_enabled=leverage_enabled,
+            leverage=leverage_input,
+        )
+        manifest_market_type = self._manifest_market_type(manifest.metadata())
+        if (
+            leverage_enabled
+            and execution_mode in {"paper", "live"}
+            and exchange_id == "gate"
+            and manifest_market_type == "swap"
+            and (
+                not math.isclose(float(manifest.min_leverage), GATE_CRYPTO_SWAP_LEVERAGE_MIN)
+                or not math.isclose(float(manifest.max_leverage), GATE_CRYPTO_SWAP_LEVERAGE_MAX)
+            )
+        ):
+            # Do not silently upgrade a user-owned/legacy source.  The source
+            # must be recreated from the current Gate contract so the
+            # immutable strategy manifest records the 50–100x policy.
+            raise StrategyV2ContractError("strategyV2.gateLeverageContractStale")
         declared_payload_direction = payload.get("directionMode") or payload.get("direction_mode") or ""
         requested_direction = declared_payload_direction or (
             payload.get("positionSide") or payload.get("position_side") or ""
@@ -63,7 +96,6 @@ class StrategyV2DeploymentService:
         ):
             raise StrategyV2ContractError("strategyV2.directionModeMismatch")
         direction_mode = manifest.direction_mode or requested_direction_mode
-        manifest_market_type = self._manifest_market_type(manifest.metadata())
         if execution_mode == "live" and manifest_market_type == "swap" and not direction_mode:
             raise StrategyV2ContractError("strategyV2.directionModeRequired")
         position_side = direction_mode_position_side(direction_mode)
@@ -75,8 +107,6 @@ class StrategyV2DeploymentService:
             "channels": list(payload.get("notificationChannels") or []),
             "targets": payload.get("notificationTargets") or {},
         }
-        source_metadata = self._object(source.get("metadata"))
-        source_runtime = self._object(source_metadata.get("last_run_config"))
         generated_runtime = payload.get("strategyRuntimeConfig") or payload.get("strategy_runtime_config") or {}
         if not isinstance(generated_runtime, dict):
             raise StrategyV2ContractError("strategyV2.runtimeConfigInvalid")
@@ -93,48 +123,15 @@ class StrategyV2DeploymentService:
             "stop_loss_pct",
             "take_profit_pct",
         }
-        # A visual robot is saved as a normal Strategy API V2 source before the
-        # live wizard opens.  The wizard only sends the source id and runtime
-        # account settings, so recover the whitelisted robot/executor contract
-        # from the source metadata.  Without this merge a grid source silently
-        # falls back to the generic bar-driven script runtime instead of the
-        # durable resting-order GridEngine.
         runtime_config = {
-            key: value
-            for key, value in source_runtime.items()
-            if key in allowed_runtime_keys
-        }
-        runtime_config.update({
             key: value
             for key, value in generated_runtime.items()
             if key in allowed_runtime_keys
-        })
-        manifest_metadata = manifest.metadata()
-        manifest_market_type = self._manifest_market_type(manifest_metadata)
-        symbol = self._manifest_symbol(manifest_metadata)
-        # Source metadata also contains the IDE's last run configuration.  That
-        # configuration may still carry the editor defaults (Crypto/BTC/USDT)
-        # even when the compiled source contract declares another instrument
-        # such as USStock:SPY.  A deployment must always follow the immutable
-        # compiled contract; otherwise the UI and parts of the runtime can
-        # observe different instruments for the same strategy.
-        runtime_config["symbol"] = symbol
-        runtime_config["market_type"] = manifest_market_type
-        # Older visual-builder sources persisted executor_type but omitted
-        # bot_type. Canonicalize it before grid budget/ledger setup so a grid
-        # can never silently deploy as a generic bar-driven strategy.
-        from app.services.strategy_runtime.bot_type import resolve_bot_type
-
-        resolved_bot_type = resolve_bot_type(source, runtime_config)
-        if resolved_bot_type:
-            runtime_config["bot_type"] = resolved_bot_type
-        self._normalize_grid_runtime_budget(runtime_config)
-        if str(runtime_config.get("bot_type") or "").strip().lower() == "grid":
-            runtime_config["position_ledger"] = "fills"
+        }
         runtime_config.update({
             "api_version": 2,
             "script_source_id": source_id,
-            "strategy_manifest": manifest_metadata,
+            "strategy_manifest": manifest.metadata(),
             "initial_capital": initial_capital,
             "leverage_enabled": leverage_enabled,
             "leverage": leverage,
@@ -146,6 +143,7 @@ class StrategyV2DeploymentService:
             "account_risk": dict(account_risk),
         })
         market_category = manifest.markets[0] if len(manifest.markets) == 1 else "Mixed"
+        symbol = self._manifest_symbol(manifest.metadata())
         exchange_config = {"credential_id": credential_id, "exchange_id": exchange_id} if credential_id else {}
 
         with get_db_connection() as db:
@@ -195,43 +193,6 @@ class StrategyV2DeploymentService:
         return deployment_id
 
     @staticmethod
-    def _object(value: Any) -> dict[str, Any]:
-        if isinstance(value, dict):
-            return dict(value)
-        if isinstance(value, str) and value.strip():
-            try:
-                parsed = json.loads(value)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                return {}
-            return dict(parsed) if isinstance(parsed, dict) else {}
-        return {}
-
-    @classmethod
-    def _normalize_grid_runtime_budget(cls, runtime_config: dict[str, Any]) -> None:
-        if str(runtime_config.get("bot_type") or "").strip().lower() != "grid":
-            return
-        bot_params = cls._object(runtime_config.get("bot_params"))
-        executor_config = cls._object(runtime_config.get("executor_config"))
-        try:
-            count = max(
-                1,
-                int(
-                    bot_params.get("gridCount")
-                    or bot_params.get("grid_count")
-                    or executor_config.get("grid_count")
-                    or 1
-                ),
-            )
-        except (TypeError, ValueError):
-            count = 1
-        if not (
-            bot_params.get("amountPerGridPct")
-            or bot_params.get("amount_per_grid_pct")
-        ):
-            bot_params["amountPerGridPct"] = 1.0 / float(count)
-        runtime_config["bot_params"] = bot_params
-
-    @staticmethod
     def _credential_exchange(user_id: int, credential_id: int) -> str:
         if not credential_id:
             return ""
@@ -243,7 +204,13 @@ class StrategyV2DeploymentService:
             )
             row = cur.fetchone() or {}
             cur.close()
-        return str(row.get("exchange_id") or "").strip().lower()
+        # Credential rows may predate the canonical exchange identity contract
+        # and contain aliases such as ``gateio`` or ``gate.io``.  Normalize at
+        # the deployment boundary so the same venue scope is used by the UI,
+        # strategy manifest validation, and execution-account checks.  This is
+        # purely an identity normalization; it never changes credentials or
+        # enables a live request.
+        return normalize_exchange_id(row.get("exchange_id"))
 
     @staticmethod
     def _validate_execution_account(markets: tuple[str, ...], exchange_id: str, execution_mode: str) -> None:

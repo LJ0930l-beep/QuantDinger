@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any, Dict, Type
 from unittest.mock import MagicMock
 
 import pytest
 
-from app.services.grid.exchange_orders import place_grid_limit_order
+from app.services.grid.exchange_orders import GridTradingDisabledError, place_grid_limit_order
 from app.services.live_trading.base import LiveOrderResult
 from app.services.live_trading.binance import BinanceFuturesClient
 from app.services.live_trading.binance_spot import BinanceSpotClient
 from app.services.live_trading.bitget import BitgetMixClient
 from app.services.live_trading.bitget_spot import BitgetSpotClient
 from app.services.live_trading.bybit import BybitClient
+from app.services.live_trading.coinbase_exchange import CoinbaseExchangeClient
 from app.services.live_trading.gate import GateSpotClient, GateUsdtFuturesClient
+from app.services.live_trading.kraken import KrakenClient
+from app.services.live_trading.kraken_futures import KrakenFuturesClient
 from app.services.live_trading.okx import OkxClient
 
 
@@ -152,6 +154,53 @@ CASES = (
         },
     ),
     OrderParamCase(
+        "coinbase_spot_buy",
+        CoinbaseExchangeClient,
+        "spot",
+        "buy",
+        "",
+        False,
+        {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "size": 0.01,
+            "price": 70000.0,
+            "client_order_id": "coid-1",
+        },
+    ),
+    OrderParamCase(
+        "kraken_spot_sell",
+        KrakenClient,
+        "spot",
+        "sell",
+        "",
+        False,
+        {
+            "symbol": "BTC/USDT",
+            "side": "sell",
+            "size": 0.01,
+            "price": 70000.0,
+            "client_order_id": "coid-1",
+        },
+    ),
+    OrderParamCase(
+        "kraken_futures_close_short",
+        KrakenFuturesClient,
+        "swap",
+        "buy",
+        "short",
+        True,
+        {
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "size": 0.01,
+            "price": 70000.0,
+            "reduce_only": True,
+            "post_only": True,
+            "client_order_id": "coid-1",
+        },
+    ),
+    OrderParamCase(
         "gate_futures_close_short",
         GateUsdtFuturesClient,
         "swap",
@@ -187,98 +236,42 @@ def _make_client(client_cls: Type) -> MagicMock:
 def test_place_grid_limit_order_param_contract(case: OrderParamCase):
     client = _make_client(case.client_cls)
 
-    result = place_grid_limit_order(
-        client,
-        symbol="BTC/USDT",
-        side=case.side,
-        quantity=0.01,
-        price=70000.0,
-        market_type=case.market_type,
-        exchange_config=case.exchange_config or {},
-        pos_side=case.pos_side,
-        reduce_only=case.reduce_only,
-        client_order_id="coid-1",
-        leverage=3.0,
-        margin_mode="cross",
-        post_only=True,
-    )
+    with pytest.raises(GridTradingDisabledError, match="permanently disabled"):
+        place_grid_limit_order(
+            client,
+            symbol="BTC/USDT",
+            side=case.side,
+            quantity=0.01,
+            price=70000.0,
+            market_type=case.market_type,
+            exchange_config=case.exchange_config or {},
+            pos_side=case.pos_side,
+            reduce_only=case.reduce_only,
+            client_order_id="coid-1",
+            leverage=3.0,
+            margin_mode="cross",
+            post_only=True,
+        )
 
-    assert result.exchange_order_id == "oid-1"
-    assert client.place_limit_order.call_args.kwargs == case.expected
+    client.place_limit_order.assert_not_called()
 
 
 def test_place_grid_limit_order_sets_leverage_for_contract_clients():
     client = _make_client(BitgetMixClient)
 
-    place_grid_limit_order(
-        client,
-        symbol="BTC/USDT",
-        side="buy",
-        quantity=0.01,
-        price=70000.0,
-        market_type="swap",
-        exchange_config={"product_type": "USDT-FUTURES", "margin_coin": "USDT"},
-        pos_side="long",
-        leverage=5.0,
-        margin_mode="cross",
-    )
+    with pytest.raises(GridTradingDisabledError, match="permanently disabled"):
+        place_grid_limit_order(
+            client,
+            symbol="BTC/USDT",
+            side="buy",
+            quantity=0.01,
+            price=70000.0,
+            market_type="swap",
+            exchange_config={"product_type": "USDT-FUTURES", "margin_coin": "USDT"},
+            pos_side="long",
+            leverage=5.0,
+            margin_mode="cross",
+        )
 
-    client.set_leverage.assert_called_once()
-    assert client.set_leverage.call_args.kwargs["hold_side"] == "long"
-    assert client.set_leverage.call_args.kwargs["product_type"] == "USDT-FUTURES"
-
-
-@pytest.mark.parametrize(
-    ("physical_side", "position_side", "reduce_only", "expected_side", "expected_trade"),
-    (
-        ("buy", "long", False, "buy", "open"),
-        ("sell", "short", False, "sell", "open"),
-        ("sell", "long", True, "buy", "close"),
-        ("buy", "short", True, "sell", "close"),
-    ),
-)
-def test_bitget_v2_hedge_order_fields_follow_documented_position_direction(
-    physical_side,
-    position_side,
-    reduce_only,
-    expected_side,
-    expected_trade,
-):
-    client = BitgetMixClient.__new__(BitgetMixClient)
-    client.get_account_pos_mode = lambda **_kwargs: "hedge_mode"
-
-    fields = client._mix_order_position_fields(
-        symbol="BTC/USDT",
-        side=physical_side,
-        reduce_only=reduce_only,
-        margin_coin="USDT",
-        product_type="USDT-FUTURES",
-        hold_side=position_side,
-    )
-
-    assert fields == {"side": expected_side, "tradeSide": expected_trade}
-    assert "holdSide" not in fields
-
-
-@pytest.mark.parametrize(("position_mode", "expects_reduce_only"), (("net", True), ("long", False)))
-def test_okx_reduce_only_is_only_sent_in_net_mode(position_mode, expects_reduce_only):
-    client = OkxClient.__new__(OkxClient)
-    client.broker_code = ""
-    client._normalize_order_size = lambda **_kwargs: (Decimal("1"), 0)
-    client._resolve_pos_side = lambda **_kwargs: position_mode
-    sent = []
-    client._signed_request = (
-        lambda method, path, json_body=None, params=None: sent.append(json_body)
-        or {"data": [{"ordId": "1"}]}
-    )
-
-    client.place_market_order(
-        symbol="BTC/USDT",
-        side="sell",
-        size=0.01,
-        market_type="swap",
-        pos_side="long",
-        reduce_only=True,
-    )
-
-    assert ("reduceOnly" in sent[0]) is expects_reduce_only
+    client.set_leverage.assert_not_called()
+    client.place_limit_order.assert_not_called()

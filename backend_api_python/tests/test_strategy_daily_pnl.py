@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from app.services.strategy_daily_pnl import (
     choose_opening_equity,
     resolve_business_day_window,
+    stabilize_idle_strategy_opening,
 )
 
 
@@ -42,3 +43,33 @@ def test_opening_equity_marks_ledger_reconstruction_as_estimated():
     assert opening == 987.5
     assert estimated is True
     assert source == "ledger_reconstruction"
+
+
+def test_idle_strategy_does_not_report_stale_capital_snapshot_as_daily_loss():
+    opening, estimated, source = stabilize_idle_strategy_opening(
+        opening=10000,
+        current_equity=100,
+        initial_capital=100,
+        realized_net=0,
+        unrealized=0,
+        open_positions=0,
+    )
+
+    assert opening == 100
+    assert estimated is True
+    assert source == "idle_strategy_baseline"
+
+
+def test_active_strategy_keeps_opening_snapshot():
+    opening, estimated, source = stabilize_idle_strategy_opening(
+        opening=10000,
+        current_equity=100,
+        initial_capital=100,
+        realized_net=-5,
+        unrealized=0,
+        open_positions=0,
+    )
+
+    assert opening == 10000
+    assert estimated is False
+    assert source == ""
