@@ -756,4 +756,63 @@ def run_runtime_entry_pipeline():
     return jsonify({**result, "live_enabled": False}), 200
 
 
+@blp.route("/api/quant/runtime-entry/risk-facts/project", methods=["POST"])
+@login_required
+def project_authoritative_risk_facts():
+    """Project authoritative risk facts from a real Gate snapshot.
+
+    Writes conservative policy, instrument rules, account facts, kill switches
+    (all OFF), and market observations so Hard Risk can evaluate Open/Increase
+    admission.  Repeated calls are idempotent (ON CONFLICT DO NOTHING).
+    """
+
+    from app.services.authoritative_risk_facts_projection_service import (
+        AuthoritativeRiskFactsProjectionError,
+        AuthoritativeRiskFactsProjectionService,
+    )
+    from app.utils.db import get_db_connection
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"status": "REJECTED", "code": "INVALID_JSON", "live_enabled": False}), 422
+    try:
+        credential_id = int(payload.get("credential_id") or 0)
+        account_scope = str(payload.get("account_scope") or "").strip()
+        market_type = str(payload.get("market_type") or "").strip().lower()
+        instrument_id = str(payload.get("instrument_id") or "").strip()
+        observed_raw = payload.get("as_of")
+        as_of = datetime.fromisoformat(observed_raw.replace("Z", "+00:00")) if observed_raw else None
+    except (TypeError, ValueError):
+        return jsonify({"status": "REJECTED", "code": "RISK_PROJECTION_INVALID", "message": "invalid payload", "live_enabled": False}), 422
+    if credential_id <= 0 or not account_scope or market_type not in {"spot", "perpetual"}:
+        return jsonify({"status": "REJECTED", "code": "RISK_PROJECTION_INVALID", "message": "credential_id/account_scope/market_type required", "live_enabled": False}), 422
+
+    service = AuthoritativeRiskFactsProjectionService()
+    try:
+        with get_db_connection() as connection:
+            result = service.project(
+                connection,
+                user_id=int(get_current_user_id()),
+                credential_id=credential_id,
+                account_scope=account_scope,
+                market_type=market_type,
+                instrument_id=instrument_id,
+                as_of=as_of,
+            )
+            connection.commit()
+    except AuthoritativeRiskFactsProjectionError as exc:
+        import logging; logging.getLogger(__name__).error("risk facts projection: %s", exc, exc_info=True)
+        return jsonify({"status": "UNAVAILABLE", "code": "RISK_FACTS_PROJECTION_UNAVAILABLE", "message": str(exc), "live_enabled": False}), 503
+    except Exception as exc:
+        import logging; logging.getLogger(__name__).error("risk facts projection unexpected: %s", exc, exc_info=True)
+        return jsonify({"status": "UNAVAILABLE", "code": "RISK_FACTS_PROJECTION_UNAVAILABLE", "live_enabled": False}), 503
+
+    return jsonify({
+        "status": "RISK_FACTS_PROJECTED",
+        "disposition": result.disposition,
+        "snapshot_fingerprint": result.snapshot_fingerprint,
+        "live_enabled": False,
+    }), 200
+
+
 __all__ = ["blp"]

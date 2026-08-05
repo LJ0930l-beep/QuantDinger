@@ -64,7 +64,16 @@ class Connection(Protocol):
 
 
 def _value(row: Any, index: int, name: str) -> Any:
-    return row[name] if isinstance(row, dict) else row[index]
+    if isinstance(row, dict):
+        # Real backend cursors return dict rows; the positional contract is
+        # established by the SELECT column order.  The ``name`` argument
+        # exists only for human-readable error messages when an exception
+        # propagates, never as a dict key.
+        keys = tuple(row.keys())
+        if index >= len(keys):
+            raise RiskFactsScopeConflict(f"persisted {name} row has too few columns")
+        return row[keys[index]]
+    return row[index]
 
 
 def _utc(value: Any, field: str) -> datetime:
