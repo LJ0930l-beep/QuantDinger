@@ -133,34 +133,7 @@ def attach_quick_trade_protection(
     from app.services.live_trading.native_protection import NativeProtectionDisabledError
 
     raise NativeProtectionDisabledError("quick-trade native protection is permanently disabled")
-
-    # Legacy compatibility implementation retained below while callers migrate.
-    if str(market_type or "").strip().lower() != "swap":
-        return []
-    if float(filled_qty or 0.0) <= 0 or float(avg_price or 0.0) <= 0:
-        return []
-    if float(tp_price or 0.0) <= 0 and float(sl_price or 0.0) <= 0:
-        return []
-    from app.services.live_trading.native_protection import (
-        NativeProtectionRequest,
-        place_native_protection_orders,
-    )
-
-    cfg = exchange_config if isinstance(exchange_config, dict) else {}
-    request = NativeProtectionRequest(
-        symbol=str(symbol),
-        pos_side="long" if str(side or "").lower() == "buy" else "short",
-        quantity=float(filled_qty),
-        entry_price=float(avg_price),
-        stop_loss_price=float(sl_price or 0.0),
-        take_profit_price=float(tp_price or 0.0),
-        margin_mode="isolated" if str(margin_mode).lower() in ("isolated", "iso") else "cross",
-        leverage=float(leverage or 1.0),
-        product_type=str(cfg.get("product_type") or cfg.get("productType") or "USDT-FUTURES"),
-        margin_coin=str(cfg.get("margin_coin") or cfg.get("marginCoin") or "USDT"),
-        client_order_id=str(client_order_id or ""),
-    )
-    return place_native_protection_orders(client, request)
+    pass  # SC-15: legacy body retired
 
 
 def limit_order_kwargs(client, symbol, amount, price, side, market_type, client_order_id):

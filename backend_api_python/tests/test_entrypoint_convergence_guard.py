@@ -47,10 +47,9 @@ class EntrypointConvergenceGuardTests(unittest.TestCase):
         comparison = compare_with_baseline(current, load_baseline(self.manifest))
         self.assertTrue(comparison.passed, comparison.new_violations)
         self.assertEqual(len(current), len(self.manifest["legacy_bypass_baseline"]))
-        # SC-15 retires the Grid and native-protection bypass bodies.  The
-        # remaining records are still explicitly baselined legacy worker
-        # internals and may only decrease in later retirement PRs.
-        self.assertEqual(len(current), 12)
+        # SC-15 Tier 1+2 retired quick_trade.py and quick_trade/orders.py bypass bodies.
+        # Remaining 9 records are legacy worker internals; may only decrease further.
+        self.assertEqual(len(current), 9)
         for item in self.manifest["legacy_bypass_baseline"]:
             self.assertNotIn("*", item["path"])
             self.assertNotIn("*", item["symbol"])

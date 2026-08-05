@@ -366,52 +366,7 @@ def place_order():
         "success": False,
         "error": "Alpaca direct order entry is permanently disabled",
     }), 410
-
-    try:
-        client, err = _require_connected_client()
-        if err is not None:
-            return err
-
-        data = request.get_json() or {}
-        symbol = data.get('symbol')
-        side = data.get('side')
-        quantity = data.get('quantity')
-        if not symbol:
-            return jsonify({"success": False, "error": "Missing symbol"}), 400
-        if not side or side.lower() not in ('buy', 'sell'):
-            return jsonify({"success": False, "error": "side must be buy or sell"}), 400
-        if not quantity or float(quantity) <= 0:
-            return jsonify({"success": False, "error": "quantity must be > 0"}), 400
-
-        market_type = data.get('marketType', 'USStock')
-        order_type = (data.get('orderType') or 'market').lower()
-
-        if order_type == 'limit':
-            price = data.get('price')
-            if not price or float(price) <= 0:
-                return jsonify({"success": False, "error": "Limit order requires price"}), 400
-            result = client.place_limit_order(
-                symbol=symbol, side=side, quantity=float(quantity), price=float(price),
-                market_type=market_type, extended_hours=bool(data.get('extendedHours', False)),
-            )
-        else:
-            result = client.place_market_order(
-                symbol=symbol, side=side, quantity=float(quantity), market_type=market_type,
-            )
-
-        if result.success:
-            return jsonify({
-                "success": True,
-                "message": result.message,
-                "data": {
-                    "orderId": result.order_id, "filled": result.filled,
-                    "avgPrice": result.avg_price, "status": result.status, "raw": result.raw,
-                },
-            })
-        return jsonify({"success": False, "error": result.message, "data": result.raw}), 400
-    except Exception as e:
-        logger.error(f"Place order failed: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+    pass  # SC-15: legacy body retired
 
 
 @alpaca_blp.route('/order/<order_id>', methods=['DELETE'])
@@ -422,16 +377,7 @@ def cancel_order(order_id):
         "success": False,
         "error": "Alpaca direct order entry is permanently disabled",
     }), 410
-
-    try:
-        client, err = _require_connected_client()
-        if err is not None:
-            return err
-        ok = client.cancel_order(order_id)
-        return jsonify({"success": ok, "message": "Cancelled" if ok else "Cancel failed"})
-    except Exception as e:
-        logger.error(f"Cancel order failed: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+    pass  # SC-15: legacy body retired
 
 
 # ==================== Market Data ====================

@@ -238,16 +238,6 @@
   ],
   "legacy_bypass_baseline": [
     {
-      "path": "backend_api_python/app/routes/quick_trade.py",
-      "symbol": "<module>",
-      "category": "direct_import",
-      "pattern": "from:app.services.quick_trade.credentials:create_exchange_client",
-      "fingerprint": "0a086aade76423e629e1f03b",
-      "line": 34,
-      "count": 1,
-      "legacy_reason": "legacy quick-trade exchange-client import; migrate through admission"
-    },
-    {
       "path": "backend_api_python/app/services/pending_order_worker.py",
       "symbol": "<module>",
       "category": "direct_import",
@@ -336,26 +326,6 @@
       "line": 332,
       "count": 1,
       "legacy_reason": "legacy worker quick-trade protection; migrate through admission"
-    },
-    {
-      "path": "backend_api_python/app/services/quick_trade/orders.py",
-      "symbol": "attach_quick_trade_protection",
-      "category": "direct_import",
-      "pattern": "from:app.services.live_trading.native_protection:place_native_protection_orders",
-      "fingerprint": "e77124d4bbf284b28c9d271c",
-      "line": 134,
-      "count": 1,
-      "legacy_reason": "legacy quick-trade protection import; migrate through admission"
-    },
-    {
-      "path": "backend_api_python/app/services/quick_trade/orders.py",
-      "symbol": "attach_quick_trade_protection",
-      "category": "direct_order_or_exchange_call",
-      "pattern": "place_native_protection_orders",
-      "fingerprint": "3b8053f3057b0cf31eeb21d8",
-      "line": 153,
-      "count": 1,
-      "legacy_reason": "legacy quick-trade protection submission; migrate through admission"
     }
   ]
 }
