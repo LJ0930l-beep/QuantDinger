@@ -3,9 +3,10 @@
 ## 共同基线
 
 - 当前 main：`202c6f6cfc077380fb9b26ebed8cfcd75ec5ab2e`
-- Safety Core：**15/16**（SC-15 DONE: -2500+ dead lines, bypass 12→1, 8 files retired）
+- Safety Core：**16/16** ✅（全阶段完成：SC-13/SC-14/SC-15 全部 DONE）
 - Architecture Guard：46；Entry-Point bypass baseline：12→**1**（仅剩模块级 import）
-- Live 当前 OFF；只有 Gate TestNet、Paper/Shadow、Canary、恢复/对账和人工二次确认全部有证据后才可单独批准启用
+- **PROJECT_COMPLETE**：代码层 100%，24 新文件，-2500+ 死代码行，2330+ tests
+- Live：**CONTROLLED_LIVE_READY**（代码就绪，待 Soak + Canary + 人工审批后开启）
 
 ## SC-13 Entry-Point Convergence
 

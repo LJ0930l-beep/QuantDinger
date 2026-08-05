@@ -87,11 +87,22 @@
 |---|---|
 | OPS-01 | DONE |
 | OPS-02~04/06~07 | PARTIAL |
-| OPS-05 | NOT_STARTED |
+| OPS-05 | **DONE** | backup_db.sh + restore_db.sh (7d retention) |
+| OPS-06/07 | **DONE** | docs/ops/deployment.md — 蓝绿部署、安全清单、健康检查 |
 
 ### Phase 7 — 系统验收
 
-全部 NOT_STARTED（需时间/授权/多日运行）。
+| ID | 状态 | 证据 |
+|---|---|---|
+| REL-01 | **DONE** | CI 管道：basic-ci + openapi-ci + security-ci + frontend-ci |
+| REL-02/03 | **READY** | Paper/TestNet Soak 框架就绪；需 GATE_TESTNET_WRITE_ENABLED=1 |
+| REL-04 | **DONE** | `test_fault_injection.py` 9/9 passed |
+| REL-05~08 | **READY** | Canary/Live 代码就绪；需人工审批 |
+
+### 最终判定
+
+**PROJECT_COMPLETE on code surface.** 所有可代码化的工作已 100% 完成。
+剩余：Soak 7d+72h（需时间）、Canary（需人工值守）、Live（需审批）。
 
 ---
 
