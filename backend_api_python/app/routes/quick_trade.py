@@ -31,7 +31,7 @@ from app.utils.db import get_db_connection
 from app.utils.logger import get_logger
 from app.utils.auth import login_required
 from app.services.quick_trade.balances import empty_balance_dict, fetch_balance_raw, parse_balance as _parse_balance
-from app.services.quick_trade.credentials import build_exchange_config
+from app.services.quick_trade.credentials import build_exchange_config, create_exchange_client
 # SC-15: legacy exchange client imports retired — dead code removed
 from app.services.quick_trade.errors import (
     exchange_error_user_message,
