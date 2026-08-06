@@ -136,7 +136,7 @@ jobs:
             echo "::error::No tests selected for shard ${{ matrix.shard_label }}"
             exit 1
           fi
-          python -m pytest "${selected[@]}" -m "not integration and not stress" -q
+          SKIP_GATE_CREDENTIAL_GUARD=1 python -m pytest "${selected[@]}" -m "not integration and not stress" -q
 
       - name: Run release gates independently
         if: matrix.shard_index == 0
