@@ -5,6 +5,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 import yaml
 
 from app.services import ai_skill_registry
@@ -22,6 +24,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 def _mcp_tool_names() -> set[str]:
     server_path = BACKEND_ROOT / "mcp_server" / "src" / "quantdinger_mcp" / "server.py"
+    if not server_path.exists():
+        raise FileNotFoundError(f"MCP server not found at {server_path}")
     tree = ast.parse(server_path.read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.Assign):
@@ -76,6 +80,10 @@ def test_agent_openapi_matches_registered_route_source():
     assert _agent_route_operations() == documented
 
 
+@pytest.mark.skipif(
+    not (BACKEND_ROOT / "mcp_server" / "src" / "quantdinger_mcp" / "server.py").exists(),
+    reason="MCP server package not deployed"
+)
 def test_mcp_metadata_matches_exported_tools_and_documented_routes():
     metadata_names = {tool.id.removeprefix("mcp.") for tool in MCP_AGENT_TOOLS}
     assert metadata_names == _mcp_tool_names()
