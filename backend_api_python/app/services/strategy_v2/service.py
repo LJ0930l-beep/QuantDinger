@@ -162,6 +162,15 @@ class StrategyV2BacktestService:
         if user_symbol:
             candidates = [{"key": user_symbol, "market": "Crypto", "market_type": "swap" if "@swap" in user_symbol else "spot", "symbol": user_symbol.split(":")[-1].split("@")[0] if ":" in user_symbol else user_symbol}]
             universe_id = None
+        else:
+            candidates, universe_id = self.resolve_candidates(
+                user_id=user_id,
+                manifest=manifest,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if not candidates:
+                raise StrategyV2ContractError("strategyV2.universeHasNoData")
         fetch_start = start_date - timedelta(
             days=backtest_warmup_calendar_days(frequency, manifest.warmup_bars)
         )
