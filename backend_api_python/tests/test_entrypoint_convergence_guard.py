@@ -47,9 +47,9 @@ class EntrypointConvergenceGuardTests(unittest.TestCase):
         comparison = compare_with_baseline(current, load_baseline(self.manifest))
         self.assertTrue(comparison.passed, comparison.new_violations)
         self.assertEqual(len(current), len(self.manifest["legacy_bypass_baseline"]))
-        # SC-15 Tier 3 retired pending_order_worker sub-method bodies.
-        # Only module-level import remains as legacy baseline (1 entry).
-        self.assertEqual(len(current), 1)
+        # SC-15 Tier 3 retired pending_order_worker sub-method bodies; the
+        # quick_trade.py read-only client import is baselined for SC-14 cutover.
+        self.assertEqual(len(current), 2)
         for item in self.manifest["legacy_bypass_baseline"]:
             self.assertNotIn("*", item["path"])
             self.assertNotIn("*", item["symbol"])
