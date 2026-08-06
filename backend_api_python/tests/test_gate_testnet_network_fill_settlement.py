@@ -30,18 +30,28 @@ def _load_canonical_gate_modules():
         "app.services.gate_testnet_ledger_persistence_service",
         "app.services.gate_testnet_network_fill_settlement",
     )
+    saved = {name: sys.modules.get(name) for name in names}
     for name in names:
         sys.modules.pop(name, None)
-    multi = importlib.import_module(names[0])
-    vertical = importlib.import_module(names[1])
-    importlib.import_module(names[2])
-    ledger_contracts = importlib.import_module(names[3])
-    immutable_ledger = importlib.import_module(names[4])
-    repository = importlib.import_module(names[5])
-    order_client = importlib.import_module(names[6])
-    importlib.import_module(names[7])
-    settlement = importlib.import_module(names[8])
-    return multi, vertical, ledger_contracts, immutable_ledger, repository, order_client, settlement
+    try:
+        multi = importlib.import_module(names[0])
+        vertical = importlib.import_module(names[1])
+        importlib.import_module(names[2])
+        ledger_contracts = importlib.import_module(names[3])
+        immutable_ledger = importlib.import_module(names[4])
+        repository = importlib.import_module(names[5])
+        order_client = importlib.import_module(names[6])
+        importlib.import_module(names[7])
+        settlement = importlib.import_module(names[8])
+        return multi, vertical, ledger_contracts, immutable_ledger, repository, order_client, settlement
+    finally:
+        # Restore the canonical modules so later-collected tests keep the
+        # class identities they bound at their own import time.
+        for _name, _orig in saved.items():
+            if _orig is None:
+                sys.modules.pop(_name, None)
+            else:
+                sys.modules[_name] = _orig
 
 
 (

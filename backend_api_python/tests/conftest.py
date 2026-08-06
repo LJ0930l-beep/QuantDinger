@@ -115,13 +115,82 @@ def pytest_collection_modifyitems(config, items):
             _skip_if_no_gate = True
 
     if _skip_if_no_gate:
-        _patterns = [
-            _re.compile(r"test_runtime_entry_"),
-            _re.compile(r"test_gate_"),
-            _re.compile(r"test_non_live_product_rehearsal"),
-            _re.compile(r"test_pending_order_worker_live_sync"),
-        ]
+        # Only skip tests that genuinely require a live Gate TestNet
+        # credential. Matched by nodeid (file path), never by function
+        # name, so unit/contract/migration/guard tests are never skipped.
         _skip_marker = pytest.mark.skip(reason="Gate TestNet credentials not configured")
         for item in items:
-            if any(p.search(item.name) for p in _patterns):
+            _nodeid = item.nodeid
+            if "/integration/" in _nodeid or "_gate_credential_" in _nodeid:
                 item.add_marker(_skip_marker)
+
+
+# ── Isolated module quarantine ──────────────────────────────────────────
+# Gate test modules do sys.modules.setdefault("app.domain", ...) at module
+# top level during pytest collection. If the canonical domain modules are
+# already loaded first, setdefault is a no-op and every test binds to the
+# canonical class objects. Preload the modules these tests depend on.
+
+def _preload_quarantined_modules() -> None:
+    # Preload every pure domain module so gate test modules' top-level
+    # sys.modules.setdefault("app.domain", ...) becomes a no-op and every
+    # test binds to the canonical class objects.
+    import pkgutil
+    import app.domain as _domain_pkg
+    for _mod in pkgutil.iter_modules(_domain_pkg.__path__):
+        _name = "app.domain." + _mod.name
+        try:
+            __import__(_name)
+        except Exception:
+            pass
+    _extra = (
+        "app.services.gate_market_research_service",
+        "app.services.gate_account_read_snapshot_service",
+        "app.services.gate_read_http_transport",
+        "app.services.readonly_gate_unified_market_service",
+    )
+    for _name in _extra:
+        try:
+            __import__(_name)
+        except Exception:
+            pass
+
+
+import sys as _sys
+
+_ORIGINAL_APP_MODULES: dict = {}
+_APP_SNAPSHOTTED = False
+
+
+def _app_snapshot() -> None:
+    global _APP_SNAPSHOTTED
+    if _APP_SNAPSHOTTED:
+        return
+    _preload_quarantined_modules()
+    for _name, _mod in list(_sys.modules.items()):
+        if _name == "app" or _name.startswith("app."):
+            _ORIGINAL_APP_MODULES[_name] = _mod
+    _APP_SNAPSHOTTED = True
+
+
+def _restore_app_modules() -> None:
+    for _name in list(_sys.modules):
+        if _name == "app" or _name.startswith("app."):
+            _orig = _ORIGINAL_APP_MODULES.get(_name)
+            if _orig is not None and _sys.modules[_name] is not _orig:
+                _sys.modules[_name] = _orig
+
+
+def pytest_configure(config):
+    _app_snapshot()
+
+
+def pytest_collection_finish(session):
+    _app_snapshot()
+    _restore_app_modules()
+
+
+@pytest.fixture(autouse=True)
+def _restore_canonical_app_modules_after_test():
+    yield
+    _restore_app_modules()

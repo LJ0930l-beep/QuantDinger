@@ -15,15 +15,29 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+_MISSING = object()
+_ORIGINAL_APP_MODS = {
+    _n: sys.modules.get(_n, _MISSING)
+    for _n in ("app", "app.domain", "app.services")
+    if _n == "app" or _n.startswith("app.")
+}
+# Also snapshot every already-loaded app.* submodule so the isolated
+# imports below can be fully undone after collection.
+_ORIGINAL_APP_PREFIX = {
+    _n: _m
+    for _n, _m in list(sys.modules.items())
+    if _n == "app" or _n.startswith("app.")
+}
+
 app_module = types.ModuleType("app")
 app_module.__path__ = [str(ROOT / "app")]
 domain_module = types.ModuleType("app.domain")
 domain_module.__path__ = [str(ROOT / "app" / "domain")]
 services_module = types.ModuleType("app.services")
 services_module.__path__ = [str(ROOT / "app" / "services")]
-sys.modules.setdefault("app", app_module)
-sys.modules.setdefault("app.domain", domain_module)
-sys.modules.setdefault("app.services", services_module)
+sys.modules["app"] = app_module
+sys.modules["app.domain"] = domain_module
+sys.modules["app.services"] = services_module
 
 from app.domain.gate_read_formatters import GateReadErrorKind
 from app.domain.gate_read_transport_contracts import GatePublicReadEndpoint, GateReadRequest
@@ -33,6 +47,18 @@ from app.services.gate_read_http_transport import (
     GateReadHttpTransportError,
     _configured_proxy_url,
 )
+
+# Undo every sys.modules change made above so later-collected tests keep
+# the canonical app.* module identities.
+for _n in ("app", "app.domain", "app.services"):
+    _o = _ORIGINAL_APP_MODS.get(_n)
+    if _o is _MISSING:
+        sys.modules.pop(_n, None)
+    else:
+        sys.modules[_n] = _o
+for _n in list(sys.modules):
+    if (_n == "app" or _n.startswith("app.")) and _n not in _ORIGINAL_APP_PREFIX:
+        sys.modules.pop(_n, None)
 
 
 class _Response:
