@@ -98,10 +98,12 @@ def client(app):
 import re as _re
 
 def pytest_collection_modifyitems(config, items):
-    _skip_if_no_gate = False
-    try:
-        import os as _os
-        if _os.environ.get("SKIP_GATE_CREDENTIAL_GUARD") != "0":
+    import os as _os
+    if _os.environ.get("SKIP_GATE_CREDENTIAL_GUARD") == "1":
+        _skip_if_no_gate = True
+    else:
+        _skip_if_no_gate = False
+        try:
             from app.utils.db import get_db_connection
             with get_db_connection() as _db:
                 _cur = _db.cursor()
@@ -109,8 +111,8 @@ def pytest_collection_modifyitems(config, items):
                     "SELECT 1 FROM qd_exchange_credentials WHERE exchange_id='gate' LIMIT 1"
                 )
                 _skip_if_no_gate = _cur.fetchone() is None
-    except Exception:
-        _skip_if_no_gate = True
+        except Exception:
+            _skip_if_no_gate = True
 
     if _skip_if_no_gate:
         _patterns = [
