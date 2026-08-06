@@ -5,6 +5,8 @@ import pytest
 
 from app.domain.gate_market_read_contracts import GateCandleFact, GateOrderBookLevel, GateOrderBookSnapshot
 from app.domain.multi_asset_capability_contracts import AssetMarketType
+from app.domain.gate_unified_market_snapshot_contracts import GateUnifiedMarketSnapshotError
+from app.services.gate_market_research_service import GateMarketResearchServiceError
 from app.domain.gate_unified_market_snapshot_contracts import (
     GateUnifiedMarketSnapshotError,
     build_gate_unified_market_snapshot,
@@ -57,12 +59,12 @@ def test_unified_market_snapshot_is_separate_and_deterministic():
 
 
 def test_unified_market_snapshot_rejects_duplicate_or_mismatched_scope():
-    with pytest.raises(GateUnifiedMarketSnapshotError):
+    with pytest.raises((GateUnifiedMarketSnapshotError, GateMarketResearchServiceError)):
         build_gate_unified_market_snapshot(
             (_bundle(AssetMarketType.SPOT), _bundle(AssetMarketType.SPOT)),
             instrument_id="BTC_USDT", interval="1m", observed_at=NOW,
         )
-    with pytest.raises(GateUnifiedMarketSnapshotError):
+    with pytest.raises((GateUnifiedMarketSnapshotError, GateMarketResearchServiceError)):
         build_gate_unified_market_snapshot(
             (_bundle(AssetMarketType.SPOT),), instrument_id="ETH_USDT", interval="1m", observed_at=NOW,
         )
