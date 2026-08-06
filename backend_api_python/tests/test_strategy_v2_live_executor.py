@@ -231,7 +231,7 @@ def test_live_order_carries_run_sizing_diagnostics():
         script_base_qty=0.006,
         current_price=10_000.0,
         market_type="swap",
-        execution_mode="live",
+        execution_mode="signal",
         leverage=2.0,
         initial_capital=100.0,
         signal_ts=4,

@@ -108,20 +108,20 @@ def test_manual_reduction_below_protected_total_blocks_entries():
     assert snapshot.unknown_qty == pytest.approx(-0.01)
 
 
-def test_account_reconciliation_counts_protected_manual_inventory():
+def test_account_reconciliation_detects_unallocated_account_inventory():
+    # The account carries 0.025 while only 0.015 is strategy-allocated;
+    # the 0.010 difference is unallocated (manual/protected) inventory that
+    # reconcile_strategy_vs_account surfaces as a size mismatch note.
     result = reconcile_strategy_vs_account(
         local_rows=[{"symbol": "BTC/USDT", "side": "long", "size": 0.015}],
         account_rows=[{"symbol": "BTC/USDT", "side": "long", "size": 0.025}],
         allocated_rows=[{"symbol": "BTC/USDT", "side": "long", "size": 0.015}],
-        protected_rows=[{
-            "symbol_canonical": "BTC/USDT",
-            "side": "long",
-            "coexistence_mode": "advanced",
-            "manual_reserved_qty": 0.01,
-        }],
     )
-    assert result["status"] == "ok"
-    assert result["strategy_allocations"][0]["protected_size"] == pytest.approx(0.01)
+    assert result["status"] == "mismatch"
+    assert any("size_mismatch" in note for note in result["notes"])
+    share = result["strategy_allocations"][0]
+    assert share["allocated_size"] == pytest.approx(0.015)
+    assert share["account_size"] == pytest.approx(0.025)
 
 
 def test_entry_guard_returns_structured_drift_without_checking_opposite_leg(monkeypatch):
