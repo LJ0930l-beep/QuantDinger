@@ -576,7 +576,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "token_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/admin/audit": {
@@ -742,7 +752,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "indicator_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/indicators/validate": {
@@ -826,7 +846,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/jobs/{job_id}/stream": {
@@ -847,7 +877,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/markets": {
@@ -889,7 +929,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "market",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/klines": {
@@ -992,7 +1042,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       },
       "delete": {
         "summary": "DELETE /notifications/signal-alerts/{task_id}",
@@ -1011,7 +1071,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/notifications/signal-alerts/{task_id}/status": {
@@ -1032,7 +1102,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/notifications/signal-alerts/{task_id}/run": {
@@ -1053,7 +1133,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/portfolio/positions": {
@@ -1179,7 +1269,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "universe_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/research/universes/{universe_id}/members": {
@@ -1200,7 +1300,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "universe_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/research/factors": {
@@ -1242,7 +1352,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "factor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/research/watchlist": {
@@ -1343,7 +1463,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/strategies": {
@@ -1404,7 +1534,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       },
       "patch": {
         "summary": "PATCH /strategies/{strategy_id}",
@@ -1423,7 +1563,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/strategy-sources/authoring-contract": {
@@ -1547,7 +1697,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       },
       "patch": {
         "summary": "PATCH /strategy-sources/{source_id}",
@@ -1566,7 +1726,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/strategy-sources/{source_id}/versions": {
@@ -1587,7 +1757,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/strategy-sources/{source_id}/versions/{version_id}/restore": {
@@ -1608,7 +1788,25 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "source_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/trading/accounts": {
@@ -1650,7 +1848,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "credential_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/trading/accounts/{credential_id}/positions": {
@@ -1671,7 +1879,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "credential_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/trading/strategies/{strategy_id}/positions": {
@@ -1692,7 +1910,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/trading/strategies/{strategy_id}/trades": {
@@ -1713,7 +1941,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/trading/strategies/{strategy_id}/pending-orders": {
@@ -1734,7 +1972,17 @@
           "401": {
             "description": "Unauthorized"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "strategy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/agent/v1/trading/quick-trades": {
