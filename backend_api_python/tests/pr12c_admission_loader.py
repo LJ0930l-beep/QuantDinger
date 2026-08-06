@@ -46,6 +46,16 @@ def load_pr12c_admission() -> SimpleNamespace:
         "app.services.runtime_entry_admission_service",
     )
     original = {name: sys.modules.get(name, _MISSING) for name in names}
+    # Snapshot every app.* module too: dependency imports executed under the
+    # isolated package (e.g. gate_vertical_read_contracts) leave their
+    # isolated copies in sys.modules, which later breaks isinstance/type
+    # checks in other tests. Restore them all on exit.
+    _app_prefixes = ("app", "app.")
+    _app_before = {
+        _name: _mod
+        for _name, _mod in list(sys.modules.items())
+        if _name == "app" or _name.startswith("app.")
+    }
     try:
         app = ModuleType("app")
         app.__path__ = [str(app_dir)]
@@ -113,3 +123,11 @@ def load_pr12c_admission() -> SimpleNamespace:
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = previous
+        # Restore every app.* module that the isolated load touched.
+        for _name in list(sys.modules):
+            if _name == "app" or _name.startswith("app."):
+                _before = _app_before.get(_name)
+                if _before is None:
+                    sys.modules.pop(_name, None)
+                elif sys.modules[_name] is not _before:
+                    sys.modules[_name] = _before

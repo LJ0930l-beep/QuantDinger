@@ -11,6 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 def load():
     names = ["app", "app.domain", "app.domain.gate_readonly_contracts", "app.domain.gate_read_formatters", "app.domain.gate_read_transport_contracts", "app.domain.gate_readonly_adapter_contracts"]
     old = {name: sys.modules.get(name) for name in names}
+    app_before = {
+        _n: _m
+        for _n, _m in list(sys.modules.items())
+        if _n == "app" or _n.startswith("app.")
+    }
     try:
         app = ModuleType("app"); app.__path__ = [str(ROOT / "app")]
         domain = ModuleType("app.domain"); domain.__path__ = [str(ROOT / "app" / "domain")]
@@ -27,7 +32,15 @@ def load():
         for name in reversed(names):
             if old[name] is None: sys.modules.pop(name, None)
             else: sys.modules[name] = old[name]
-        sys.modules.pop("app.domain.gate_vertical_read_contracts", None)
+        # Restore every app.* module touched by the isolated load so
+        # later tests keep the canonical class identities.
+        for _name in list(sys.modules):
+            if _name == "app" or _name.startswith("app."):
+                _before = app_before.get(_name)
+                if _before is None:
+                    sys.modules.pop(_name, None)
+                elif sys.modules[_name] is not _before:
+                    sys.modules[_name] = _before
 
 
 M, RO, TRANSPORT = load()

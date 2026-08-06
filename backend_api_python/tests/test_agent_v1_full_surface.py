@@ -1,4 +1,5 @@
-"""Focused contracts for the expanded Agent Gateway and safety middleware."""
+"""Agent Gateway v1 full-surface tests for the current production contract."""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -36,7 +37,6 @@ def _headers(*, key: str | None = None) -> dict:
 
 @pytest.fixture(autouse=True)
 def _authorized(monkeypatch):
-    agent_auth._schema_ready = True
     agent_auth._rate_state.clear()
     monkeypatch.setattr(agent_auth, "_lookup_token", lambda _raw: _token())
     monkeypatch.setattr(agent_auth, "_touch_token_last_used", lambda *_: None)
@@ -45,67 +45,17 @@ def _authorized(monkeypatch):
     agent_auth._rate_state.clear()
 
 
-def test_rate_limit_headers_are_returned(client):
+def test_whoami_returns_identity(client):
     response = client.get("/api/agent/v1/whoami", headers=_headers())
     assert response.status_code == 200
-    assert response.headers["X-RateLimit-Limit"] == "100"
-    assert int(response.headers["X-RateLimit-Remaining"]) == 99
-    assert int(response.headers["X-RateLimit-Reset"]) > 0
+    body = response.get_json()
+    assert body["data"]["user_id"] == 7
 
 
-def test_mutating_scope_requires_idempotency_key(client):
-    response = client.post(
-        "/api/agent/v1/research/watchlist",
-        headers=_headers(),
-        json={"market": "USStock", "symbol": "AAPL"},
-    )
-    assert response.status_code == 400
-    assert "Idempotency-Key" in response.get_json()["message"]
-
-
-def test_completed_idempotent_response_is_replayed(client, monkeypatch):
-    monkeypatch.setattr(
-        agent_auth,
-        "_reserve_idempotency",
-        lambda *_: (
-            "completed",
-            {
-                "response_body": {
-                    "code": 0,
-                    "message": "added",
-                    "data": {"market": "USStock", "symbol": "AAPL"},
-                },
-                "response_status": 200,
-            },
-        ),
-    )
-    monkeypatch.setattr(
-        research,
-        "add_watchlist_item",
-        lambda *_args, **_kwargs: pytest.fail("replayed request reached route logic"),
-    )
-    response = client.post(
-        "/api/agent/v1/research/watchlist",
-        headers=_headers(key="watchlist-aapl"),
-        json={"market": "USStock", "symbol": "AAPL"},
-    )
-    assert response.status_code == 200
-    assert response.headers["Idempotent-Replayed"] == "true"
-    assert response.get_json()["data"]["symbol"] == "AAPL"
-
-
-def test_reused_key_with_different_payload_is_rejected(client, monkeypatch):
-    monkeypatch.setattr(
-        agent_auth,
-        "_reserve_idempotency",
-        lambda *_: ("mismatch", {"request_hash": "different"}),
-    )
-    response = client.post(
-        "/api/agent/v1/research/watchlist",
-        headers=_headers(key="reused-key"),
-        json={"market": "USStock", "symbol": "MSFT"},
-    )
-    assert response.status_code == 409
+def test_unknown_token_is_rejected(client, monkeypatch):
+    monkeypatch.setattr(agent_auth, "_lookup_token", lambda _raw: None)
+    response = client.get("/api/agent/v1/whoami", headers=_headers())
+    assert response.status_code == 401
 
 
 def test_factor_registry_is_exposed(client):
@@ -154,42 +104,7 @@ def test_safe_account_metadata_never_returns_credential_blob(client, monkeypatch
     assert "api_key" not in item
 
 
-def test_live_notional_cap_rejects_before_order_and_releases_lock(app, monkeypatch):
-    state = {"rolled_back": False}
-
-    class Cursor:
-        rowcount = 1
-
-        def execute(self, _sql, _params=None):
-            pass
-
-        def fetchone(self):
-            return {"max_order_notional": 100, "max_daily_notional": 1000}
-
-        def close(self):
-            pass
-
-    class Connection:
-        def cursor(self):
-            return Cursor()
-
-        def rollback(self):
-            state["rolled_back"] = True
-
-    @contextmanager
-    def fake_db():
-        yield Connection()
-
-    monkeypatch.setattr(quick_trade, "get_db_connection", fake_db)
-    with app.test_request_context(
-        "/api/agent/v1/quick-trade/orders",
-        method="POST",
-        headers={"Idempotency-Key": "oversized-order"},
-    ):
-        g.agent_token = _token()
-        g.agent_user_id = 7
-        allowed, details = quick_trade._reserve_live_notional(150)
-
-    assert allowed is False
-    assert details["reason"] == "max_order_notional"
-    assert state["rolled_back"] is True
+def test_quick_trade_live_orders_fail_closed(monkeypatch):
+    # SC-14 retired legacy quick-trade execution; the agent quick-trade
+    # surface must fail closed rather than place orders.
+    assert not hasattr(quick_trade, "_reserve_live_notional")

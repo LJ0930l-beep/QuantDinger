@@ -60,15 +60,15 @@
       "path": "backend_api_python/app/services/quick_trade/orders.py",
       "symbol": "attach_quick_trade_protection",
       "input_type": "quick-trade protection metadata",
-        "current_target": "typed NativeProtectionDisabledError before native exchange path",
-        "creates_order": false,
+      "current_target": "typed NativeProtectionDisabledError before native exchange path",
+      "creates_order": false,
       "calls_executor": false,
-        "calls_exchange_client": false,
-        "calls_legacy_quick_trade": false,
+      "calls_exchange_client": false,
+      "calls_legacy_quick_trade": false,
       "calls_command_intent_repository": false,
       "uses_canonical_entry": false,
-        "current_mode": "DISABLED",
-        "live_risk": "RETIRED_FAIL_CLOSED"
+      "current_mode": "DISABLED",
+      "live_risk": "RETIRED_FAIL_CLOSED"
     },
     {
       "source": "AGENT",
@@ -105,15 +105,15 @@
       "path": "backend_api_python/app/services/grid/exchange_orders.py",
       "symbol": "place_grid_limit_order",
       "input_type": "grid leg and exchange configuration",
-        "current_target": "typed GridTradingDisabledError before exchange helper body",
-        "creates_order": false,
-        "calls_executor": false,
-        "calls_exchange_client": false,
+      "current_target": "typed GridTradingDisabledError before exchange helper body",
+      "creates_order": false,
+      "calls_executor": false,
+      "calls_exchange_client": false,
       "calls_legacy_quick_trade": false,
       "calls_command_intent_repository": false,
       "uses_canonical_entry": false,
-        "current_mode": "DISABLED",
-        "live_risk": "RETIRED_FAIL_CLOSED"
+      "current_mode": "DISABLED",
+      "live_risk": "RETIRED_FAIL_CLOSED"
     },
     {
       "source": "REST",
@@ -180,45 +180,45 @@
       "path": "backend_api_python/app/services/live_trading/native_protection.py",
       "symbol": "place_native_protection_orders",
       "input_type": "NativeProtectionRequest",
-        "current_target": "typed NativeProtectionDisabledError before native exchange path",
-        "creates_order": false,
+      "current_target": "typed NativeProtectionDisabledError before native exchange path",
+      "creates_order": false,
       "calls_executor": false,
-        "calls_exchange_client": false,
+      "calls_exchange_client": false,
       "calls_legacy_quick_trade": false,
       "calls_command_intent_repository": false,
       "uses_canonical_entry": false,
-        "current_mode": "DISABLED",
-        "live_risk": "RETIRED_FAIL_CLOSED"
+      "current_mode": "DISABLED",
+      "live_risk": "RETIRED_FAIL_CLOSED"
     },
     {
       "source": "GRID",
       "path": "backend_api_python/app/services/grid/exchange_orders.py",
       "symbol": "execute_grid_market_order",
       "input_type": "grid market-leg configuration",
-        "current_target": "typed GridTradingDisabledError before exchange helper body",
-        "creates_order": false,
-        "calls_executor": false,
-        "calls_exchange_client": false,
+      "current_target": "typed GridTradingDisabledError before exchange helper body",
+      "creates_order": false,
+      "calls_executor": false,
+      "calls_exchange_client": false,
       "calls_legacy_quick_trade": false,
       "calls_command_intent_repository": false,
       "uses_canonical_entry": false,
-        "current_mode": "DISABLED",
-        "live_risk": "RETIRED_FAIL_CLOSED"
+      "current_mode": "DISABLED",
+      "live_risk": "RETIRED_FAIL_CLOSED"
     },
     {
       "source": "GRID",
       "path": "backend_api_python/app/services/grid/exchange_orders.py",
       "symbol": "cancel_grid_order",
       "input_type": "grid exchange-order identity",
-        "current_target": "typed GridTradingDisabledError before exchange helper body",
+      "current_target": "typed GridTradingDisabledError before exchange helper body",
       "creates_order": false,
       "calls_executor": false,
-        "calls_exchange_client": false,
+      "calls_exchange_client": false,
       "calls_legacy_quick_trade": false,
       "calls_command_intent_repository": false,
       "uses_canonical_entry": false,
-        "current_mode": "DISABLED",
-        "live_risk": "RETIRED_FAIL_CLOSED"
+      "current_mode": "DISABLED",
+      "live_risk": "RETIRED_FAIL_CLOSED"
     },
     {
       "source": "MCP",
@@ -246,6 +246,16 @@
       "line": 20,
       "count": 1,
       "legacy_reason": "legacy worker executor import; migrate through admission"
+    },
+    {
+      "path": "backend_api_python/app/routes/quick_trade.py",
+      "symbol": "<module>",
+      "category": "direct_import",
+      "pattern": "from:app.services.quick_trade.credentials:create_exchange_client",
+      "fingerprint": "0a086aade76423e629e1f03b",
+      "line": 34,
+      "count": 1,
+      "legacy_reason": "read-only balance/position endpoints construct exchange client; migrate through SC-14 read-only API"
     }
   ]
 }

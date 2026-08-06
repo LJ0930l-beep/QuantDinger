@@ -155,43 +155,29 @@ def test_terminal_fill_without_average_price_remains_open():
     assert is_final_fill(1.0, 1.0, 0.0, "FILLED") is False
 
 
-def test_ibkr_submission_never_fabricates_a_fill_from_requested_amount(monkeypatch):
-    class Result:
-        success = True
-        order_id = "ibkr-1"
-        filled = 0.0
-        avg_price = 0.0
-        status = "Submitted"
-        message = "Order submitted"
-        raw = {"status": "Submitted"}
-
+def test_ibkr_submission_fails_closed_after_sc15_retirement(monkeypatch):
     class Client:
         def place_market_order(self, **kwargs):
-            return Result()
+            pytest.fail("must not place market order after SC-15 retirement")
 
     worker = object.__new__(worker_module.PendingOrderWorker)
     sent = []
     worker._mark_sent = lambda **kwargs: sent.append(kwargs)
     worker._mark_failed = lambda **kwargs: pytest.fail(str(kwargs))
-    persisted = []
-    monkeypatch.setattr(worker_module, "persist_strategy_fill", lambda **kwargs: persisted.append(kwargs))
-    monkeypatch.setattr(worker_module, "append_strategy_log", lambda *args, **kwargs: None)
 
-    worker._execute_ibkr_order(
-        order_id=51,
-        order_row={},
-        payload={"signal_type": "open_long", "symbol": "AAPL", "amount": 10, "ref_price": 200},
-        client=Client(),
-        strategy_id=9,
-        exchange_config={"exchange_id": "ibkr", "market_type": "USStock"},
-        _notify_live_best_effort=lambda **kwargs: None,
-        _console_print=lambda *args, **kwargs: None,
-    )
+    with pytest.raises(RuntimeError, match="SC-15: legacy worker execution permanently retired"):
+        worker._execute_ibkr_order(
+            order_id=51,
+            order_row={},
+            payload={"signal_type": "open_long", "symbol": "AAPL", "amount": 10, "ref_price": 200},
+            client=Client(),
+            strategy_id=9,
+            exchange_config={"exchange_id": "ibkr", "market_type": "USStock"},
+            _notify_live_best_effort=lambda **kwargs: None,
+            _console_print=lambda *args, **kwargs: None,
+        )
 
-    assert sent[0]["filled"] == 0.0
-    assert sent[0]["avg_price"] == 0.0
-    assert sent[0]["final_filled"] is False
-    assert persisted == []
+    assert sent == []
 
 
 def test_live_sent_sync_reconciles_ibkr_submitted_order(monkeypatch):

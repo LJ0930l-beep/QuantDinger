@@ -29,7 +29,13 @@ def strategy_uses_fill_ledger(strategy_config: Dict[str, Any]) -> bool:
     """
     sc = strategy_config if isinstance(strategy_config, dict) else {}
     tc = sc.get("trading_config") if isinstance(sc.get("trading_config"), dict) else {}
-    return str(tc.get("position_ledger") or "exchange").strip().lower() == "fills"
+    explicit = str(tc.get("position_ledger") or "").strip().lower()
+    if explicit:
+        return explicit == "fills"
+    # Grid strategies maintain the L3 ledger by fill application by default:
+    # exchange reconciliation can delete rows when API/cache lag behind fills.
+    bot_type = str(sc.get("bot_type") or tc.get("executor_type") or "").strip().lower()
+    return bot_type == "grid"
 
 
 def apply_exchange_snapshot_to_strategy_ledger(
