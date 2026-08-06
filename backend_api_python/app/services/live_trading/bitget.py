@@ -567,7 +567,8 @@ class BitgetMixClient(BaseRestClient):
         return (qty, size_precision)
 
 
-    def normalize_base_order_size(self, *, symbol: str, product_type: str = "USDT-FUTURES", base_size: float) -> float:/n        """Normalize a base-asset order size to exchange-valid quantity and return as float."""
+    def normalize_base_order_size(self, *, symbol: str, product_type: str = "USDT-FUTURES", base_size: float) -> float:
+        """Normalize a base-asset order size to exchange-valid quantity and return as float."""
         qty, _ = self._normalize_size(symbol=symbol, product_type=product_type, base_size=base_size)
         return float(qty)
     def _normalize_price(self, *, symbol: str, product_type: str, price: float) -> Tuple[Decimal, Optional[int]]:
