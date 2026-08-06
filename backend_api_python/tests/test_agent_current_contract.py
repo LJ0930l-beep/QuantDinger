@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from flask import g
 
-from app.routes.agent_v1.backtests import _validate_request
+from app.routes.agent_v1.backtests import _run_backtest, _validate_request
 from app.routes.agent_v1.quick_trade import _paper_fill_outcome
 from app.utils import agent_auth
 
@@ -61,6 +61,29 @@ def test_backtest_rejects_dynamic_universe_for_restricted_token(app):
         _, err = _validate_request(_payload(DYNAMIC_CODE))
         assert err[1] == 403
         assert "Dynamic universes" in err[0].get_json()["message"]
+
+
+def test_agent_backtest_preserves_raw_leverage_for_typed_strategy_validation(monkeypatch):
+    captured = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return None, {"status": "ok"}
+
+    monkeypatch.setattr("app.routes.agent_v1.backtests._backtest.run", fake_run)
+    result = _run_backtest({
+        "code": STATIC_CODE,
+        "startDate": "2025-01-01",
+        "endDate": "2025-01-02",
+        "initialCapital": "10000",
+        "leverageEnabled": True,
+        "leverage": "not-a-number",
+        "params": {},
+    })
+
+    assert result == {"status": "ok"}
+    assert captured["leverage_enabled"] is True
+    assert captured["leverage"] == "not-a-number"
 
 
 @pytest.fixture(autouse=True)

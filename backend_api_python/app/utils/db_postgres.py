@@ -439,6 +439,13 @@ class PostgresCursor:
         # INSERT ... RETURNING: execute() peeks the first row for lastrowid; callers
         # that also cur.fetchone() must see the same row (not a second fetch from PG).
         self._buffered_row: Optional[Dict[str, Any]] = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+        return False
     
     def _convert_placeholders(self, query: str) -> str:
         """

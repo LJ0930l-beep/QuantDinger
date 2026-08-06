@@ -104,6 +104,9 @@ class GateBacktestDatasetTests(unittest.TestCase):
         out_of_order = candle(sequence=0, source_event_id="event-0", evidence_hash="hash-0")
         with self.assertRaises(M.GateBacktestDatasetError):
             M.build_gate_backtest_dataset((candle(), out_of_order), dataset_snapshot_id="dataset-1", as_of=UTC + timedelta(minutes=4))
+        gap = candle(sequence=4, source_event_id="event-4", evidence_hash="hash-4", open_time=UTC + timedelta(minutes=5), close_time=UTC + timedelta(minutes=6), occurred_at=UTC + timedelta(minutes=5), observed_at=UTC + timedelta(minutes=6))
+        with self.assertRaises(M.GateBacktestDatasetError):
+            M.build_gate_backtest_dataset((candle(), candle(sequence=2, source_event_id="event-2", evidence_hash="hash-2", open_time=UTC + timedelta(minutes=3), close_time=UTC + timedelta(minutes=4), occurred_at=UTC + timedelta(minutes=3), observed_at=UTC + timedelta(minutes=4)), gap), dataset_snapshot_id="dataset-1", as_of=UTC + timedelta(minutes=6))
 
     def test_requires_explicit_tuple_and_utc_cutoff(self):
         with self.assertRaises(M.GateBacktestDatasetError):

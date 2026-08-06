@@ -47,6 +47,18 @@ class DeterministicBacktestRunnerTests(unittest.TestCase):
         self.assertEqual(trace.decisions[0].decision, BT.BacktestDecision.EXECUTED)
         self.assertEqual(trace.decisions[1].decision, BT.BacktestDecision.EXECUTED)
 
+    def test_stop_orders_use_explicit_trigger_facts(self):
+        bars = (bar(1, UTC + timedelta(minutes=1)), bar(2, UTC + timedelta(minutes=3)))
+        order = BT.BacktestOrderIntent(
+            "stop", "BTC_USDT", BT.BacktestSide.BUY, BT.BacktestExecutionKind.STOP_MARKET,
+            Decimal("1"), UTC + timedelta(minutes=2), trigger_price=Decimal("101"),
+            trigger_direction=BT.BacktestTriggerDirection.CROSS_UP,
+            trigger_price_type=BT.BacktestTriggerPriceType.HIGH_LOW,
+        )
+        trace = M.run_deterministic_backtest(run(), bars, (order,))
+        self.assertEqual(trace.decisions[0].decision, BT.BacktestDecision.EXECUTED)
+        self.assertEqual(trace.decisions[0].fill_price, Decimal("101"))
+
     def test_same_bar_and_no_later_bar_are_invalid(self):
         order = BT.BacktestOrderIntent("o", "BTC_USDT", BT.BacktestSide.BUY, BT.BacktestExecutionKind.MARKET, Decimal("1"), UTC + timedelta(minutes=1))
         trace = M.run_deterministic_backtest(run(), (bar(1, UTC + timedelta(minutes=1)),), (order,))
@@ -67,6 +79,31 @@ class DeterministicBacktestRunnerTests(unittest.TestCase):
         self.assertEqual(first.trace_fingerprint, second.trace_fingerprint)
         with self.assertRaises((AttributeError, TypeError)):
             first.trace_fingerprint = "x"
+
+    def test_trace_identity_includes_cost_policy_versions(self):
+        bars = (bar(1, UTC + timedelta(minutes=1)),)
+        order = BT.BacktestOrderIntent("o", "BTC_USDT", BT.BacktestSide.BUY, BT.BacktestExecutionKind.MARKET, Decimal("1"), UTC)
+        first = M.run_deterministic_backtest(run(), bars, (order,))
+        changed = M.run_deterministic_backtest(
+            BT.BacktestRunFacts("run-1", "dataset-1", "rules", "fees-v2", "slip", Decimal("1000"), "USDT", UTC, UTC + timedelta(hours=1)),
+            bars,
+            (order,),
+        )
+        assert first.fee_policy_version == "fees"
+        assert changed.fee_policy_version == "fees-v2"
+        assert first.trace_fingerprint != changed.trace_fingerprint
+
+    def test_trace_identity_includes_cost_policy_fingerprint(self):
+        bars = (bar(1, UTC + timedelta(minutes=1)),)
+        order = BT.BacktestOrderIntent("o", "BTC_USDT", BT.BacktestSide.BUY, BT.BacktestExecutionKind.MARKET, Decimal("1"), UTC)
+        first = M.run_deterministic_backtest(
+            BT.BacktestRunFacts("run-1", "dataset-1", "rules", "fees", "slip", Decimal("1000"), "USDT", UTC, UTC + timedelta(hours=1), "a" * 64), bars, (order,)
+        )
+        second = M.run_deterministic_backtest(
+            BT.BacktestRunFacts("run-1", "dataset-1", "rules", "fees", "slip", Decimal("1000"), "USDT", UTC, UTC + timedelta(hours=1), "b" * 64), bars, (order,)
+        )
+        assert first.cost_policy_fingerprint == "a" * 64
+        assert first.trace_fingerprint != second.trace_fingerprint
 
 
 if __name__ == "__main__": unittest.main()

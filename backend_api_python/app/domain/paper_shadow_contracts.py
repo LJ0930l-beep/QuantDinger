@@ -71,6 +71,7 @@ class PaperShadowRunFacts:
     tolerance_policy_fingerprint: str
     started_at: datetime
     ended_at: datetime | None = None
+    cost_policy_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         _text(self.run_id, "run_id"); _text(self.dataset_snapshot_id, "dataset_snapshot_id")
@@ -82,6 +83,14 @@ class PaperShadowRunFacts:
             ended = _utc(self.ended_at, "ended_at")
             if ended < started: raise PaperShadowContractError("ended_at cannot precede started_at")
             object.__setattr__(self, "ended_at", ended)
+        if self.cost_policy_fingerprint is not None:
+            if (
+                not isinstance(self.cost_policy_fingerprint, str)
+                or len(self.cost_policy_fingerprint) != 64
+                or self.cost_policy_fingerprint != self.cost_policy_fingerprint.lower()
+                or any(char not in "0123456789abcdef" for char in self.cost_policy_fingerprint)
+            ):
+                raise PaperShadowContractError("cost_policy_fingerprint must be lowercase sha256 text")
 
 
 @dataclass(frozen=True)

@@ -97,18 +97,23 @@ class OutboxProjectionRepositoryPostgresTests(unittest.TestCase):
 
     def test_lease_fencing_allows_only_exact_owner_and_token_to_publish(self):
         event = self._event()
-        self.repository.persist_event(self.connection, event, available_at=NOW)
+        # Use an isolated historical instant so committed rows left by an
+        # interrupted local run (which use the shared NOW fixture) cannot be
+        # selected by the repository's global FIFO lease query.
+        lease_now = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        self.repository.persist_event(self.connection, event, available_at=lease_now)
+        lease_owner = f"postgres-projection-worker-{uuid4().hex}"
         lease = self.repository.lease_next(
-            self.connection, lease_owner="postgres-projection-worker", now_utc=NOW,
+            self.connection, lease_owner=lease_owner, now_utc=lease_now,
             lease_duration=timedelta(seconds=10),
         )
         self.assertIsNotNone(lease)
-        wrong = MODULES.LeasedOutboxEvent(event, "postgres-projection-worker", lease.lease_fencing_token + 1, lease.lease_expires_at)
+        wrong = MODULES.LeasedOutboxEvent(event, lease_owner, lease.lease_fencing_token + 1, lease.lease_expires_at)
         with self.assertRaises(OutboxLeaseConflict):
             self.repository.mark_published(self.connection, wrong, published_at=NOW)
-        self.repository.mark_published(self.connection, lease, published_at=NOW)
+        self.repository.mark_published(self.connection, lease, published_at=lease_now)
         self.assertIsNone(self.repository.lease_next(
-            self.connection, lease_owner="postgres-projection-worker", now_utc=NOW,
+            self.connection, lease_owner=lease_owner, now_utc=lease_now,
             lease_duration=timedelta(seconds=10),
         ))
 

@@ -13,6 +13,7 @@ from typing import Protocol
 from app.domain.canonical_entry_contracts import EntryMode, EntrySource
 from app.domain.entry_admission_v2_contracts import EntryAdmissionDisposition, EntryAdmissionResultV2
 from app.domain.entrypoint_v2_binding_contracts import bind_entrypoint_v2
+from app.domain.canonical_entry_v2_contracts import DurableEntryGraphV2
 from app.domain.runtime_entry_admission_contracts import (
     RuntimeEntryAdmissionDisposition,
     RuntimeEntryAdmissionResult,
@@ -65,12 +66,39 @@ class RuntimeEntryAdmissionService:
         occurred_at: datetime,
         mode: EntryMode,
     ) -> RuntimeEntryAdmissionResult:
+        result, _graph = self.admit_with_graph(
+            connection,
+            ingress,
+            principal,
+            correlation_id=correlation_id,
+            occurred_at=occurred_at,
+            mode=mode,
+        )
+        return result
+
+    def admit_with_graph(
+        self,
+        connection: object,
+        ingress: RuntimeEntryIngressV1,
+        principal: RuntimeIngressPrincipal,
+        *,
+        correlation_id: str,
+        occurred_at: datetime,
+        mode: EntryMode,
+    ) -> tuple[RuntimeEntryAdmissionResult, DurableEntryGraphV2 | None]:
+        """Admit while returning the exact graph used for persistence.
+
+        The graph is returned only as an in-process typed value so a caller
+        that owns the transaction can continue with a guarded Paper/TestNet
+        execution step.  Existing callers keep the original ``admit`` API,
+        and transaction ownership remains entirely with the caller.
+        """
         if not isinstance(ingress, RuntimeEntryIngressV1) or not isinstance(principal, RuntimeIngressPrincipal):
             raise RuntimeEntryAdmissionError("runtime admission requires typed ingress and principal")
         if not isinstance(mode, EntryMode):
             raise RuntimeEntryAdmissionError("runtime admission mode must be typed")
         if mode is EntryMode.DISABLED:
-            return RuntimeEntryAdmissionResult(RuntimeEntryAdmissionDisposition.DISABLED, None, None)
+            return RuntimeEntryAdmissionResult(RuntimeEntryAdmissionDisposition.DISABLED, None, None), None
         try:
             authority = self._authorities.resolve(connection, ingress, principal)
             request = build_runtime_entry_request(
@@ -90,7 +118,7 @@ class RuntimeEntryAdmissionService:
             raise
         except Exception as exc:
             raise RuntimeEntryAdmissionError("runtime entry admission failed") from exc
-        return RuntimeEntryAdmissionResult(self._disposition(admission, persisted), admission, persisted)
+        return RuntimeEntryAdmissionResult(self._disposition(admission, persisted), admission, persisted), graph
 
     @staticmethod
     def _bind(request, ingress: RuntimeEntryIngressV1, principal: RuntimeIngressPrincipal, scope: AuthoritativeIngressScope):

@@ -43,6 +43,12 @@ class PaperShadowTests(unittest.TestCase):
         with self.assertRaises((AttributeError, TypeError)): run.mode = M.SimulationMode.SHADOW
         with self.assertRaises(M.PaperShadowContractError): M.PaperShadowRunFacts("run", M.SimulationMode.PAPER, "d", "s", "r", "t", UTC, UTC - timedelta(seconds=1))
 
+    def test_cost_policy_fingerprint_is_optional_but_strict_when_present(self):
+        run = M.PaperShadowRunFacts("run", M.SimulationMode.PAPER, "d", "s", "r", "t", UTC, cost_policy_fingerprint="a" * 64)
+        self.assertEqual(run.cost_policy_fingerprint, "a" * 64)
+        with self.assertRaises(M.PaperShadowContractError):
+            M.PaperShadowRunFacts("run", M.SimulationMode.PAPER, "d", "s", "r", "t", UTC, cost_policy_fingerprint="not-a-sha")
+
     def test_decision_preserves_economic_and_request_identity(self):
         decision = M.PaperShadowDecision("run-1", "request-1", "economic-1", M.SimulationMode.SHADOW, M.SimulationDisposition.ACCEPTED, Decimal("0.1"), Decimal("10"), "mock accepted", UTC)
         self.assertEqual(decision.notional, Decimal("10")); self.assertEqual(decision.mode, M.SimulationMode.SHADOW)

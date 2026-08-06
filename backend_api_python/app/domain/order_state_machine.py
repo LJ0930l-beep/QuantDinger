@@ -285,6 +285,11 @@ def _order_cause_authorized(
 
 def _actor_cause_authorized(actor: Actor, cause: TransitionCause) -> bool:
     """The smallest explicit matrix; unspecified runtime principals fail closed."""
+    if cause is TransitionCause.SUBMISSION_RESULT:
+        # The gated TestNet worker is the only currently approved execution
+        # principal.  It records the attempt lifecycle before/after the
+        # exchange boundary; no public/runtime caller is granted this cause.
+        return actor is Actor.ADMIN
     if cause in {TransitionCause.VENUE_OBSERVATION, TransitionCause.CANCEL_OBSERVATION,
                  TransitionCause.RECONCILIATION_CONFLICT}:
         return actor is Actor.ADMIN

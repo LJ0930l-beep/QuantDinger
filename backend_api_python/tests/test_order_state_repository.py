@@ -57,6 +57,31 @@ def transition(idempotency_key="event-1"):
 
 
 class OrderStateRepositoryTests(unittest.TestCase):
+    def test_caller_owned_order_transition_does_not_commit_or_rollback(self):
+        cursor = FakeCursor([
+            ("SUBMISSION_UNKNOWN", 2, 2),
+            None,
+            ("SUBMITTED", 3),
+        ])
+        connection = FakeConnection(cursor)
+        result = repository.OrderStateRepository().apply_order_transition_caller_owned(connection, transition())
+        self.assertEqual(repository.StateEventDisposition.APPLIED, result.disposition)
+        self.assertEqual(0, connection.commits)
+        self.assertEqual(0, connection.rollbacks)
+        self.assertTrue(cursor.closed)
+
+    def test_caller_owned_order_transition_failure_does_not_rollback(self):
+        cursor = FakeCursor([
+            ("SUBMISSION_UNKNOWN", 2, 2),
+            ("SUBMITTED", 3, "different", "event-1"),
+        ])
+        connection = FakeConnection(cursor)
+        with self.assertRaises(machine.StateEventConflict):
+            repository.OrderStateRepository().apply_order_transition_caller_owned(connection, transition())
+        self.assertEqual(0, connection.commits)
+        self.assertEqual(0, connection.rollbacks)
+        self.assertTrue(cursor.closed)
+
     def test_event_and_cas_update_commit_as_one_unit(self):
         cursor = FakeCursor([
             ("SUBMISSION_UNKNOWN", 2, 2),  # aggregate lock
@@ -128,6 +153,27 @@ class OrderStateRepositoryTests(unittest.TestCase):
         )
         with self.assertRaises(machine.StateEventConflict):
             repository.OrderStateRepository().apply_order_transition(FakeConnection(FakeCursor([])), attempt)
+
+    def test_caller_owned_attempt_transition_does_not_commit_or_rollback(self):
+        attempt = machine.authorize_attempt_transition(
+            aggregate_id="00000000-0000-0000-0000-000000000302", current_state=contracts.SubmissionAttemptState.UNKNOWN,
+            target_state=contracts.SubmissionAttemptState.ACKED, expected_version=0,
+            cause=machine.TransitionCause.VENUE_OBSERVATION, actor=contracts.Actor.ADMIN,
+            reason_code="TEST", correlation_id="c", occurred_at=NOW, evidence_hash="a",
+            canonical_payload={}, idempotency_key="event-2",
+            aggregate_scope=machine.SubmissionAttemptScope(1, 2, "account-a", "BTCUSDT", "swap", ORDER_ID, "binance"),
+        )
+        cursor = FakeCursor([
+            (ORDER_ID, "UNKNOWN", 0, 0),
+            None,
+            ("ACKED", 1),
+        ])
+        connection = FakeConnection(cursor)
+        result = repository.OrderStateRepository().apply_attempt_transition_caller_owned(connection, attempt)
+        self.assertEqual(repository.StateEventDisposition.APPLIED, result.disposition)
+        self.assertEqual(0, connection.commits)
+        self.assertEqual(0, connection.rollbacks)
+        self.assertTrue(cursor.closed)
 
 
 if __name__ == "__main__":

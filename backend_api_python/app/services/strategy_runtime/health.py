@@ -31,6 +31,11 @@ def load_runtime_health(
     placeholders = ",".join(["%s"] * len(ids))
 
     _load_latest_runs(snapshots, placeholders, ids)
+    # A command can be durably queued while the API process is healthy but the
+    # trading worker is not running.  Keep this fact in the read-only health
+    # snapshot so the UI can distinguish "waiting for worker" from a real
+    # exchange/order failure.
+    _load_latest_commands(snapshots, placeholders, ids)
     _load_health_state(snapshots, placeholders, ids)
     _load_latest_events(snapshots, placeholders, ids)
     _load_pending_orders(snapshots, placeholders, ids)
@@ -95,6 +100,12 @@ def _empty_snapshot() -> Dict[str, Any]:
         "latency_ms": 0,
         "last_price": 0.0,
         "last_error": "",
+        "last_command_id": 0,
+        "last_command_type": "",
+        "last_command_status": "",
+        "last_command_error": "",
+        "last_command_at": None,
+        "health_reason": "",
         "last_event_at": None,
         "last_event_type": "",
         "last_event_severity": "",
@@ -146,6 +157,32 @@ def _load_latest_runs(snapshots, placeholders, ids):
             "started_at": row.get("started_at"),
             "stopped_at": row.get("stopped_at"),
             "stop_reason": str(row.get("stop_reason") or ""),
+        })
+
+
+def _load_latest_commands(snapshots, placeholders, ids):
+    """Load the latest durable control command without claiming or mutating it."""
+    rows = _query(
+        f"""
+        SELECT strategy_id, id, command_type, status, error_message, created_at, updated_at
+        FROM qd_strategy_commands
+        WHERE strategy_id IN ({placeholders})
+        ORDER BY strategy_id, id DESC
+        """,
+        tuple(ids),
+    )
+    seen = set()
+    for row in rows:
+        strategy_id = int(row.get("strategy_id") or 0)
+        if strategy_id in seen or strategy_id not in snapshots:
+            continue
+        seen.add(strategy_id)
+        snapshots[strategy_id].update({
+            "last_command_id": int(row.get("id") or 0),
+            "last_command_type": str(row.get("command_type") or "").lower(),
+            "last_command_status": str(row.get("status") or "").lower(),
+            "last_command_error": str(row.get("error_message") or ""),
+            "last_command_at": row.get("updated_at") or row.get("created_at"),
         })
 
 
@@ -288,16 +325,27 @@ def _health_state(snapshot: Dict[str, Any], *, strategy_status: str, now: int) -
     if strategy_status != "running":
         return "inactive"
     if int(snapshot.get("run_id") or 0) <= 0:
+        command_type = str(snapshot.get("last_command_type") or "")
+        command_status = str(snapshot.get("last_command_status") or "")
+        if command_type in {"start", "stop"} and command_status in {"pending", "processing", "claimed"}:
+            snapshot["health_reason"] = "worker_unavailable"
+        else:
+            snapshot["health_reason"] = "run_not_observed"
         return "degraded"
     if int(snapshot.get("failed_orders") or 0) > 0 or str(snapshot.get("last_error") or "").strip():
+        snapshot["health_reason"] = "recent_failure"
         return "degraded"
     heartbeat = int(snapshot.get("last_heartbeat_at") or 0)
     if heartbeat <= 0:
+        snapshot["health_reason"] = "heartbeat_missing"
         return "unknown"
     age = max(0, now - heartbeat)
     snapshot["heartbeat_age_sec"] = age
     if age <= 90:
+        snapshot["health_reason"] = ""
         return "healthy"
     if age <= 300:
+        snapshot["health_reason"] = "heartbeat_delayed"
         return "stale"
+    snapshot["health_reason"] = "heartbeat_expired"
     return "offline"

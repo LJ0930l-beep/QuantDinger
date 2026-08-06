@@ -283,6 +283,12 @@ def get_indicators():
         user_id = g.user_id
 
         with get_db_connection() as db:
+            # Existing accounts may predate the built-in indicator pack.  Keep
+            # the catalog available without requiring a re-registration; the
+            # helper is idempotent and only adds missing, chart-only samples.
+            from app.services.builtin_indicators import seed_builtin_indicators_for_new_user
+
+            seed_builtin_indicators_for_new_user(db, user_id)
             cur = db.cursor()
             # Get user's own indicators (both purchased and custom).
             cur.execute(

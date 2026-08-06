@@ -115,6 +115,26 @@ class GateVerticalReadContractTests(unittest.TestCase):
                 rule_version="rules-v1", observed_at=UTC,
             )
 
+    def test_instrument_rules_preserve_contract_size_and_leverage_bounds(self):
+        snapshot = MODULE.GateInstrumentRuleSnapshot(
+            venue_id="gate", market_type=MULTI.AssetMarketType.PERPETUAL, instrument_id="BTC_USDT",
+            tick_size=Decimal("0.1"), quantity_step=Decimal("0.001"),
+            minimum_quantity=Decimal("0.001"), minimum_notional=Decimal("0"),
+            rule_version="rules-v2", observed_at=UTC,
+            contract_size=Decimal("0.001"), leverage_min=Decimal("50"), leverage_max=Decimal("100"),
+        )
+        self.assertEqual(snapshot.contract_size, Decimal("0.001"))
+        self.assertEqual(snapshot.leverage_min, Decimal("50"))
+        self.assertEqual(snapshot.leverage_max, Decimal("100"))
+        with self.assertRaises(MODULE.GateVerticalContractError):
+            MODULE.GateInstrumentRuleSnapshot(
+                venue_id="gate", market_type=MULTI.AssetMarketType.PERPETUAL, instrument_id="BTC_USDT",
+                tick_size=Decimal("0.1"), quantity_step=Decimal("0.001"),
+                minimum_quantity=Decimal("0.001"), minimum_notional=Decimal("0"),
+                rule_version="rules-v2", observed_at=UTC,
+                leverage_min=Decimal("50"),
+            )
+
     def test_position_scope_and_decimal_values_are_immutable(self):
         position = MODULE.GatePositionFact(
             venue_id="gate", market_type=MULTI.AssetMarketType.PERPETUAL, account_scope="paper-a",

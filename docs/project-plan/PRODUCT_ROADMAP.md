@@ -15,7 +15,7 @@ Safety Core
   -> Account Cooldown Risk
   -> Frontend Product
   -> Operations
-  -> Controlled Live Ready / Live OFF
+  -> TestNet -> Paper/Shadow -> Canary -> 人工确认后的受控 Live
 ```
 
 ## 阶段定义
@@ -30,7 +30,9 @@ Safety Core
 | STRAT-01 / SMC-01 | PLANNED | 策略只生成 Candidate Trade Plan，不直接触发交易 |
 | PORT-01 / COOLDOWN | PLANNED | 用户选择杠杆与保证金成本，系统不静默改写 |
 | FE-01 / OPS-01 | PLANNED | 前端可读、可审计、显示 stale/unavailable，不推断权威事实 |
-| LIVE-R01 | PLANNED | 仅 Controlled Live Ready，Live 永久保持 OFF 直到独立批准 |
+| LIVE-R01 | PLANNED | 完成 TestNet、Paper/Shadow、Canary、恢复/对账和人工二次确认后才具备受控 Live 资格；默认仍 OFF |
+
+> 四个阶段只是内部施工顺序。项目完成的标准是 Gate Spot/Perpetual 从 Market Data 到 Frontend 的完整可操作闭环，而不是某个阶段或单个 PR 完成。
 
 ## AI 产品裁定
 

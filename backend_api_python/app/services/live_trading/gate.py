@@ -23,6 +23,7 @@ from urllib.parse import urlencode
 
 from app.services.live_trading.base import BaseRestClient, LiveOrderResult, LiveTradingError
 from app.services.live_trading.symbols import to_gate_currency_pair
+from app.domain.gate_leverage_contracts import validate_gate_crypto_swap_leverage
 
 logger = logging.getLogger(__name__)
 
@@ -77,19 +78,23 @@ class _GateBase(BaseRestClient):
         return headers
 
     def _format_text(self, client_order_id: Optional[str]) -> str:
-        raw = str(client_order_id or "").strip()
+        raw = str(client_order_id or "")
         if not raw:
             return ""
-        normalized = []
-        for ch in raw:
-            if ch.isalnum() or ch in ("-", "_", "."):
-                normalized.append(ch)
-        text = "".join(normalized).strip()
-        if not text:
-            return ""
+        # Gate's user-defined ``text`` is part of the order identity.  Never
+        # strip, rewrite, or truncate it: doing so would break idempotent
+        # replay and make the submitted order impossible to correlate safely.
+        if raw != raw.strip() or not raw.isascii() or any(
+            ch not in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_-." for ch in raw
+        ):
+            raise LiveTradingError("Gate client order id contains unsupported characters")
+        text = raw
         if not text.startswith("t-"):
             text = f"t-{text}"
-        return text[:28]
+        content = text[2:]
+        if not content or len(content.encode("ascii")) > 28:
+            raise LiveTradingError("Gate client order id exceeds 28 bytes")
+        return text
 
     def _signed_request(
         self,
@@ -514,13 +519,11 @@ class GateUsdtFuturesClient(_GateBase):
         if not c:
             return False
         try:
-            lv = int(float(leverage or 1.0))
-        except Exception:
-            lv = 1
-        if lv < 1:
-            lv = 1
+            lv = validate_gate_crypto_swap_leverage(leverage)
+        except Exception as exc:
+            raise LiveTradingError(str(exc)) from exc
         path = f"/api/v4/futures/usdt/positions/{c}/leverage"
-        lv_s = str(lv)
+        lv_s = format(lv, "f")
         # Gate expects ``leverage`` / ``cross_leverage_limit`` as **query parameters**, not JSON body
         # (see gateapi-python: update_position_leverage). Cross / portfolio mode: leverage=0 + cross_leverage_limit.
         mode = str(margin_mode or "cross").strip().lower()

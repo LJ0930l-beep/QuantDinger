@@ -69,8 +69,9 @@ def _canonical_decimal(value: Any, field_name: str) -> str | None:
 def _canonical_timestamp(value: Any, field_name: str) -> str:
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise DurableEntryIntegrityError(f"persisted {field_name} must be timezone-aware")
-    if value.utcoffset() != timezone.utc.utcoffset(value):
-        raise DurableEntryIntegrityError(f"persisted {field_name} must use UTC")
+    # PostgreSQL returns TIMESTAMPTZ using the connection/session timezone.
+    # Normalize any aware persisted value before comparing replay facts; strict
+    # UTC validation remains enforced at the domain/input boundary.
     return value.astimezone(timezone.utc).isoformat()
 
 

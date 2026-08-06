@@ -64,12 +64,23 @@ class Connection(Protocol):
 
 
 def _value(row: Any, index: int, name: str) -> Any:
-    return row[name] if isinstance(row, dict) else row[index]
+    if isinstance(row, dict):
+        # Real backend cursors return dict rows; the positional contract is
+        # established by the SELECT column order.  The ``name`` argument
+        # exists only for human-readable error messages when an exception
+        # propagates, never as a dict key.
+        keys = tuple(row.keys())
+        if index >= len(keys):
+            raise RiskFactsScopeConflict(f"persisted {name} row has too few columns")
+        return row[keys[index]]
+    return row[index]
 
 
 def _utc(value: Any, field: str) -> datetime:
-    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timezone.utc.utcoffset(value):
-        raise RiskFactsScopeConflict(f"persisted {field} must be UTC")
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise RiskFactsScopeConflict(f"persisted {field} must be timezone-aware")
+    # Normalize the database representation.  Input facts are still required
+    # to be zero-offset UTC before persistence; this is read-side canonicalization.
     return value.astimezone(timezone.utc)
 
 

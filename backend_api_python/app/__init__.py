@@ -150,6 +150,60 @@ def create_app(config_name='default', *, register_http_routes: bool = True):
         from app.routes import register_routes
 
         register_routes(app)
+        # The built-in catalog is read-only metadata for the Strategy Factory.
+        # It is safe as the default because it contains no credentials,
+        # account facts, execution calls, or live authority.  Deployments may
+        # replace it with an explicitly reviewed provider before serving.
+        from app.services.builtin_strategy_catalog import builtin_strategy_catalog
+        from app.services.readonly_projection_summary_service import postgres_projection_summary_provider
+        from app.services.readonly_reconciliation_summary_service import postgres_reconciliation_summary_provider
+        from app.services.readonly_shadow_summary_service import postgres_shadow_summary_provider
+        from app.services.readonly_backtest_report_service import postgres_backtest_report_provider
+        from app.services.readonly_paper_account_service import postgres_paper_account_provider
+        from app.services.gate_testnet_rehearsal_file_provider import provider_from_path as gate_rehearsal_provider_from_path
+        from app.services.gate_public_market_provider import (
+            provider_from_network as gate_public_market_provider_from_network,
+            unified_provider_from_network as gate_unified_public_market_provider_from_network,
+        )
+        from app.services.gate_private_read_provider import (
+            provider_from_database as gate_private_read_provider_from_database,
+            unified_provider_from_database as gate_unified_private_read_provider_from_database,
+        )
+        from app.services.deployment_readiness_file_provider import provider_from_path as deployment_readiness_provider_from_path
+
+        app.extensions.setdefault("readonly_strategy_catalog_provider", builtin_strategy_catalog)
+        deployment_evidence_path = os.getenv("QUANT_DEPLOYMENT_READINESS_EVIDENCE_PATH")
+        if deployment_evidence_path:
+            app.extensions.setdefault("readonly_deployment_readiness_provider", deployment_readiness_provider_from_path(deployment_evidence_path))
+        # This provider is SELECT-only and returns UNAVAILABLE when the
+        # projection schema/database is not configured.  It does not replace
+        # the stricter G4-B receipt required by /api/quant/readonly.
+        app.extensions.setdefault("readonly_projection_summary_provider", postgres_projection_summary_provider)
+        app.extensions.setdefault("readonly_reconciliation_summary_provider", postgres_reconciliation_summary_provider)
+        app.extensions.setdefault("readonly_shadow_summary_provider", postgres_shadow_summary_provider)
+        # This provider accepts only canonical, fingerprint-verified report
+        # JSON. Legacy result_json rows remain unavailable rather than being
+        # guessed into typed backtest facts.
+        app.extensions.setdefault("readonly_backtest_report_provider", postgres_backtest_report_provider)
+        app.extensions.setdefault("readonly_paper_account_provider", postgres_paper_account_provider)
+        # An explicitly supplied, sanitized public-read artifact can feed the
+        # read-only TestNet evidence endpoint.  No default path is guessed and
+        # no credentials or venue client are loaded here.
+        rehearsal_path = os.environ.get("QUANT_TESTNET_REHEARSAL_EVIDENCE_PATH", "").strip()
+        if rehearsal_path:
+            app.extensions.setdefault("readonly_gate_testnet_rehearsal_provider", gate_rehearsal_provider_from_path(rehearsal_path))
+        # Public Gate TestNet market reads are opt-in and GET-only.  The
+        # default remains unavailable so starting the API never opens a
+        # network connection unexpectedly.
+        if os.getenv("QUANT_GATE_PUBLIC_MARKET_READ_ENABLED", "0").strip() == "1":
+            app.extensions.setdefault("readonly_gate_public_market_provider", gate_public_market_provider_from_network())
+            app.extensions.setdefault("readonly_gate_unified_market_provider", gate_unified_public_market_provider_from_network())
+        # Private Gate reads are explicit TestNet-only and GET-only.  The
+        # default remains unavailable so startup never resolves credentials or
+        # opens a private network connection unexpectedly.
+        if os.getenv("QUANT_GATE_PRIVATE_READ_ENABLED", "0").strip() == "1":
+            app.extensions.setdefault("readonly_gate_account_provider", gate_private_read_provider_from_database())
+            app.extensions.setdefault("readonly_gate_unified_account_provider", gate_unified_private_read_provider_from_database())
     run_startup_hooks(app)
 
     return app

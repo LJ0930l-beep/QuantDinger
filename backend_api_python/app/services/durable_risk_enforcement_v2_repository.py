@@ -78,8 +78,9 @@ def _timestamp(value: Any, field: str) -> str | None:
         return None
     if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
         raise DurableRiskConflict(f"persisted {field} must be timezone-aware UTC")
-    if value.utcoffset() != timezone.utc.utcoffset(value):
-        raise DurableRiskConflict(f"persisted {field} must use UTC")
+    # TIMESTAMPTZ is materialized in the PostgreSQL session timezone.  Replay
+    # comparison must normalize that persisted representation to UTC rather
+    # than treating a valid non-zero offset as a fact conflict.
     return value.astimezone(timezone.utc).isoformat()
 
 

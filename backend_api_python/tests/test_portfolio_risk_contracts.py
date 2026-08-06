@@ -36,6 +36,12 @@ class PortfolioRiskTests(unittest.TestCase):
         for facts, reason in ((dict(max_notional=Decimal("10")), "max_notional_exceeded"), (dict(available_margin=Decimal("1")), "available_margin_exceeded"), (dict(max_leverage=Decimal("2")), "max_leverage_exceeded")):
             decision = M.evaluate_position_sizing(request(**facts)); self.assertEqual(decision.disposition, M.SizingDisposition.DENIED); self.assertEqual(decision.reason, reason); self.assertEqual(decision.approved_quantity, Decimal("0"))
 
+    def test_zero_margin_rate_fails_closed_as_typed_deny(self):
+        decision = M.evaluate_position_sizing(request(margin_rate=Decimal("0")))
+        self.assertEqual(decision.disposition, M.SizingDisposition.DENIED)
+        self.assertEqual(decision.reason, "max_leverage_exceeded")
+        self.assertEqual(decision.required_margin, Decimal("0"))
+
     def test_decimal_float_and_time_are_strict(self):
         with self.assertRaises(M.PortfolioRiskError): request(mark_price=1.0)
         with self.assertRaises(M.PortfolioRiskError): request(observed_at=datetime(2026, 1, 1))

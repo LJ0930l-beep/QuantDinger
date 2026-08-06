@@ -35,6 +35,9 @@ class BacktestExecutionTrace:
     run_id: str
     dataset_snapshot_id: str
     decisions: Tuple[BacktestExecutionDecision, ...]
+    fee_policy_version: str = ""
+    slippage_policy_version: str = ""
+    cost_policy_fingerprint: str = ""
     trace_fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -44,6 +47,16 @@ class BacktestExecutionTrace:
             raise DeterministicBacktestRunnerError("dataset_snapshot_id must be canonical text")
         if not isinstance(self.decisions, tuple) or any(not isinstance(item, BacktestExecutionDecision) for item in self.decisions):
             raise DeterministicBacktestRunnerError("decisions must be an explicit typed tuple")
+        for field_name in ("fee_policy_version", "slippage_policy_version"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or value.strip() != value:
+                raise DeterministicBacktestRunnerError(f"{field_name} must be canonical text")
+        if self.cost_policy_fingerprint and (
+            len(self.cost_policy_fingerprint) != 64
+            or self.cost_policy_fingerprint != self.cost_policy_fingerprint.lower()
+            or any(char not in "0123456789abcdef" for char in self.cost_policy_fingerprint)
+        ):
+            raise DeterministicBacktestRunnerError("cost_policy_fingerprint must be lowercase sha256 text")
         order_ids = [item.order_id for item in self.decisions]
         if len(order_ids) != len(set(order_ids)):
             raise DeterministicBacktestRunnerError("one decision per order_id is required")
@@ -51,6 +64,9 @@ class BacktestExecutionTrace:
             "version": DETERMINISTIC_BACKTEST_RUNNER_CONTRACT_VERSION,
             "run_id": self.run_id,
             "dataset_snapshot_id": self.dataset_snapshot_id,
+            "fee_policy_version": self.fee_policy_version,
+            "slippage_policy_version": self.slippage_policy_version,
+            "cost_policy_fingerprint": self.cost_policy_fingerprint,
             "decisions": self.decisions,
         }))
 
@@ -91,7 +107,14 @@ def run_deterministic_backtest(
             decisions.append(BacktestExecutionDecision(order.order_id, BacktestDecision.INVALID, None, None, "no later bar available"))
             continue
         decisions.append(next_open_execution(order, eligible))
-    return BacktestExecutionTrace(run.run_id, run.dataset_snapshot_id, tuple(decisions))
+    return BacktestExecutionTrace(
+        run.run_id,
+        run.dataset_snapshot_id,
+        tuple(decisions),
+        run.fee_policy_version,
+        run.slippage_policy_version,
+        run.cost_policy_fingerprint or "",
+    )
 
 
 __all__ = ["DETERMINISTIC_BACKTEST_RUNNER_CONTRACT_VERSION", "BacktestExecutionTrace", "DeterministicBacktestRunnerError", "run_deterministic_backtest"]

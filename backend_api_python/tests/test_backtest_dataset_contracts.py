@@ -63,5 +63,23 @@ class BacktestDatasetTests(unittest.TestCase):
         with self.assertRaises(M.BacktestDatasetError): M.BacktestDatasetSnapshot("dataset-1", "gate", "spot", "BTC_USDT", "rules-1", (future_bar,), assessment(1), UTC + timedelta(hours=1))
         with self.assertRaises(B.BacktestContractError): B.BacktestBar("BTC_USDT", UTC, UTC + timedelta(minutes=1), 100.0, Decimal("101"), Decimal("99"), Decimal("100"), Decimal("1"), 0, "dataset-1")
 
+    def test_timeframe_is_canonical_and_part_of_dataset_identity(self):
+        bars = (bar(0, UTC + timedelta(minutes=1)),)
+        one_minute = M.BacktestDatasetSnapshot(
+            "dataset-1", "gate", "spot", "BTC_USDT", "rules-1", bars,
+            assessment(1), UTC + timedelta(hours=1), "1m",
+        )
+        five_minute = M.BacktestDatasetSnapshot(
+            "dataset-1", "gate", "spot", "BTC_USDT", "rules-1", bars,
+            assessment(1), UTC + timedelta(hours=1), "5m",
+        )
+        self.assertEqual(one_minute.timeframe, "1m")
+        self.assertNotEqual(one_minute.dataset_fingerprint, five_minute.dataset_fingerprint)
+        with self.assertRaises(M.BacktestDatasetError):
+            M.BacktestDatasetSnapshot(
+                "dataset-1", "gate", "spot", "BTC_USDT", "rules-1", bars,
+                assessment(1), UTC + timedelta(hours=1), "2m",
+            )
+
 
 if __name__ == "__main__": unittest.main()

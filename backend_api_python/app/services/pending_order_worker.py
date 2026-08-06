@@ -188,18 +188,8 @@ class PendingOrderWorker(PendingOrderPositionSyncMixin):
     def start(self) -> bool:
         logger.warning("PendingOrderWorker legacy queue is permanently disabled")
         return False
-        with self._lock:
-            try:
-                ensure_position_ledger_schema()
-            except Exception as e:
-                logger.warning("ensure_position_ledger_schema failed: %s", e)
-            if self._thread and self._thread.is_alive():
-                return True
-            self._stop_event.clear()
-            self._thread = threading.Thread(target=self._run_loop, name="PendingOrderWorker", daemon=True)
-            self._thread.start()
-            logger.info("PendingOrderWorker started")
-            return True
+        pass  # SC-15: legacy body retired
+
 
     def stop(self, timeout_sec: float = 5.0) -> None:
         with self._lock:
@@ -218,31 +208,8 @@ class PendingOrderWorker(PendingOrderPositionSyncMixin):
 
     def _tick(self) -> None:
         return
-        # logger.info(f"[PendingOrderWorker] _tick start. last_sync={self._last_position_sync_ts}")
-        self._sync_quick_trade_orders()
-        self._sync_alpaca_sent_orders()
-        self._sync_live_sent_orders()
-        orders = self._fetch_pending_orders(limit=self.batch_size)
-        # logger.info(f"[PendingOrderWorker] orders fetched: {len(orders)}")
-        if not orders:
-            self._maybe_sync_positions()
-            return
+        pass  # SC-15: legacy body retired
 
-        for o in orders:
-            oid = o.get("id")
-            if not oid:
-                continue
-
-            # Mark processing (best-effort)
-            if not self._mark_processing(order_id=int(oid)):
-                continue
-
-            try:
-                self._dispatch_one(o)
-            except Exception as e:
-                self._mark_failed(order_id=int(oid), error=str(e))
-
-        self._maybe_sync_positions()
 
     def _sync_quick_trade_orders(self, limit: int = 50) -> None:
         """Reconcile non-terminal Quick Trade orders and protect new fills."""
@@ -279,143 +246,10 @@ class PendingOrderWorker(PendingOrderPositionSyncMixin):
                 )
 
     def _sync_one_quick_trade_order(self, row: Dict[str, Any]) -> None:
-        from app.services.quick_trade.credentials import build_exchange_config, create_exchange_client
-        from app.services.quick_trade.orders import (
-            attach_quick_trade_protection,
-            enrich_fill,
-            quick_order_status,
-        )
+        raise RuntimeError("SC-15: legacy worker execution permanently retired")
 
-        trade_id = int(row.get("id") or 0)
-        user_id = int(row.get("user_id") or 0)
-        credential_id = int(row.get("credential_id") or 0)
-        if trade_id <= 0 or user_id <= 0 or credential_id <= 0:
-            return
-        market_type = str(row.get("market_type") or "swap").strip().lower()
-        stored_raw = row.get("raw_result") or {}
-        if isinstance(stored_raw, str):
-            try:
-                stored_raw = json.loads(stored_raw) or {}
-            except Exception:
-                stored_raw = {}
-        if not isinstance(stored_raw, dict):
-            stored_raw = {"raw": stored_raw}
-        metadata = stored_raw.get("_quick_trade")
-        if not isinstance(metadata, dict):
-            metadata = {}
-        margin_mode = str(metadata.get("margin_mode") or "cross").strip().lower()
-        exchange_config = build_exchange_config(
-            credential_id,
-            user_id,
-            {"market_type": market_type, "margin_mode": margin_mode, "td_mode": margin_mode},
-        )
-        client = create_exchange_client(exchange_config, market_type=market_type)
-        enrich = enrich_fill(
-            client,
-            order_id=str(row.get("exchange_order_id") or ""),
-            symbol=str(row.get("symbol") or ""),
-            market_type=market_type,
-            max_wait_sec=0.25,
-        )
-        observed_filled = max(0.0, float(enrich.get("filled") or 0.0))
-        cumulative_avg = max(0.0, float(enrich.get("avg_price") or 0.0))
-        previous_filled = max(0.0, float(row.get("filled_amount") or 0.0))
-        cumulative_filled = max(previous_filled, observed_filled)
-        if observed_filled + ALPACA_FILL_DELTA_EPSILON < previous_filled:
-            cumulative_avg = float(row.get("avg_fill_price") or 0.0)
-        protected_filled = max(0.0, float(metadata.get("protected_filled_qty") or 0.0))
-        delta_to_protect = cumulative_filled - protected_filled
-        protection_error = ""
-        metadata_changed = False
-        if delta_to_protect > ALPACA_FILL_DELTA_EPSILON and cumulative_avg > 0:
-            try:
-                protection_result = attach_quick_trade_protection(
-                    client,
-                    symbol=str(row.get("symbol") or ""),
-                    side=str(row.get("side") or ""),
-                    filled_qty=delta_to_protect,
-                    avg_price=cumulative_avg,
-                    tp_price=float(row.get("tp_price") or 0.0),
-                    sl_price=float(row.get("sl_price") or 0.0),
-                    market_type=market_type,
-                    exchange_config=exchange_config,
-                    leverage=float(row.get("leverage") or 1.0),
-                    margin_mode=margin_mode,
-                    client_order_id=f"qdsync{trade_id}",
-                )
-                if protection_result:
-                    prior = metadata.get("native_protection")
-                    metadata["native_protection"] = (
-                        list(prior) if isinstance(prior, list) else []
-                    ) + protection_result
-                    metadata["protected_filled_qty"] = cumulative_filled
-                    metadata["native_protection_error"] = ""
-                    metadata_changed = True
-            except Exception as exc:
-                protection_error = str(exc)
-                metadata["native_protection_error"] = protection_error
+        pass  # SC-15: legacy body retired — unreachable after terminal guard
 
-        requested_qty = max(0.0, float(metadata.get("requested_base_qty") or 0.0))
-        status = quick_order_status(
-            requested_qty=requested_qty,
-            filled_qty=cumulative_filled,
-            exchange_status=str(enrich.get("status") or ""),
-        )
-        metadata["exchange_status"] = str(enrich.get("status") or "")
-        metadata["last_reconciled_at"] = int(time.time())
-        stored_raw["_quick_trade"] = metadata
-        avg_to_store = cumulative_avg or float(row.get("avg_fill_price") or 0.0)
-        fee_to_store = max(float(row.get("commission") or 0.0), float(enrich.get("fee") or 0.0))
-        fee_ccy = str(enrich.get("fee_ccy") or row.get("commission_ccy") or "").strip().upper()
-        from app.services.live_trading.fee_quote import fee_to_quote
-        fee_quote = fee_to_quote(
-            client,
-            symbol=str(row.get("symbol") or ""),
-            fee=fee_to_store,
-            fee_ccy=fee_ccy,
-            fill_price=avg_to_store,
-        )
-        if fee_quote is None and row.get("commission_quote") is not None:
-            fee_quote = float(row.get("commission_quote") or 0.0)
-        error_msg = protection_error or str(row.get("error_msg") or "")
-
-        if (
-            cumulative_filled <= previous_filled + ALPACA_FILL_DELTA_EPSILON
-            and status == str(row.get("status") or "")
-            and not protection_error
-            and not metadata_changed
-        ):
-            return
-        with get_db_connection() as db:
-            cur = db.cursor()
-            cur.execute(
-                """
-                UPDATE qd_quick_trades
-                SET status = %s,
-                    filled_amount = %s,
-                    avg_fill_price = %s,
-                    commission = %s,
-                    commission_ccy = %s,
-                    commission_quote = %s,
-                    error_msg = %s,
-                    raw_result = %s
-                WHERE id = %s
-                  AND status IN ('submitted', 'partially_filled')
-                """,
-                (
-                    status,
-                    cumulative_filled,
-                    avg_to_store,
-                    fee_to_store,
-                    fee_ccy,
-                    fee_quote,
-                    error_msg,
-                    json.dumps(stored_raw, ensure_ascii=False),
-                    trade_id,
-                ),
-            )
-            db.commit()
-            cur.close()
 
     def _maybe_sync_positions(self) -> None:
         if not self._position_sync_enabled:
@@ -1064,61 +898,10 @@ class PendingOrderWorker(PendingOrderPositionSyncMixin):
         market_type: str,
         client_order_id: str,
     ) -> List[Dict[str, Any]]:
-        sig = str(signal_type or "").strip().lower()
-        if sig not in {"open_long", "add_long", "open_short", "add_short"}:
-            return []
-        if str(market_type or "").strip().lower() != "swap":
-            return []
+        raise RuntimeError("SC-15: legacy worker execution permanently retired")
 
-        from app.services.live_trading.native_protection import (
-            NativeProtectionRequest,
-            place_native_protection_orders,
-            protection_prices_from_payload,
-        )
+        pass  # SC-15: legacy body retired — unreachable after terminal guard
 
-        pos_side = "short" if "short" in sig else "long"
-        stop, take, trailing, activation = protection_prices_from_payload(
-            payload,
-            entry_price=float(entry_price or 0.0),
-            pos_side=pos_side,
-        )
-        if stop <= 0 and take <= 0 and trailing <= 0:
-            return []
-        margin_mode = str(
-            payload.get("margin_mode")
-            or payload.get("marginMode")
-            or exchange_config.get("margin_mode")
-            or exchange_config.get("marginMode")
-            or "cross"
-        ).strip().lower()
-        request = NativeProtectionRequest(
-            symbol=str(symbol),
-            pos_side=pos_side,
-            quantity=float(quantity or 0.0),
-            entry_price=float(entry_price or 0.0),
-            stop_loss_price=stop,
-            take_profit_price=take,
-            trailing_stop_pct=trailing,
-            trailing_activation_pct=activation,
-            margin_mode="isolated" if margin_mode in ("isolated", "iso") else "cross",
-            leverage=float(payload.get("leverage") or exchange_config.get("leverage") or 1.0),
-            product_type=str(
-                payload.get("product_type")
-                or payload.get("productType")
-                or exchange_config.get("product_type")
-                or exchange_config.get("productType")
-                or "USDT-FUTURES"
-            ),
-            margin_coin=str(
-                payload.get("margin_coin")
-                or payload.get("marginCoin")
-                or exchange_config.get("margin_coin")
-                or exchange_config.get("marginCoin")
-                or "USDT"
-            ),
-            client_order_id=str(client_order_id or ""),
-        )
-        return place_native_protection_orders(client, request)
 
     def _update_live_sent_order_snapshot(
         self,
@@ -2345,155 +2128,10 @@ class PendingOrderWorker(PendingOrderPositionSyncMixin):
 
         Supports market/limit entries and native attached protection orders.
         """
-        signal_type = payload.get("signal_type") or order_row.get("signal_type")
-        symbol = payload.get("symbol") or order_row.get("symbol")
-        amount = float(payload.get("amount") or order_row.get("amount") or 0.0)
-        ref_price = float(payload.get("ref_price") or payload.get("price") or order_row.get("price") or 0.0)
+        raise RuntimeError("SC-15: legacy worker execution permanently retired")
 
-        sig = str(signal_type or "").strip().lower()
+        pass  # SC-15: legacy body retired — unreachable after terminal guard
 
-        if sig in ("open_long", "add_long", "close_short", "reduce_short", "close_short_stop", "close_short_profit", "close_short_trailing"):
-            action = "buy"
-        elif sig in ("close_long", "reduce_long", "close_long_stop", "close_long_profit", "close_long_trailing", "open_short", "add_short"):
-            action = "sell"
-        else:
-            self._mark_failed(order_id=order_id, error=f"ibkr_unsupported_signal:{signal_type}")
-            _console_print(f"[worker] IBKR order rejected: strategy_id={strategy_id} pending_id={order_id} unsupported signal {signal_type}")
-            _notify_live_best_effort(status="failed", error=f"ibkr_unsupported_signal:{signal_type}")
-            return
-
-        # Get market type (USStock)
-        market_type = str(
-            payload.get("market_type") or
-            payload.get("market_category") or
-            exchange_config.get("market_type") or
-            exchange_config.get("market_category") or
-            "USStock"
-        ).strip()
-
-        try:
-            order_type, limit_price = _broker_order_type(payload, ref_price)
-            protection_ref = limit_price if order_type == "limit" else ref_price
-            stop_price, take_price = _broker_protection_prices(
-                payload,
-                signal_type=str(signal_type or ""),
-                entry_price=protection_ref,
-            )
-            if stop_price > 0 or take_price > 0:
-                result = client.place_bracket_order(
-                    symbol=symbol,
-                    side=action,
-                    quantity=amount,
-                    take_profit_price=take_price,
-                    stop_loss_price=stop_price,
-                    limit_price=limit_price if order_type == "limit" else 0.0,
-                    market_type=market_type,
-                )
-            elif order_type == "limit":
-                result = client.place_limit_order(
-                    symbol=symbol,
-                    side=action,
-                    quantity=amount,
-                    price=limit_price,
-                    market_type=market_type,
-                )
-            else:
-                result = client.place_market_order(
-                    symbol=symbol,
-                    side=action,
-                    quantity=amount,
-                    market_type=market_type,
-                )
-
-            if not result.success:
-                self._mark_failed(order_id=order_id, error=f"ibkr_order_failed:{result.message}")
-                _console_print(f"[worker] IBKR order failed: strategy_id={strategy_id} pending_id={order_id} err={result.message}")
-                _notify_live_best_effort(status="failed", error=f"ibkr_order_failed:{result.message}")
-                append_strategy_log(strategy_id, "error", f"IBKR order failed ({symbol} {signal_type}): {result.message}")
-                return
-
-            filled = float(result.filled or 0.0)
-            avg_price = float(result.avg_price or 0.0)
-            exchange_order_id = str(result.order_id or "")
-            commission, commission_ccy = _commission_snapshot(result.raw)
-            from app.services.live_trading.fee_quote import fee_to_quote
-            commission_quote = fee_to_quote(
-                client,
-                symbol=str(symbol),
-                fee=commission,
-                fee_ccy=commission_ccy,
-                fill_price=avg_price,
-            )
-
-            executed_at = int(time.time())
-
-            # Mark order as sent
-            self._mark_sent(
-                order_id=order_id,
-                note="ibkr_order_sent",
-                exchange_id="ibkr",
-                exchange_order_id=exchange_order_id,
-                exchange_response_json=json.dumps(result.raw or {}, ensure_ascii=False),
-                filled=filled,
-                avg_price=avg_price,
-                executed_at=executed_at if filled > 0 else None,
-                final_filled=is_final_fill(amount, filled, avg_price, result.status),
-            )
-            _console_print(f"[worker] IBKR order sent: strategy_id={strategy_id} pending_id={order_id} order_id={exchange_order_id} filled={filled} avg={avg_price}")
-
-            # Record trade and update position
-            try:
-                if filled > 0 and avg_price > 0:
-                    logger.info(
-                        f"IBKR record begin: pending_id={order_id} strategy_id={strategy_id} symbol={symbol} "
-                        f"signal={signal_type} filled={filled} avg_price={avg_price}"
-                    )
-                    profit, matched_entry = persist_strategy_fill(
-                        strategy_id=int(strategy_id),
-                        symbol=str(symbol),
-                        signal_type=str(signal_type),
-                        filled=float(filled),
-                        avg_price=float(avg_price),
-                        exchange_config=exchange_config,
-                        market_type=str(market_type or "USStock"),
-                        order_id=int(order_id),
-                        fill_source="worker_ibkr",
-                        commission=commission,
-                        commission_ccy=commission_ccy,
-                        commission_quote=commission_quote,
-                        close_reason=trade_close_reason_from_payload(payload, str(signal_type)),
-                        strategy_run_id=int(payload.get("strategy_run_id") or order_row.get("strategy_run_id") or 0),
-                        order_intent_id=int(payload.get("order_intent_id") or order_row.get("order_intent_id") or 0),
-                        exchange_id="ibkr",
-                        exchange_order_id=str(exchange_order_id or ""),
-                        raw_fill=result.raw or {},
-                    )
-                    logger.info(f"IBKR record done: pending_id={order_id} strategy_id={strategy_id} symbol={symbol}")
-                    _pstr = f", profit={profit:.4f}" if profit is not None else ""
-                    append_strategy_log(
-                        strategy_id, "trade",
-                        f"Trade executed: {signal_type} {symbol} filled={filled:.6f} @ {avg_price:.6f}{_pstr} (exchange=ibkr)",
-                    )
-            except Exception as e:
-                logger.warning(f"IBKR record_trade/update_position failed: pending_id={order_id}, err={e}")
-
-            # Notify success
-            _notify_live_best_effort(
-                status="sent",
-                exchange_id="ibkr",
-                exchange_order_id=exchange_order_id,
-                price_hint=avg_price,
-                amount_hint=filled,
-            )
-
-        except Exception as e:
-            logger.error(f"IBKR order execution failed: pending_id={order_id}, strategy_id={strategy_id}, err={e}")
-            self._mark_failed(order_id=order_id, error=f"ibkr_exception:{e}")
-            _console_print(f"[worker] IBKR order exception: strategy_id={strategy_id} pending_id={order_id} err={e}")
-            _notify_live_best_effort(status="failed", error=str(e))
-            append_strategy_log(strategy_id, "error", f"IBKR order exception ({symbol} {signal_type}): {e}")
-            if is_fatal_exchange_error(str(e)):
-                auto_stop_live_strategy(int(strategy_id), str(e), source="ibkr_order")
 
     def _execute_alpaca_order(
         self,
@@ -2513,165 +2151,10 @@ class PendingOrderWorker(PendingOrderPositionSyncMixin):
 
         Supports market/limit orders and Alpaca equity bracket protection.
         """
-        signal_type = payload.get("signal_type") or order_row.get("signal_type")
-        symbol = payload.get("symbol") or order_row.get("symbol")
-        amount = float(payload.get("amount") or order_row.get("amount") or 0.0)
-        ref_price = float(payload.get("ref_price") or payload.get("price") or order_row.get("price") or 0.0)
+        raise RuntimeError("SC-15: legacy worker execution permanently retired")
 
-        sig = str(signal_type or "").strip().lower()
+        pass  # SC-15: legacy body retired — unreachable after terminal guard
 
-        if sig in ("open_long", "add_long", "close_short", "reduce_short", "close_short_stop", "close_short_profit", "close_short_trailing"):
-            action = "buy"
-        elif sig in ("close_long", "reduce_long", "close_long_stop", "close_long_profit", "close_long_trailing", "open_short", "add_short"):
-            action = "sell"
-        else:
-            self._mark_failed(order_id=order_id, error=f"alpaca_unsupported_signal:{signal_type}")
-            _console_print(f"[worker] Alpaca order rejected: strategy_id={strategy_id} pending_id={order_id} unsupported signal {signal_type}")
-            _notify_live_best_effort(status="failed", error=f"alpaca_unsupported_signal:{signal_type}")
-            return
-
-        # Decide stock vs crypto leg of the Alpaca account based on the
-        # strategy's market_category (USStock by default).
-        mc = (market_category or "USStock").strip()
-        market_type_for_client = "crypto" if mc.lower() in ("crypto", "cryptocurrency") else "USStock"
-        if market_type_for_client == "crypto" and "short" in sig:
-            self._mark_failed(order_id=order_id, error="alpaca_crypto_short_not_supported")
-            _notify_live_best_effort(status="failed", error="alpaca_crypto_short_not_supported")
-            return
-
-        try:
-            order_type, limit_price = _broker_order_type(payload, ref_price)
-            protection_ref = limit_price if order_type == "limit" else ref_price
-            stop_price, take_price = _broker_protection_prices(
-                payload,
-                signal_type=str(signal_type or ""),
-                entry_price=protection_ref,
-            )
-            protection_kwargs = {}
-            if market_type_for_client == "USStock" and (stop_price > 0 or take_price > 0):
-                protection_kwargs = {
-                    "stop_loss_price": stop_price,
-                    "take_profit_price": take_price,
-                }
-            if order_type == "limit":
-                result = client.place_limit_order(
-                    symbol=symbol,
-                    side=action,
-                    quantity=amount,
-                    price=limit_price,
-                    market_type=market_type_for_client,
-                    **protection_kwargs,
-                )
-            else:
-                result = client.place_market_order(
-                    symbol=symbol,
-                    side=action,
-                    quantity=amount,
-                    market_type=market_type_for_client,
-                    **protection_kwargs,
-                )
-
-            if not result.success:
-                self._mark_failed(order_id=order_id, error=f"alpaca_order_failed:{result.message}")
-                _console_print(f"[worker] Alpaca order failed: strategy_id={strategy_id} pending_id={order_id} err={result.message}")
-                _notify_live_best_effort(status="failed", error=f"alpaca_order_failed:{result.message}")
-                append_strategy_log(strategy_id, "error", f"Alpaca order failed ({symbol} {signal_type}): {result.message}")
-                return
-
-            filled = float(result.filled or 0.0)
-            avg_price = float(result.avg_price or 0.0)
-            exchange_order_id = str(result.order_id or "")
-            commission, commission_ccy = _commission_snapshot(result.raw)
-            from app.services.live_trading.fee_quote import fee_to_quote
-            commission_quote = fee_to_quote(
-                client,
-                symbol=str(symbol),
-                fee=commission,
-                fee_ccy=commission_ccy,
-                fill_price=avg_price,
-            )
-
-            if avg_price <= 0 and ref_price > 0:
-                if filled > 0:
-                    logger.warning(
-                        f"[worker] Alpaca order avg_price=0, using ref_price={ref_price} as fallback: "
-                        f"strategy_id={strategy_id} pending_id={order_id}"
-                    )
-                    avg_price = ref_price
-                else:
-                    logger.info(
-                        f"[worker] Alpaca order submitted but not filled yet: "
-                        f"strategy_id={strategy_id} pending_id={order_id} status={result.status}"
-                    )
-
-            executed_at = int(time.time())
-
-            self._mark_sent(
-                order_id=order_id,
-                note="alpaca_order_sent",
-                exchange_id="alpaca",
-                exchange_order_id=exchange_order_id,
-                exchange_response_json=json.dumps(result.raw or {}, ensure_ascii=False),
-                filled=filled,
-                avg_price=avg_price,
-                executed_at=executed_at if filled > 0 else None,
-                final_filled=is_final_fill(amount, filled, avg_price, result.status),
-            )
-            _console_print(
-                f"[worker] Alpaca order sent: strategy_id={strategy_id} pending_id={order_id} "
-                f"order_id={exchange_order_id} filled={filled} avg={avg_price}"
-            )
-
-            try:
-                if filled > 0 and avg_price > 0:
-                    profit, matched_entry = persist_strategy_fill(
-                        strategy_id=int(strategy_id),
-                        symbol=str(symbol),
-                        signal_type=str(signal_type),
-                        filled=float(filled),
-                        avg_price=float(avg_price),
-                        exchange_config=exchange_config,
-                        market_type=str(market_type_for_client or "USStock"),
-                        order_id=int(order_id),
-                        fill_source="worker_alpaca",
-                        commission=commission,
-                        commission_ccy=commission_ccy,
-                        commission_quote=commission_quote,
-                        close_reason=trade_close_reason_from_payload(payload, str(signal_type)),
-                        strategy_run_id=int(payload.get("strategy_run_id") or order_row.get("strategy_run_id") or 0),
-                        order_intent_id=int(payload.get("order_intent_id") or order_row.get("order_intent_id") or 0),
-                        exchange_id="alpaca",
-                        exchange_order_id=str(exchange_order_id or ""),
-                        raw_fill=result.raw or {},
-                    )
-                    logger.info(f"Alpaca record done: pending_id={order_id} strategy_id={strategy_id} symbol={symbol}")
-                    _pstr = f", profit={profit:.4f}" if profit is not None else ""
-                    append_strategy_log(
-                        strategy_id, "trade",
-                        f"Trade executed: {signal_type} {symbol} filled={filled:.6f} @ {avg_price:.6f}{_pstr} (exchange=alpaca)",
-                    )
-                else:
-                    append_strategy_log(
-                        strategy_id, "info",
-                        f"Alpaca order submitted: {signal_type} {symbol} status={result.status or 'submitted'}, awaiting fill",
-                    )
-            except Exception as e:
-                logger.warning(f"Alpaca record_trade/update_position failed: pending_id={order_id}, err={e}")
-
-            _notify_live_best_effort(
-                status="sent",
-                exchange_id="alpaca",
-                exchange_order_id=exchange_order_id,
-                price_hint=avg_price,
-                amount_hint=filled,
-            )
-
-        except Exception as e:
-            logger.error(f"Alpaca order execution failed: pending_id={order_id}, strategy_id={strategy_id}, err={e}")
-            self._mark_failed(order_id=order_id, error=f"alpaca_exception:{e}")
-            _console_print(f"[worker] Alpaca order exception: strategy_id={strategy_id} pending_id={order_id} err={e}")
-            _notify_live_best_effort(status="failed", error=str(e))
-            append_strategy_log(strategy_id, "error", f"Alpaca order exception ({symbol} {signal_type}): {e}")
 
     def _mark_sent(
         self,

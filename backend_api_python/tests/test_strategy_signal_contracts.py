@@ -56,9 +56,32 @@ class StrategySignalTests(unittest.TestCase):
         signal = M.build_strategy_signal(strategy(S.StrategyFamily.ICT), facts, signal_id="sig-1", data_snapshot_id="dataset-1")
         self.assertEqual(signal.direction, S.SignalDirection.BUY); self.assertEqual(signal.entry_price, Decimal("105")); self.assertEqual(signal.source_sequence, 3)
 
-    def test_non_smc_ict_and_float_inputs_fail_closed(self):
-        with self.assertRaises(M.StrategySignalContractError): M.build_strategy_signal(strategy(S.StrategyFamily.BUY_AND_HOLD), bars(((1, 2, 1, 1),) * 4), signal_id="sig", data_snapshot_id="d")
+    def test_buy_and_hold_emits_one_typed_entry(self):
+        signal = M.build_strategy_signal(strategy(S.StrategyFamily.BUY_AND_HOLD), bars(((1, 2, 1, 1),) * 4), signal_id="sig", data_snapshot_id="d")
+        self.assertEqual(signal.direction, S.SignalDirection.BUY)
+        self.assertEqual(signal.entry_price, Decimal("1"))
+
+    def test_non_numeric_strategy_parameter_fails_closed(self):
+        bad = S.StrategyDefinition("s-1", "v1", S.StrategyFamily.EMA_ADX_TREND, "schema-1", "dataset-1", (S.StrategyParameterFact("fast_period", "not-a-number"),))
+        with self.assertRaises(M.StrategySignalContractError):
+            M.build_strategy_signal(bad, bars(((1, 2, 1, 1),) * 4), signal_id="sig", data_snapshot_id="d")
         with self.assertRaises(B.BacktestContractError): B.BacktestBar("BTC_USDT", UTC, UTC + timedelta(minutes=1), 1.0, Decimal("2"), Decimal("1"), Decimal("1"), Decimal("1"), 0, "d")
+
+    def test_all_builtin_families_emit_deterministic_typed_signals(self):
+        values = bars(tuple((100 + i, 102 + i, 99 + i, 101 + i) for i in range(30)))
+        for family in (S.StrategyFamily.EMA_ADX_TREND, S.StrategyFamily.DONCHIAN_ATR, S.StrategyFamily.BOLLINGER_RSI, S.StrategyFamily.DUAL_THRUST):
+            first = M.build_strategy_signal(strategy(family), values, signal_id="sig", data_snapshot_id="d")
+            second = M.build_strategy_signal(strategy(family), values, signal_id="sig", data_snapshot_id="d")
+            self.assertEqual(first, second)
+            self.assertEqual(first.strategy.family, family)
+
+    def test_dual_thrust_breakout_is_typed_and_uses_threshold_entry(self):
+        values = bars(((100, 103, 98, 101), (101, 105, 99, 104), (104, 106, 100, 102), (102, 105, 101, 103), (104, 110, 103, 108)))
+        definition = S.StrategyDefinition("dual", "v1", S.StrategyFamily.DUAL_THRUST, "schema", "dataset-1", (S.StrategyParameterFact("lookback", "4"), S.StrategyParameterFact("upper_factor", "0.5"), S.StrategyParameterFact("lower_factor", "0.5")))
+        signal = M.build_strategy_signal(definition, values, signal_id="sig", data_snapshot_id="d")
+        self.assertEqual(signal.direction, S.SignalDirection.BUY)
+        self.assertEqual(signal.entry_price, Decimal("107"))
+        self.assertEqual(signal.strategy.family, S.StrategyFamily.DUAL_THRUST)
 
 
 if __name__ == "__main__": unittest.main()

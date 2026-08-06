@@ -78,6 +78,37 @@ def choose_opening_equity(
     return float(reconstructed or 0.0), True, "ledger_reconstruction"
 
 
+def stabilize_idle_strategy_opening(
+    *,
+    opening: float,
+    current_equity: float,
+    initial_capital: float,
+    realized_net: float,
+    unrealized: float,
+    open_positions: int,
+) -> tuple[float, bool, str]:
+    """Avoid stale snapshots creating a fictitious daily P&L for an idle strategy.
+
+    A strategy with no positions and no strategy-local realized/unrealized P&L
+    has no evidence of a trading move.  If its current equity is still its
+    configured capital but the nearest historical snapshot belongs to an older
+    capital configuration, the current capital is the only safe baseline.  We
+    mark the result estimated so callers never mistake this recovery for a
+    ledger-derived daily mark.
+    """
+    current = float(current_equity or 0.0)
+    configured = float(initial_capital or 0.0)
+    if (
+        int(open_positions or 0) == 0
+        and abs(float(realized_net or 0.0)) <= 1e-8
+        and abs(float(unrealized or 0.0)) <= 1e-8
+        and abs(current - configured) <= 1e-8
+        and abs(float(opening or 0.0) - current) > 1e-8
+    ):
+        return current, True, "idle_strategy_baseline"
+    return float(opening or 0.0), False, ""
+
+
 def load_strategy_daily_metrics(
     strategies: Iterable[Dict[str, Any]],
     *,
@@ -110,6 +141,16 @@ def load_strategy_daily_metrics(
             reconstructed=float(reconstructed.get(strategy_id, item["initial_capital"])),
         )
         current_equity = float(item["equity"])
+        idle_opening, idle_estimated, idle_source = stabilize_idle_strategy_opening(
+            opening=opening,
+            current_equity=current_equity,
+            initial_capital=float(item["initial_capital"]),
+            realized_net=float(item.get("realized_net") or 0.0),
+            unrealized=float(item.get("unrealized") or 0.0),
+            open_positions=int(item.get("open_positions") or 0),
+        )
+        if idle_source:
+            opening, estimated, source = idle_opening, idle_estimated, idle_source
         metrics[strategy_id] = {
             "current_equity": round(current_equity, 8),
             "total_pnl": round(current_equity - float(item["initial_capital"]), 8),
@@ -355,6 +396,7 @@ def _load_reconstructed_opening(strategy_ids: list[int], user_id: int, day_start
 
 __all__ = [
     "choose_opening_equity",
+    "stabilize_idle_strategy_opening",
     "load_strategy_daily_metrics",
     "maybe_capture_strategy_equity_snapshot",
     "resolve_business_day_window",

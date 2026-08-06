@@ -63,6 +63,34 @@ class MarketDataSequenceContractTests(unittest.TestCase):
         self.assertEqual(result.disposition, C.sequence.SequenceDisposition.GAP)
         self.assertEqual(result.state.next_sequence, 0)
 
+    def test_gap_recovery_plan_is_bounded_scoped_and_deterministic(self):
+        state = C.sequence.MarketDataSequenceState("gate", "BTC_USDT", "dataset-1", "rules-v1")
+        first = C.sequence.plan_market_data_gap_recovery(state, event(2))
+        second = C.sequence.plan_market_data_gap_recovery(state, event(2))
+        self.assertEqual((first.missing_start, first.missing_end, first.trigger_sequence), (0, 1, 2))
+        self.assertEqual(first.missing_count, 2)
+        self.assertEqual(first.recovery_fingerprint, second.recovery_fingerprint)
+        self.assertNotEqual(first.recovery_fingerprint, state.state_fingerprint)
+
+    def test_gap_recovery_never_invents_or_accepts_unbounded_or_wrong_scope(self):
+        state = C.sequence.MarketDataSequenceState("gate", "BTC_USDT", "dataset-1", "rules-v1")
+        with self.assertRaises(C.sequence.MarketDataSequenceError):
+            C.sequence.plan_market_data_gap_recovery(state, event(2), max_missing_events=1)
+        with self.assertRaises(C.sequence.MarketDataSequenceError):
+            C.sequence.plan_market_data_gap_recovery(state, event(0))
+        wrong = event(2).__class__("event-2", "other", "BTC_USDT", UTC, UTC, 2, "dataset-1", "rules-v1", "payload-2")
+        with self.assertRaises(C.sequence.MarketDataSequenceError):
+            C.sequence.plan_market_data_gap_recovery(state, wrong)
+
+    def test_complete_backfill_then_trigger_is_the_only_recovery_path(self):
+        state = C.sequence.MarketDataSequenceState("gate", "BTC_USDT", "dataset-1", "rules-v1")
+        recovered = (event(0, "event-0", "payload-0"), event(1, "event-1", "payload-1"))
+        result = C.sequence.apply_market_data_gap_recovery(state, recovered, event(2, "event-2", "payload-2"))
+        self.assertEqual(result.disposition, C.sequence.SequenceDisposition.APPENDED)
+        self.assertEqual(result.state.next_sequence, 3)
+        with self.assertRaises(C.sequence.MarketDataSequenceError):
+            C.sequence.apply_market_data_gap_recovery(state, (recovered[0],), event(2, "event-2", "payload-2"))
+
     def test_out_of_order_and_scope_mismatch_fail_closed(self):
         state = C.sequence.MarketDataSequenceState("gate", "BTC_USDT", "dataset-1", "rules-v1", next_sequence=1, accepted_event_ids=("event-0",))
         self.assertEqual(C.sequence.apply_market_data_event(state, event(0, "event-old")).disposition, C.sequence.SequenceDisposition.CONFLICT)

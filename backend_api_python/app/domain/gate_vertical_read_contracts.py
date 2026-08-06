@@ -50,6 +50,38 @@ class GatePositionSide(str, Enum):
     NET = "net"
 
 
+class GateOrderStatus(str, Enum):
+    OPEN = "open"
+    PARTIALLY_FILLED = "partially_filled"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+
+
+class GateOrderSide(str, Enum):
+    BUY = "buy"
+    SELL = "sell"
+
+
+class GateAccountBookType(str, Enum):
+    """Gate futures account-book change categories.
+
+    These values are facts supplied by Gate.  Keeping them typed prevents a
+    fee, funding, or realized-PnL row from being silently treated as an
+    arbitrary balance adjustment.
+    """
+
+    DEPOSIT_WITHDRAWAL = "dnw"
+    REALIZED_PNL = "pnl"
+    TRADING_FEE = "fee"
+    REFERRAL_REBATE = "refr"
+    FUNDING_FEE = "fund"
+    POINT_DEPOSIT_WITHDRAWAL = "point_dnw"
+    POINT_FEE = "point_fee"
+    POINT_REFERRAL_REBATE = "point_refr"
+    BONUS_OFFSET = "bonus_offset"
+
+
 def _decimal(value: Any, field: str, *, non_negative: bool = False, positive: bool = False) -> Decimal:
     if isinstance(value, float):
         raise GateVerticalContractError(f"{field} rejects float input")
@@ -169,6 +201,12 @@ class GateInstrumentRuleSnapshot:
     minimum_notional: Decimal
     rule_version: str
     observed_at: datetime
+    # Optional venue-specific facts.  When supplied they are immutable and
+    # included in the read snapshot fingerprint; legacy Spot payloads may
+    # legitimately omit them.
+    contract_size: Decimal | None = None
+    leverage_min: Decimal | None = None
+    leverage_max: Decimal | None = None
 
     def __post_init__(self) -> None:
         if _text(self.venue_id, "venue_id", lower=True) != "gate":
@@ -184,6 +222,17 @@ class GateInstrumentRuleSnapshot:
         ):
             normalized = _decimal(value, name, non_negative=True, positive=positive)
             object.__setattr__(self, name, normalized)
+        if self.contract_size is not None:
+            object.__setattr__(self, "contract_size", _decimal(self.contract_size, "contract_size", positive=True))
+        if (self.leverage_min is None) != (self.leverage_max is None):
+            raise GateVerticalContractError("leverage_min and leverage_max must be supplied together")
+        if self.leverage_min is not None:
+            leverage_min = _decimal(self.leverage_min, "leverage_min", positive=True)
+            leverage_max = _decimal(self.leverage_max, "leverage_max", positive=True)
+            if leverage_min > leverage_max:
+                raise GateVerticalContractError("leverage_min cannot exceed leverage_max")
+            object.__setattr__(self, "leverage_min", leverage_min)
+            object.__setattr__(self, "leverage_max", leverage_max)
         _text(self.rule_version, "rule_version")
         object.__setattr__(self, "observed_at", _utc(self.observed_at))
 
@@ -202,6 +251,11 @@ class GatePositionFact:
     margin_mode: GateMarginMode
     observed_at: datetime
     source_event_id: str
+    # Gate exposes these as signed account facts.  Keep them separate from
+    # entry price so the read API does not claim to derive PnL locally.
+    unrealized_pnl: Decimal = Decimal("0")
+    realized_pnl: Decimal = Decimal("0")
+    funding_pnl: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         if _text(self.venue_id, "venue_id", lower=True) != "gate":
@@ -216,8 +270,137 @@ class GatePositionFact:
         object.__setattr__(self, "average_entry_price", _decimal(self.average_entry_price, "average_entry_price", positive=True))
         object.__setattr__(self, "mark_price", _decimal(self.mark_price, "mark_price", positive=True))
         object.__setattr__(self, "leverage", _decimal(self.leverage, "leverage", positive=True))
+        object.__setattr__(self, "unrealized_pnl", _decimal(self.unrealized_pnl, "unrealized_pnl"))
+        object.__setattr__(self, "realized_pnl", _decimal(self.realized_pnl, "realized_pnl"))
+        object.__setattr__(self, "funding_pnl", _decimal(self.funding_pnl, "funding_pnl"))
         object.__setattr__(self, "observed_at", _utc(self.observed_at))
         _text(self.source_event_id, "source_event_id")
+
+
+@dataclass(frozen=True)
+class GateAccountBookFact:
+    """One immutable Gate futures account-book change record."""
+
+    venue_id: str
+    market_type: AssetMarketType
+    account_scope: str
+    event_id: str
+    change_type: GateAccountBookType
+    change: Decimal
+    balance: Decimal
+    occurred_at: datetime
+    observed_at: datetime
+    instrument_id: str | None = None
+    trade_id: str | None = None
+    comment: str | None = None
+
+    def __post_init__(self) -> None:
+        if _text(self.venue_id, "venue_id", lower=True) != "gate":
+            raise GateVerticalContractError("account book venue must be gate")
+        if self.market_type is not AssetMarketType.PERPETUAL:
+            raise GateVerticalContractError("account book requires the perpetual market profile")
+        if not isinstance(self.change_type, GateAccountBookType):
+            raise GateVerticalContractError("account book change_type must be typed")
+        _text(self.account_scope, "account_scope")
+        _text(self.event_id, "event_id")
+        object.__setattr__(self, "change", _decimal(self.change, "change"))
+        object.__setattr__(self, "balance", _decimal(self.balance, "balance"))
+        occurred = _utc(self.occurred_at, "occurred_at")
+        observed = _utc(self.observed_at)
+        if occurred > observed:
+            raise GateVerticalContractError("account book occurred_at cannot exceed observed_at")
+        object.__setattr__(self, "occurred_at", occurred)
+        object.__setattr__(self, "observed_at", observed)
+        for name in ("instrument_id", "trade_id", "comment"):
+            value = getattr(self, name)
+            if value in (None, ""):
+                object.__setattr__(self, name, None)
+            else:
+                _text(value, name)
+
+
+@dataclass(frozen=True)
+class GateOrderFact:
+    """Read-only normalized order evidence; never authorizes a write."""
+
+    venue_id: str
+    market_type: AssetMarketType
+    account_scope: str
+    instrument_id: str
+    exchange_order_id: str
+    client_order_id: str | None
+    side: GateOrderSide
+    status: GateOrderStatus
+    quantity: Decimal
+    filled_quantity: Decimal
+    average_fill_price: Decimal | None
+    observed_at: datetime
+    source_event_id: str
+    raw_status: str = ""
+    finish_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if _text(self.venue_id, "venue_id", lower=True) != "gate" or not isinstance(self.market_type, AssetMarketType):
+            raise GateVerticalContractError("order venue and market_type must be typed")
+        if not isinstance(self.side, GateOrderSide) or not isinstance(self.status, GateOrderStatus):
+            raise GateVerticalContractError("order side and status must be typed")
+        for field in ("account_scope", "instrument_id", "exchange_order_id", "source_event_id"):
+            _text(getattr(self, field), field)
+        if self.client_order_id is not None:
+            _text(self.client_order_id, "client_order_id")
+        quantity = _decimal(self.quantity, "quantity", positive=True)
+        filled = _decimal(self.filled_quantity, "filled_quantity", non_negative=True)
+        if filled > quantity:
+            raise GateVerticalContractError("filled_quantity cannot exceed quantity")
+        object.__setattr__(self, "quantity", quantity)
+        object.__setattr__(self, "filled_quantity", filled)
+        if self.average_fill_price is not None:
+            object.__setattr__(self, "average_fill_price", _decimal(self.average_fill_price, "average_fill_price", positive=True))
+        object.__setattr__(self, "observed_at", _utc(self.observed_at))
+        if self.raw_status:
+            _text(self.raw_status, "raw_status")
+        if self.finish_reason is not None:
+            _text(self.finish_reason, "finish_reason")
+
+
+@dataclass(frozen=True)
+class GateFillFact:
+    """Stable venue fill evidence; missing venue fill IDs fail closed."""
+
+    venue_id: str
+    market_type: AssetMarketType
+    account_scope: str
+    instrument_id: str
+    exchange_order_id: str
+    venue_fill_id: str
+    side: GateOrderSide
+    quantity: Decimal
+    price: Decimal
+    fee_asset: str | None
+    fee_amount: Decimal | None
+    observed_at: datetime
+    source_event_id: str
+
+    def __post_init__(self) -> None:
+        if _text(self.venue_id, "venue_id", lower=True) != "gate" or not isinstance(self.market_type, AssetMarketType):
+            raise GateVerticalContractError("fill venue and market_type must be typed")
+        if not isinstance(self.side, GateOrderSide):
+            raise GateVerticalContractError("fill side must be typed")
+        for field in ("account_scope", "instrument_id", "exchange_order_id", "venue_fill_id", "source_event_id"):
+            _text(getattr(self, field), field)
+        object.__setattr__(self, "quantity", _decimal(self.quantity, "quantity", positive=True))
+        object.__setattr__(self, "price", _decimal(self.price, "price", positive=True))
+        if self.fee_asset is None:
+            if self.fee_amount is not None:
+                raise GateVerticalContractError("fee_amount requires fee_asset")
+        else:
+            asset = _text(self.fee_asset, "fee_asset").upper()
+            # Gate may report a negative fee for a maker rebate. Preserve the
+            # signed venue fact instead of rejecting or silently taking abs().
+            amount = _decimal(self.fee_amount, "fee_amount")
+            object.__setattr__(self, "fee_asset", asset)
+            object.__setattr__(self, "fee_amount", amount)
+        object.__setattr__(self, "observed_at", _utc(self.observed_at))
 
 
 def gate_read_fingerprint(value: Any) -> str:
@@ -275,9 +458,15 @@ def require_gate_capability(
 
 __all__ = [
     "GATE_VERTICAL_CONTRACT_VERSION",
+    "GateAccountBookFact",
+    "GateAccountBookType",
     "GateAuthFacts",
     "GateBalanceFact",
     "GateInstrumentRuleSnapshot",
+    "GateFillFact",
+    "GateOrderFact",
+    "GateOrderSide",
+    "GateOrderStatus",
     "GateMarginMode",
     "GatePermission",
     "GatePositionFact",

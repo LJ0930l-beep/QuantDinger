@@ -28,6 +28,14 @@ class LiveOrderRequest:
     maker_offset_bps: float = 0.0
     protection: dict[str, Any] | None = None
     sizing: dict[str, Any] | None = None
+    # Scope and position facts are optional on the retired LIVE queue request
+    # for backwards compatibility.  The PAPER admission bridge requires
+    # explicit persisted credential/position authority before it can use them.
+    credential_id: int | None = None
+    account_scope: str | None = None
+    exchange_id: str = ""
+    position_side: str = "NET"
+    target_position_id: str | None = None
 
 
 class StrategyV2OrderGateway:

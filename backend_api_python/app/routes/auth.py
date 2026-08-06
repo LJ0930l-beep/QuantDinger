@@ -293,8 +293,17 @@ def login(data):
         })
             
     except Exception as e:
-        logger.error(f"Login error: {e}")
-        return jsonify({'code': 500, 'msg': str(e), 'data': None}), 500
+        # Authentication dependencies (database, security/audit services, or
+        # token storage) may be temporarily unavailable.  Do not expose raw
+        # driver errors, permission details, or credential material to the
+        # browser, and do not misreport an unavailable dependency as a bad
+        # password.
+        logger.error("Login dependency failure: %s", type(e).__name__, exc_info=True)
+        return jsonify({
+            'code': 503,
+            'msg': 'Authentication service temporarily unavailable',
+            'data': None,
+        }), 503
 
 
 @auth_blp.route('/mfa/verify-login', methods=['POST'])

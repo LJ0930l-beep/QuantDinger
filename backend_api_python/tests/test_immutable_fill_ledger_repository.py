@@ -70,7 +70,32 @@ def scope():
     )
 
 
+def durable_scope():
+    now = datetime(2026, 7, 26, tzinfo=timezone.utc)
+    return repository.FillLedgerPersistenceScope(
+        tenant_id=1,
+        credential_id=2,
+        intent_id=None,
+        economic_order_id="00000000-0000-0000-0000-000000000001",
+        source="REST",
+        exchange_event_at=now,
+        received_at=now,
+        normalizer_version="normalizer-v1",
+        instrument_rule_version="rule-v1",
+        durable_entry_command_id="00000000-0000-0000-0000-000000000003",
+    )
+
+
 class ImmutableFillLedgerRepositoryTests(unittest.TestCase):
+    def test_caller_owned_persistence_never_commits_or_rolls_back(self):
+        connection = FakeConnection([("fill-event",)])
+        result = repository.ImmutableFillLedgerRepository().persist_fill_bundle_caller_owned(
+            connection, scope=scope(), fill=fill_input()
+        )
+        self.assertEqual(result.disposition, repository.FillLedgerCommitDisposition.APPLIED)
+        self.assertEqual((connection.commits, connection.rollbacks), (0, 0))
+        self.assertTrue(connection.cursor_value.closed)
+
     def test_persist_writes_fill_evidence_fee_and_balanced_transactions_atomically(self):
         connection = FakeConnection([("fill-event",)])
         result = repository.ImmutableFillLedgerRepository().persist_fill_bundle(
@@ -161,6 +186,40 @@ class ImmutableFillLedgerRepositoryTests(unittest.TestCase):
         with self.assertRaises(repository.FillLedgerReplayConflict):
             repository.ImmutableFillLedgerRepository().persist_fill_bundle(
                 FakeConnection(), scope=other_scope, fill=fill_input()
+            )
+
+    def test_durable_entry_scope_uses_command_parent_without_legacy_intent(self):
+        connection = FakeConnection([("fill-event",)])
+        result = repository.ImmutableFillLedgerRepository().persist_fill_bundle_caller_owned(
+            connection, scope=durable_scope(), fill=fill_input()
+        )
+        self.assertEqual(result.disposition, repository.FillLedgerCommitDisposition.APPLIED)
+        sql = "\n".join(statement for statement, _ in connection.cursor_value.executed)
+        self.assertIn("qd_durable_entry_fill_events", sql)
+        self.assertIn("command_id", sql)
+        self.assertIn("qd_durable_entry_ledger_valuation_evidence", sql)
+        self.assertIn("qd_durable_entry_fill_fee_components", sql)
+        self.assertIn("durable_entry_command_id", sql)
+
+    def test_scope_requires_exactly_one_parent_identity(self):
+        now = datetime(2026, 7, 26, tzinfo=timezone.utc)
+        common = dict(
+            tenant_id=1,
+            credential_id=2,
+            economic_order_id="00000000-0000-0000-0000-000000000001",
+            source="REST",
+            exchange_event_at=now,
+            received_at=now,
+            normalizer_version="v1",
+            instrument_rule_version="v1",
+        )
+        with self.assertRaises(ledger.ImmutableLedgerContractError):
+            repository.FillLedgerPersistenceScope(intent_id=None, **common)
+        with self.assertRaises(ledger.ImmutableLedgerContractError):
+            repository.FillLedgerPersistenceScope(
+                intent_id="00000000-0000-0000-0000-000000000002",
+                durable_entry_command_id="00000000-0000-0000-0000-000000000003",
+                **common,
             )
 
 

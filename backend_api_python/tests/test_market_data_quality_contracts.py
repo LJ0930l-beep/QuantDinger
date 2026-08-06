@@ -42,6 +42,29 @@ class DataQualityTests(unittest.TestCase):
         result = M.assess_point_in_time((event(sequence=2), event(event_id="e2", sequence=1)), as_of=UTC); self.assertEqual(result.status, M.DataQualityStatus.OUT_OF_ORDER)
         self.assertEqual(M.assess_point_in_time((), as_of=UTC).status, M.DataQualityStatus.MISSING)
 
+    def test_expected_sequence_gap_is_not_complete(self):
+        result = M.assess_point_in_time((event(sequence=1),), as_of=UTC, expected_sequences=(1, 2))
+        self.assertEqual(result.status, M.DataQualityStatus.GAP)
+
+    def test_same_event_id_at_different_sequence_is_conflict(self):
+        result = M.assess_point_in_time((event(), event(sequence=2)), as_of=UTC)
+        self.assertEqual(result.status, M.DataQualityStatus.CONFLICT)
+        self.assertEqual(result.accepted_events, (event(),))
+        self.assertEqual(result.rejected_event_ids, ("e1",))
+
+    def test_same_event_id_with_changed_payload_is_conflict(self):
+        result = M.assess_point_in_time((event(), event(payload_fingerprint="p2")), as_of=UTC)
+        self.assertEqual(result.status, M.DataQualityStatus.CONFLICT)
+        self.assertEqual(result.rejected_event_ids, ("e1",))
+
+    def test_disconnect_is_explicit_even_for_contiguous_rows(self):
+        result = M.assess_point_in_time((event(),), as_of=UTC, expected_sequences=(1,), disconnected=True)
+        self.assertEqual(result.status, M.DataQualityStatus.DISCONNECTED)
+
+    def test_expected_sequences_are_strictly_canonical(self):
+        with self.assertRaises(M.MarketDataQualityError):
+            M.assess_point_in_time((event(),), as_of=UTC, expected_sequences=(2, 1))
+
     def test_event_scope_and_time_are_strict(self):
         with self.assertRaises(M.MarketDataQualityError): event(observed_at=datetime(2026, 1, 1))
         with self.assertRaises(M.MarketDataQualityError): event(sequence=-1)

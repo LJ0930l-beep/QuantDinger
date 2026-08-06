@@ -95,3 +95,7 @@ backend_api_python/data/memory/
 # Docker
 # ========================
 docker-compose.override.yml
+
+# Local verification artifacts (never committed)
+.pytest-run-product/
+docs/codex/

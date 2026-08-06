@@ -69,6 +69,7 @@ def _strategy_contract_payload(
         'instruments': [dict(item) for item in instruments if isinstance(item, dict)],
         'benchmark': dict(benchmark) if benchmark else None,
         'leverage_allowed': bool(manifest.get('leverageAllowed') or False),
+        'min_leverage': float(manifest.get('minLeverage') or 1.0),
         'max_leverage': float(manifest.get('maxLeverage') or 1.0),
         'warmup_bars': int(manifest.get('warmupBars') or 0),
         'factor_dependencies': list(manifest.get('factorDependencies') or []),
