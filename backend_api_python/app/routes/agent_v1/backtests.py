@@ -147,7 +147,11 @@ def _run_backtest(payload: dict) -> Any:
     commission = default_commission_if_missing(payload.get("commission"))
     slippage = default_slippage_if_missing(payload.get("slippage"))
     leverage_enabled = bool(payload.get("leverageEnabled"))
-    leverage = float(payload.get("leverage") or 1) if leverage_enabled else 1.0
+    # Preserve the caller's raw value so Strategy V2 remains the single typed
+    # leverage-validation boundary.  Coercing here would leak ValueError for
+    # malformed values before the canonical service can return its typed
+    # rejection, and would make the Agent path differ from Backtest Center.
+    leverage = payload.get("leverage", 1) if leverage_enabled else 1.0
     _, result = _backtest.run(
         user_id=int(payload.get("__user_id") or 1),
         code=code,

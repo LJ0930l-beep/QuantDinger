@@ -53,6 +53,13 @@ def _utc(value: datetime) -> datetime:
 
 
 def _value(row: object, index: int) -> object:
+    if isinstance(row, dict):
+        try:
+            # Real backend cursors return dict rows; the SELECT column order is
+            # the positional contract used by all callers.
+            return row[tuple(row.keys())[index]]
+        except (KeyError, IndexError) as exc:
+            raise ReconciliationRepositoryError("database returned an incomplete reconciliation row") from exc
     try:
         return row[index]  # type: ignore[index]
     except (TypeError, IndexError) as exc:

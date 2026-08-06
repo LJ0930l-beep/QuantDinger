@@ -27,6 +27,37 @@ class PaperShadowReducerError(PaperShadowContractError):
     """The supplied decision set violates replay or scope invariants."""
 
 
+def _canonical_mode(value: object) -> SimulationMode:
+    """Accept a reloaded enum fixture only after validating its exact value."""
+
+    if isinstance(value, SimulationMode):
+        return value
+    if type(value).__name__ == "SimulationMode" and getattr(value, "value", None) in {"PAPER", "SHADOW"}:
+        return SimulationMode(value.value)
+    raise PaperShadowReducerError("decision set requires PAPER or SHADOW")
+
+
+def _canonical_decision(value: object) -> PaperShadowDecision:
+    if isinstance(value, PaperShadowDecision):
+        return value
+    if type(value).__name__ != "PaperShadowDecision":
+        raise PaperShadowReducerError("typed decision set and decision are required")
+    try:
+        return PaperShadowDecision(
+            run_id=value.run_id,
+            request_fingerprint=value.request_fingerprint,
+            economic_fingerprint=value.economic_fingerprint,
+            mode=_canonical_mode(value.mode),
+            disposition=SimulationDisposition(getattr(value.disposition, "value", value.disposition)),
+            quantity=value.quantity,
+            notional=value.notional,
+            reason=value.reason,
+            decided_at=value.decided_at,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise PaperShadowReducerError("typed decision set and decision are required") from exc
+
+
 class SimulationRecordDisposition(str, Enum):
     CREATED = "CREATED"
     REPLAYED = "REPLAYED"
@@ -41,13 +72,16 @@ class PaperShadowDecisionSet:
     replay_fingerprint: str = ""
 
     def __post_init__(self) -> None:
-        if not isinstance(self.mode, SimulationMode) or self.mode is SimulationMode.DISABLED:
+        mode = _canonical_mode(self.mode)
+        if mode is SimulationMode.DISABLED:
             raise PaperShadowReducerError("decision set requires PAPER or SHADOW")
+        object.__setattr__(self, "mode", mode)
         if not isinstance(self.run_id, str) or not self.run_id or self.run_id.strip() != self.run_id:
             raise PaperShadowReducerError("run_id must be canonical text")
-        if not isinstance(self.decisions, tuple) or any(not isinstance(item, PaperShadowDecision) for item in self.decisions):
+        if not isinstance(self.decisions, tuple):
             raise PaperShadowReducerError("decisions must be an explicit typed tuple")
-        if any(item.run_id != self.run_id or item.mode is not self.mode for item in self.decisions):
+        object.__setattr__(self, "decisions", tuple(_canonical_decision(item) for item in self.decisions))
+        if any(item.run_id != self.run_id or getattr(item.mode, "value", item.mode) != self.mode.value for item in self.decisions):
             raise PaperShadowReducerError("decision scope does not match the set")
         keys = [item.request_fingerprint for item in self.decisions]
         if len(keys) != len(set(keys)):
@@ -78,9 +112,10 @@ def record_paper_shadow_decision(
 ) -> PaperShadowRecordResult:
     """Append one decision or return deterministic replay/conflict."""
 
-    if not isinstance(decision_set, PaperShadowDecisionSet) or not isinstance(decision, PaperShadowDecision):
+    if not isinstance(decision_set, PaperShadowDecisionSet):
         raise PaperShadowReducerError("typed decision set and decision are required")
-    if decision.run_id != decision_set.run_id or decision.mode is not decision_set.mode:
+    decision = _canonical_decision(decision)
+    if decision.run_id != decision_set.run_id or decision.mode.value != decision_set.mode.value:
         raise PaperShadowReducerError("decision scope mismatch")
     existing = next((item for item in decision_set.decisions if item.request_fingerprint == decision.request_fingerprint), None)
     if existing is not None:

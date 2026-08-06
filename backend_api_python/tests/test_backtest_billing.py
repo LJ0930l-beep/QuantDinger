@@ -94,6 +94,30 @@ def test_failed_backtest_refunds_the_original_charge_reference():
     }]
 
 
+def test_prepare_run_preserves_raw_leverage_for_typed_strategy_validation(monkeypatch):
+    monkeypatch.setattr(
+        backtest_center,
+        "_source",
+        lambda payload, user_id: ("code", None, None, "strategy"),
+    )
+
+    prepared = backtest_center._prepare_run(
+        {
+            "startDate": "2026-01-01",
+            "endDate": "2026-01-02",
+            "leverageEnabled": False,
+            "leverage": "not-a-number",
+        },
+        7,
+    )
+
+    # Backtest service / Strategy V2 owns typed leverage validation.  The
+    # route must not leak a Python float-conversion error or silently rewrite
+    # the caller fact before the strategy manifest is known.
+    assert prepared["leverage"] == "not-a-number"
+    assert prepared["leverage_enabled"] is False
+
+
 def test_credit_deduction_is_atomic(monkeypatch):
     statements = []
 

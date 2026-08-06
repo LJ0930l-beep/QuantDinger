@@ -88,7 +88,12 @@ class GateReadRequest:
     def params(self) -> Mapping[str, str]:
         values = dict(self.query)
         if self.instrument_id is not None:
-            values.setdefault("currency_pair", self.instrument_id)
+            # Gate uses ``currency_pair`` for Spot and ``contract`` for
+            # perpetual futures.  Keeping the distinction in the typed
+            # request prevents a futures read from being silently rejected
+            # or interpreted as a Spot query.
+            key = "contract" if self.market_type is GateMarketType.PERPETUAL else "currency_pair"
+            values.setdefault(key, self.instrument_id)
         return values
 
 

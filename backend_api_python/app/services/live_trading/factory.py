@@ -24,6 +24,15 @@ from app.services.live_trading.bybit import BybitClient
 from app.services.live_trading.gate import GateSpotClient, GateUsdtFuturesClient
 from app.services.live_trading.htx import HtxClient
 
+# Gate's current unified APIv4 TestNet host accepts both Spot and perpetual
+# private credentials.  The legacy futures gateway remains useful for public
+# market reads, but probing a unified APIv4 key against it can return
+# INVALID_KEY even when the same key is valid on the shared TestNet host.
+# Keep the private-client default on the shared host; public read transports
+# retain their own explicit host/fallback policy.
+GATE_TESTNET_SPOT_BASE_URL = "https://api-testnet.gateapi.io"
+GATE_TESTNET_FUTURES_BASE_URL = "https://api-testnet.gateapi.io"
+
 # Lazy import IBKR to avoid ImportError if ib_insync not installed
 IBKRClient = None
 IBKRConfig = None
@@ -126,6 +135,8 @@ def exchange_market_scope(cfg: Dict[str, Any]) -> str:
     raw = str(cfg.get("market_scope") or cfg.get("marketScope") or "both").strip().lower()
     if raw in ("future", "futures", "perp", "perpetual", "contract", "contracts"):
         return "swap"
+    if raw in ("spot_perpetual", "spot_and_swap", "spot_swap", "spot_and_perpetual", "all"):
+        return "both"
     if raw in ("spot", "swap", "both"):
         return raw
     return raw
@@ -297,10 +308,10 @@ def create_client(exchange_config: Dict[str, Any], *, market_type: str = "swap")
 
     if exchange_id == "gate":
         if mt == "spot":
-            default_gate = "https://api-testnet.gateapi.io" if is_demo else "https://api.gateio.ws"
+            default_gate = GATE_TESTNET_SPOT_BASE_URL if is_demo else "https://api.gateio.ws"
             base_url = default_gate if is_demo else (_get(exchange_config, "base_url", "baseUrl") or default_gate)
             return GateSpotClient(api_key=api_key, secret_key=secret_key, base_url=base_url)
-        default_fut = "https://api-testnet.gateapi.io" if is_demo else "https://fx-api.gateio.ws"
+        default_fut = GATE_TESTNET_FUTURES_BASE_URL if is_demo else "https://fx-api.gateio.ws"
         base_url = default_fut if is_demo else (_get(exchange_config, "base_url", "baseUrl") or default_fut)
         return GateUsdtFuturesClient(api_key=api_key, secret_key=secret_key, base_url=base_url)
 

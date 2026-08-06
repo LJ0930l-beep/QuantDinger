@@ -25,6 +25,7 @@ from app.services.strategy_v2 import (
     StrategyV2LiveSession,
     compile_strategy_v2,
 )
+from app.domain.runtime_entry_admission_contracts import RuntimeEntryAdmissionDisposition
 from app.services.strategy_v2.live_execution import LiveOrderRequest, StrategyV2OrderGateway
 from app.utils.db import get_db_connection
 from app.utils.logger import get_logger
@@ -319,7 +320,7 @@ class TradingExecutor:
             trading_config = _json_object(strategy.get("trading_config"))
             exchange_config = _json_object(strategy.get("exchange_config"))
             execution_mode = str(strategy.get("execution_mode") or "signal").strip().lower()
-            if execution_mode not in {"signal", "live"}:
+            if execution_mode not in {"signal", "paper", "live"}:
                 raise RuntimeError("strategyV2.invalidExecutionMode")
             if execution_mode == "live":
                 from app.services.exchange_execution import resolve_exchange_config
@@ -328,6 +329,38 @@ class TradingExecutor:
 
             service = StrategyV2BacktestService()
             now = datetime.now(timezone.utc)
+
+            # Inject symbol/timeframe from deployment config.
+            # Strategies declare a placeholder universe; the user's
+            # deployment config overrides it at runtime.
+            # StrategyManifest is frozen — use dataclasses.replace() to produce
+            # an updated manifest + bind it back onto the CompiledStrategyV2.
+            db_symbol = str(strategy.get("symbol") or "").strip()
+            db_timeframe = str(strategy.get("timeframe") or "").strip()
+            if db_symbol or db_timeframe:
+                from dataclasses import replace
+
+                from app.services.strategy_v2.contract import _parse_many
+
+                manifest = program.manifest
+                if db_symbol:
+                    parsed = _parse_many([db_symbol])
+                    if parsed:
+                        new_instruments = tuple(parsed)
+                        new_universe = replace(manifest.universe, instruments=new_instruments)
+                        new_subscriptions = tuple(
+                            replace(sub, instruments=new_instruments)
+                            for sub in manifest.subscriptions
+                        )
+                        manifest = replace(manifest, universe=new_universe, subscriptions=new_subscriptions)
+                if db_timeframe:
+                    new_subscriptions = tuple(
+                        replace(sub, frequency=db_timeframe)
+                        for sub in manifest.subscriptions
+                    )
+                    manifest = replace(manifest, subscriptions=new_subscriptions)
+                program.manifest = manifest
+
             candidates, universe_id = service.resolve_candidates(
                 user_id=user_id,
                 manifest=program.manifest,
@@ -632,6 +665,18 @@ class TradingExecutor:
         requests = self._order_plan(current_amount, target_amount)
         submitted = False
         for action, quantity in requests:
+            target_position_id = None
+            if action.startswith(("close_", "reduce_")):
+                matching = next(
+                    (
+                        row for row in positions
+                        if str(row.get("side") or "").strip().lower()
+                        == ("long" if "long" in action else "short")
+                    ),
+                    None,
+                )
+                if matching and matching.get("id") is not None:
+                    target_position_id = str(matching.get("id"))
             submitted = bool(self._execute_signal(
                 strategy_id=strategy_id,
                 strategy_name=strategy_name,
@@ -649,6 +694,8 @@ class TradingExecutor:
                 trading_config=trading_config,
                 exchange_config=exchange_config,
                 signal_reason=str(intent.reason or "strategy"),
+                position_side=intent_position_side or "net",
+                target_position_id=target_position_id,
                 order_type=str(intent.order_type or "market"),
                 execution_algo=str(intent.execution_algo or "market"),
                 limit_price=float(intent.limit_price or 0.0),
@@ -703,6 +750,32 @@ class TradingExecutor:
             maker_wait_sec=float(values.get("maker_wait_sec") or 0.0),
             maker_offset_bps=float(values.get("maker_offset_bps") or 0.0),
             protection=dict(values.get("protection") or {}),
+            credential_id=(
+                int(
+                    (values.get("exchange_config") or {}).get("credential_id")
+                    or (values.get("trading_config") or {}).get("credential_id")
+                    or 0
+                )
+                or None
+            ),
+            account_scope=(
+                str(
+                    (values.get("exchange_config") or {}).get("account_scope")
+                    or (values.get("trading_config") or {}).get("account_scope")
+                    or ""
+                ).strip()
+                or None
+            ),
+            exchange_id=str(
+                (values.get("exchange_config") or {}).get("exchange_id")
+                or (values.get("price_exchange_id") or "")
+            ).strip().lower(),
+            position_side=str(values.get("position_side") or "NET").strip().upper(),
+            target_position_id=(
+                str(values.get("target_position_id")).strip()
+                if values.get("target_position_id") is not None
+                else None
+            ),
             sizing={
                 "initial_capital": initial_capital,
                 "entry_pct": entry_pct,
@@ -710,6 +783,10 @@ class TradingExecutor:
                 "source": "strategy_v2",
             },
         )
+        if request.execution_mode.strip().lower() == "paper":
+            return self._persist_paper_signal(request)
+        if request.execution_mode.strip().lower() == "live":
+            return self._submit_live_order(request, values)
         pending_id = self.order_gateway.submit(request)
         if pending_id:
             append_strategy_log(
@@ -718,6 +795,107 @@ class TradingExecutor:
                 f"Order queued: {request.action} {request.symbol} quantity={request.quantity:.12f}",
             )
         return bool(pending_id)
+
+    def _submit_live_order(self, request: LiveOrderRequest, values: Dict[str, Any]) -> bool:
+        """Submit a LIVE order through the native exchange client.
+
+        SC-15: the legacy StrategyV2OrderGateway queue is permanently retired.
+        This method routes live signals directly to the exchange via
+        ``create_client`` + ``place_order_from_signal``.
+
+        Security: exchange_config is already resolved (credentials decrypted) by
+        ``_run_strategy_loop`` before reaching this point.
+        """
+        from app.services.live_trading.execution import place_order_from_signal
+        from app.services.live_trading.factory import create_client
+
+        strategy_id = request.strategy_id
+        exchange_config = values.get("exchange_config") or {}
+        if not exchange_config:
+            append_strategy_log(strategy_id, "error", "Live order rejected: no exchange config")
+            return False
+
+        try:
+            client = create_client(exchange_config, market_type=request.market_type)
+        except Exception as exc:
+            logger.exception("Strategy %s cannot create live client", strategy_id)
+            append_strategy_log(strategy_id, "error", f"Live client creation failed: {exc}")
+            return False
+
+        try:
+            result = place_order_from_signal(
+                client=client,
+                signal_type=request.action,
+                symbol=request.symbol,
+                amount=request.quantity,
+                market_type=request.market_type,
+                exchange_config=exchange_config,
+            )
+        except Exception as exc:
+            logger.exception("Strategy %s live order failed", strategy_id)
+            append_strategy_log(strategy_id, "error", f"Live order execution failed: {exc}")
+            return False
+
+        if getattr(result, "success", False):
+            order_id = getattr(result, "exchange_order_id", "") or ""
+            append_strategy_log(
+                strategy_id,
+                "trade",
+                f"Live order filled: {request.action} {request.symbol} "
+                f"qty={request.quantity:.6f} order_id={order_id}",
+            )
+            return True
+
+        append_strategy_log(
+            strategy_id,
+            "error",
+            f"Live order rejected: {request.action} {request.symbol} "
+            f"raw={getattr(result, 'raw', {})}",
+        )
+        return False
+
+    def _persist_paper_signal(self, request: LiveOrderRequest) -> bool:
+        """Persist a PAPER signal through Admission on one caller-owned tx."""
+
+        from app.services.strategy_v2.paper_execution import (
+            StrategyV2PaperExecutionError,
+            StrategyV2PaperExecutionService,
+        )
+
+        try:
+            if request.credential_id is None:
+                raise StrategyV2PaperExecutionError("strategyV2.paperCredentialRequired")
+            with get_db_connection() as connection:
+                receipt = StrategyV2PaperExecutionService().persist(
+                    connection,
+                    request,
+                    credential_id=request.credential_id,
+                    expected_account_scope=request.account_scope,
+                    target_position_id=request.target_position_id,
+                )
+                connection.commit()
+            if receipt.disposition is RuntimeEntryAdmissionDisposition.RISK_REJECTED:
+                append_strategy_log(
+                    request.strategy_id,
+                    "warning",
+                    f"PAPER signal rejected by hard risk: {request.action} {request.symbol}",
+                )
+                return False
+            append_strategy_log(
+                request.strategy_id,
+                "trade",
+                f"PAPER order {receipt.disposition.value}: {request.action} {request.symbol} quantity={request.quantity:.12f}",
+            )
+            return receipt.disposition in {
+                RuntimeEntryAdmissionDisposition.CREATED,
+                RuntimeEntryAdmissionDisposition.REPLAYED,
+            }
+        except StrategyV2PaperExecutionError as exc:
+            append_strategy_log(request.strategy_id, "warning", str(exc))
+            return False
+        except Exception:
+            logger.exception("Strategy %s PAPER admission failed", request.strategy_id)
+            return False
 
     def _run_grid_resting_loop(
         self,

@@ -39,6 +39,7 @@ class DeterministicBacktestTests(unittest.TestCase):
         run = M.BacktestRunFacts("run-1", "dataset-1", "rules-1", "fees-1", "slip-1", Decimal("1000"), "USDT", UTC, UTC + timedelta(days=1))
         self.assertEqual(run.initial_cash, Decimal("1000"))
         with self.assertRaises(M.BacktestContractError): M.BacktestRunFacts("run", "d", "r", "f", "s", 1.0, "USDT", UTC, UTC + timedelta(days=1))
+        with self.assertRaises(M.BacktestContractError): M.BacktestRunFacts("run", "d", "r", "f", "s", Decimal("1"), "USDT", UTC, UTC + timedelta(days=1), "not-a-sha")
 
     def test_next_open_market_and_same_bar_guard(self):
         order = M.BacktestOrderIntent("o-1", "BTC_USDT", M.BacktestSide.BUY, M.BacktestExecutionKind.MARKET, Decimal("1"), UTC)
@@ -51,6 +52,42 @@ class DeterministicBacktestTests(unittest.TestCase):
         self.assertEqual(M.next_open_execution(order, bar()).decision, M.BacktestDecision.EXECUTED)
         self.assertEqual(M.next_open_execution(order, bar(low_price=Decimal("100"))).decision, M.BacktestDecision.NOT_EXECUTED)
         with self.assertRaises(M.BacktestContractError): M.BacktestOrderIntent("o", "BTC_USDT", M.BacktestSide.BUY, M.BacktestExecutionKind.LIMIT, Decimal("1"), UTC)
+
+    def test_stop_market_requires_explicit_trigger_and_replays_deterministically(self):
+        order = M.BacktestOrderIntent(
+            "stop-up", "BTC_USDT", M.BacktestSide.BUY, M.BacktestExecutionKind.STOP_MARKET,
+            Decimal("1"), UTC, trigger_price=Decimal("101"),
+            trigger_direction=M.BacktestTriggerDirection.CROSS_UP,
+            trigger_price_type=M.BacktestTriggerPriceType.HIGH_LOW,
+        )
+        decision = M.next_open_execution(order, bar(high_price=Decimal("102"), open_price=Decimal("100")))
+        self.assertEqual(decision.decision, M.BacktestDecision.EXECUTED)
+        self.assertEqual(decision.fill_price, Decimal("101"))
+        self.assertEqual(M.backtest_fingerprint(order), M.backtest_fingerprint(order))
+        with self.assertRaises(M.BacktestContractError):
+            M.BacktestOrderIntent("stop", "BTC_USDT", M.BacktestSide.BUY, M.BacktestExecutionKind.STOP_MARKET, Decimal("1"), UTC)
+        with self.assertRaises(M.BacktestContractError):
+            M.BacktestOrderIntent(
+                "wrong-direction", "BTC_USDT", M.BacktestSide.BUY, M.BacktestExecutionKind.STOP_MARKET,
+                Decimal("1"), UTC, trigger_price=Decimal("101"),
+                trigger_direction=M.BacktestTriggerDirection.CROSS_DOWN,
+                trigger_price_type=M.BacktestTriggerPriceType.HIGH_LOW,
+            )
+
+    def test_stop_limit_requires_trigger_then_limit(self):
+        order = M.BacktestOrderIntent(
+            "stop-limit", "BTC_USDT", M.BacktestSide.BUY, M.BacktestExecutionKind.STOP_LIMIT,
+            Decimal("1"), UTC, Decimal("102"), Decimal("101"),
+            M.BacktestTriggerDirection.CROSS_UP, M.BacktestTriggerPriceType.CLOSE,
+        )
+        self.assertEqual(M.next_open_execution(order, bar(close_price=Decimal("100"), low_price=Decimal("100"))).decision, M.BacktestDecision.NOT_EXECUTED)
+        self.assertEqual(M.next_open_execution(order, bar(close_price=Decimal("102"), low_price=Decimal("100"))).decision, M.BacktestDecision.EXECUTED)
+        with self.assertRaises(M.BacktestContractError):
+            M.BacktestOrderIntent(
+                "bad-stop-limit", "BTC_USDT", M.BacktestSide.BUY, M.BacktestExecutionKind.STOP_LIMIT,
+                Decimal("1"), UTC, Decimal("100"), Decimal("101"),
+                M.BacktestTriggerDirection.CROSS_UP, M.BacktestTriggerPriceType.CLOSE,
+            )
 
     def test_sell_limit_and_bad_bounds_fail_closed(self):
         order = M.BacktestOrderIntent("o-1", "BTC_USDT", M.BacktestSide.SELL, M.BacktestExecutionKind.LIMIT, Decimal("1"), UTC, Decimal("102"))

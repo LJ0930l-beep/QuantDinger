@@ -742,6 +742,818 @@ paths:
       summary: Prometheus metrics
       operationId: getPrometheusMetrics
       x-visibility: internal
+  /api/quant/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return the validated read-only projection/shadow/reconciliation view.
+      tags:
+      - Dashboard
+      operationId: getApiQuantReadonly
+      x-visibility: internal
+  /api/quant/backtest/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return an injected deterministic backtest report without side effects.
+      tags:
+      - Dashboard
+      operationId: getApiQuantBacktestReadonly
+      x-visibility: internal
+  /api/quant/backtest/report/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return one authenticated canonical persisted backtest report.
+      tags:
+      - Dashboard
+      operationId: getApiQuantBacktestReportReadonly
+      x-visibility: internal
+  /api/quant/paper-shadow/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return an injected Paper/Shadow run summary without side effects.
+      tags:
+      - Dashboard
+      operationId: getApiQuantPaperShadowReadonly
+      x-visibility: internal
+  /api/quant/paper/account/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return persisted PAPER order facts without exchange access or writes.
+      tags:
+      - Dashboard
+      operationId: getApiQuantPaperAccountReadonly
+      x-visibility: internal
+  /api/quant/paper/recovery/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Replay persisted Paper facts and compare an optional checkpoint.
+      tags:
+      - Dashboard
+      operationId: getApiQuantPaperRecoveryReadonly
+      x-visibility: internal
+  /api/quant/paper/v2/account/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return durable PAPER v1 facts recovered from the restart-safe tables.
+      tags:
+      - Dashboard
+      operationId: getApiQuantPaperV2AccountReadonly
+      x-visibility: internal
+  /api/quant/readiness:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return Gate/backtest/Paper readiness without side effects.
+      tags:
+      - Dashboard
+      operationId: getApiQuantReadiness
+      x-visibility: internal
+  /api/quant/strategies/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return injected strategy definitions without execution authority.
+      tags:
+      - Dashboard
+      operationId: getApiQuantStrategiesReadonly
+      x-visibility: internal
+  /api/quant/research/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return an injected Gate research run without execution side effects.
+      tags:
+      - Dashboard
+      operationId: getApiQuantResearchReadonly
+      x-visibility: internal
+  /api/quant/release-readiness/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return release evidence without changing deployment state.
+      tags:
+      - Dashboard
+      operationId: getApiQuantReleaseReadinessReadonly
+      x-visibility: internal
+  /api/quant/testnet/rehearsal/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return injected Gate TestNet rehearsal evidence without writes.
+      tags:
+      - Dashboard
+      operationId: getApiQuantTestnetRehearsalReadonly
+      x-visibility: internal
+  /api/quant/testnet/execution/rehearsal/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return deterministic Gate TestNet order/fill lifecycle evidence.
+      description: 'This endpoint is a local fixture rehearsal.  It never reads credentials,
+
+        creates a client, sends a request, or mutates an order.'
+      tags:
+      - Dashboard
+      operationId: getApiQuantTestnetExecutionRehearsalReadonly
+      x-visibility: internal
+  /api/quant/operations/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return composed non-live research and release posture without writes.
+      tags:
+      - Dashboard
+      operationId: getApiQuantOperationsReadonly
+      x-visibility: internal
+  /api/quant/research-run/manifest/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return an injected non-live run manifest without writes or credentials.
+      tags:
+      - Dashboard
+      operationId: getApiQuantResearchRunManifestReadonly
+      x-visibility: internal
+  /api/quant/deployment/readiness/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return artifact and rollback readiness without changing deployment
+        state.
+      tags:
+      - Dashboard
+      operationId: getApiQuantDeploymentReadinessReadonly
+      x-visibility: internal
+  /api/quant/projection/generation/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return persisted projection-generation facts without claiming G4-B.
+      tags:
+      - Dashboard
+      operationId: getApiQuantProjectionGenerationReadonly
+      x-visibility: internal
+  /api/quant/reconciliation/checkpoint/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return one authenticated, credential- and instrument-scoped checkpoint.
+      tags:
+      - Dashboard
+      operationId: getApiQuantReconciliationCheckpointReadonly
+      x-visibility: internal
+  /api/quant/shadow/summary/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return one authenticated, credential- and instrument-scoped Shadow
+        Diff summary.
+      tags:
+      - Dashboard
+      operationId: getApiQuantShadowSummaryReadonly
+      x-visibility: internal
+  /api/quant/gate/account/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return injected, sanitized Gate balances/orders/fills evidence.
+      tags:
+      - Dashboard
+      operationId: getApiQuantGateAccountReadonly
+      x-visibility: internal
+  /api/quant/gate/account/unified/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return one same-credential Spot + Perpetual Gate read snapshot.
+      description: 'This endpoint is all-or-nothing: a partial market read is returned
+        as an
+
+        unavailable response rather than being presented as a complete account.
+
+        It is GET-only and never authorizes order or cancel operations.'
+      tags:
+      - Dashboard
+      operationId: getApiQuantGateAccountUnifiedReadonly
+      x-visibility: internal
+  /api/quant/gate/account/unified/health/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return the sanitized Gate account read-health receipt only.
+      description: 'This is a GET-only diagnostic surface.  It does not claim reconciliation
+
+        health, authorize writes, or expose credential/provider payloads.'
+      tags:
+      - Dashboard
+      operationId: getApiQuantGateAccountUnifiedHealthReadonly
+      x-visibility: internal
+  /api/quant/gate/testnet/account:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Read a real Gate TestNet account using an explicit local env source.
+      description: 'This route is disabled unless ``QUANT_GATE_TESTNET_ENV_READ_ENABLED=1``.
+
+        It is GET-only and returns sanitized typed facts; it has no order, cancel,
+
+        executor, or Live capability. Encrypted database credentials remain the
+
+        preferred production read provider above.'
+      tags:
+      - Dashboard
+      operationId: getApiQuantGateTestnetAccount
+      x-visibility: internal
+  /api/quant/gate/market/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return one explicit public Gate TestNet market-evidence bundle.
+      description: 'The route has no credential or write capability.  It remains unavailable
+
+        until ``QUANT_GATE_PUBLIC_MARKET_READ_ENABLED=1`` is explicitly set.'
+      tags:
+      - Dashboard
+      operationId: getApiQuantGateMarketReadonly
+      x-visibility: internal
+  /api/quant/gate/market/unified/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return all-or-nothing Spot + Perpetual public market evidence.
+      tags:
+      - Dashboard
+      operationId: getApiQuantGateMarketUnifiedReadonly
+      x-visibility: internal
+  /api/quant/product/rehearsal/readonly:
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Return the complete fixture-only non-live product rehearsal.
+      description: 'This endpoint is deliberately a local deterministic evidence surface.
+        It
+
+        cannot read credentials, create a connection, call a venue, or mutate any
+
+        account/order state.'
+      tags:
+      - Dashboard
+      operationId: getApiQuantProductRehearsalReadonly
+      x-visibility: internal
+  /api/quant/entry/admit:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Persist one authenticated Canonical Entry admission in PAPER/SHADOW.
+      description: 'This endpoint is intentionally not an execution endpoint.  It
+        composes
+
+        authority resolution, durable entry, hard-risk, reservation, and outbox
+
+        facts on one caller-owned transaction.  It has no venue/executor access
+
+        and never accepts credentials or a LIVE mode.'
+      tags:
+      - Dashboard
+      operationId: postApiQuantEntryAdmit
+      x-visibility: internal
+  /api/quant/runtime-entry/authority/project:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Project one authenticated Gate snapshot into authority facts.
+      description: 'The endpoint persists scope binding, instrument rules, and instrument
+
+        authority facts from real Gate TestNet read evidence on one caller-owned
+
+        transaction.  It never fabricates facts, never opens a venue client on its
+
+        own, and is write-enabled only for the authenticated user''s own credential.'
+      tags:
+      - Dashboard
+      operationId: postApiQuantRuntimeEntryAuthorityProject
+      x-visibility: internal
+  /api/quant/runtime-entry/pipeline/run:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Project authority facts, reconcile, and persist position subjects.
+      description: 'The pipeline runs on one caller-owned transaction: snapshot ->
+        scope/rule/
+
+        authority facts -> reconciliation checkpoint (HEALTHY only when local and
+
+        external facts match) -> position projections/subjects.  It never
+
+        fabricates facts; a non-HEALTHY checkpoint leaves position subjects absent.'
+      tags:
+      - Dashboard
+      operationId: postApiQuantRuntimeEntryPipelineRun
+      x-visibility: internal
+  /api/quant/gate/testnet/order:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Submit one explicitly enabled Gate TestNet order after admission.
+      tags:
+      - Dashboard
+      operationId: postApiQuantGateTestnetOrder
+      x-visibility: internal
+    get:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Read one Gate TestNet order by its stable exchange order id.
+      tags:
+      - Dashboard
+      operationId: getApiQuantGateTestnetOrder
+      x-visibility: internal
+  /api/quant/gate/testnet/order/cancel:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Cancel one admitted Gate TestNet venue order by stable venue id.
+      tags:
+      - Dashboard
+      operationId: postApiQuantGateTestnetOrderCancel
+      x-visibility: internal
+  /api/quant/gate/testnet/order/settle-fills:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Read and persist fills for one already-known Gate TestNet order.
+      description: 'This is an explicit, opt-in recovery seam.  It accepts only a
+        credential
+
+        reference and caller-owned immutable scope facts; it never accepts raw
+
+        keys, opens Live, submits, cancels, or guesses valuation/timestamps.'
+      tags:
+      - Dashboard
+      operationId: postApiQuantGateTestnetOrderSettleFills
+      x-visibility: internal
+  /api/quant/paper/order:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Persist one PAPER order after canonical admission and hard risk.
+      tags:
+      - Dashboard
+      operationId: postApiQuantPaperOrder
+      x-visibility: internal
+  /api/quant/paper/order/{order_id}/fill:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Append a caller-supplied PAPER fill without contacting a venue.
+      description: 'This endpoint is a deterministic rehearsal seam: the fill identity
+        and
+
+        occurred time are explicit inputs, and the authenticated user is checked
+
+        while the order row is locked.  It cannot create a Gate request or enable
+
+        live trading.'
+      tags:
+      - Dashboard
+      operationId: postApiQuantPaperOrderOrderIdFill
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: integer
+      x-visibility: internal
+    parameters:
+    - in: path
+      name: order_id
+      required: true
+      schema:
+        type: string
+        minLength: 1
+  /api/quant/paper/order/{order_id}/cancel:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Record a deterministic PAPER cancellation without venue access.
+      tags:
+      - Dashboard
+      operationId: postApiQuantPaperOrderOrderIdCancel
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: integer
+      x-visibility: internal
+    parameters:
+    - in: path
+      name: order_id
+      required: true
+      schema:
+        type: string
+        minLength: 1
   /api/policy/broker-market:
     get:
       responses:
@@ -4640,6 +5452,32 @@ paths:
       - Credentials
       operationId: postApiCredentialsTest
       x-visibility: private
+  /api/credentials/test-saved:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Probe one saved Gate TestNet credential without accepting raw secrets.
+      description: 'The credential is resolved by the authenticated user and remains
+        encrypted
+
+        at rest.  This endpoint is deliberately TestNet-only and read-only; Live
+
+        credentials are rejected before a client is constructed.'
+      tags:
+      - Credentials
+      operationId: postApiCredentialsTestSaved
+      x-visibility: private
   /api/credentials/create:
     post:
       responses:
@@ -6914,20 +7752,7 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/QuickTradeOrderRequest'
-      summary: Place a quick market or limit order.
-      description: "Body JSON:\ncredential_id  (int)    - saved exchange credential\
-        \ ID\nsymbol         (str)    - e.g. \"BTC/USDT\"\nside           (str)  \
-        \  - \"buy\" or \"sell\"\norder_type     (str)    - \"market\" or \"limit\"\
-        \  (default: market)\namount         (float)  - spot quote amount or swap\
-        \ margin amount in USDT\nprice          (float)  - limit price (required for\
-        \ limit orders)\nleverage       (int)    - leverage multiplier (default: 1)\n\
-        \                          - leverage = 1: spot market\n                 \
-        \         - leverage > 1: swap (perpetual futures) market\nmarket_type   \
-        \ (str)    - \"swap\" / \"spot\" (optional, auto-determined by leverage if\
-        \ not provided)\ntp_price       (float)  - take-profit price (optional, for\
-        \ record only)\nsl_price       (float)  - stop-loss price (optional, for record\
-        \ only)\nsource         (str)    - \"ai_radar\" / \"ai_analysis\" / \"indicator\"\
-        \ / \"manual\""
+      summary: Reject the retired legacy quick-trade order mutation endpoint.
       tags:
       - QuickTrade
       operationId: postApiQuickTradePlaceOrder
@@ -7002,25 +7827,7 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/QuickTradeCloseRequest'
-      summary: Close an existing position.
-      description: 'Body JSON:
-
-        credential_id  (int)    - saved exchange credential ID
-
-        symbol         (str)    - e.g. "BTC/USDT"
-
-        market_type    (str)    - "swap" / "spot" (default: swap)
-
-        size           (float)  - position size to close (optional, defaults to full
-        position)
-
-        close_scope    (str)    - "full" (default) or "system_tracked" (swap only:
-        min(position, net from qd_quick_trades))
-
-        position_side  (str)    - optional "long" / "short"; required when both directions
-        exist for the same symbol
-
-        source         (str)    - "ai_radar" / "ai_analysis" / "indicator" / "manual"'
+      summary: Reject the retired legacy quick-trade position mutation endpoint.
       tags:
       - QuickTrade
       operationId: postApiQuickTradeClosePosition

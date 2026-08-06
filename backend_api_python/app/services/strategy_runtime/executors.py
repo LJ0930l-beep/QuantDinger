@@ -5,6 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from app.domain.gate_leverage_contracts import (
+    GateLeverageContractError,
+    validate_gate_crypto_swap_leverage,
+)
+from app.services.market_context import normalize_exchange_id
+
 
 EXECUTOR_TYPES = ("grid", "dca", "martingale", "layered_martingale")
 
@@ -263,7 +269,7 @@ def normalize_executor_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("NEUTRAL_GRID_REQUIRES_SWAP")
     leverage = 1 if executor_type == "dca" else max(1, _int(raw.get("leverage"), 1))
     execution_mode = str(raw.get("execution_mode") or raw.get("executionMode") or "signal").strip().lower()
-    if execution_mode not in ("signal", "live"):
+    if execution_mode not in ("signal", "paper", "live"):
         execution_mode = "signal"
     return {
         **raw,
@@ -393,8 +399,30 @@ def build_executor_strategy_payload(payload: Dict[str, Any], *, user_id: int) ->
     exchange_config = cfg.get("exchange_config") or cfg.get("exchangeConfig") or {}
     if not isinstance(exchange_config, dict):
         exchange_config = {}
-    if cfg["execution_mode"] == "live" and not exchange_config.get("credential_id"):
-        raise ValueError("LIVE_EXECUTOR_CREDENTIAL_REQUIRED")
+    exchange_id = normalize_exchange_id(
+        exchange_config.get("exchange_id") or exchange_config.get("exchangeId")
+    )
+    # Gate is the primary perpetual venue.  Its leverage contract is not a
+    # UI hint: when a robot is actually prepared for Paper/Live execution, an
+    # enabled leverage value must be an integer in the venue's 50x..100x
+    # range.  Signal/backtest previews remain venue-neutral and therefore do
+    # not silently inherit a Gate limit.
+    if (
+        cfg["market_type"] == "swap"
+        and cfg["execution_mode"] in {"paper", "live"}
+        and exchange_id == "gate"
+        and cfg["leverage"] > 1
+    ):
+        try:
+            cfg["leverage"] = int(validate_gate_crypto_swap_leverage(cfg["leverage"]))
+        except GateLeverageContractError as exc:
+            raise ValueError("strategyV2.gateLeverageContractInvalid") from exc
+    if cfg["execution_mode"] in {"live", "paper"} and not exchange_config.get("credential_id"):
+        raise ValueError(
+            "LIVE_EXECUTOR_CREDENTIAL_REQUIRED"
+            if cfg["execution_mode"] == "live"
+            else "PAPER_EXECUTOR_CREDENTIAL_REQUIRED"
+        )
     preview = preview_executor(cfg)
     kind = cfg["executor_type"]
     strategy_name = str(cfg.get("strategy_name") or cfg.get("name") or f"{kind.upper()} {cfg['symbol']}").strip()

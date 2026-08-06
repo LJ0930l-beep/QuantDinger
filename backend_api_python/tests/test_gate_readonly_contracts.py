@@ -33,6 +33,7 @@ def _load_contract_module():
 
 _contracts = _load_contract_module()
 GATE_TESTNET_REST_BASE_URL = _contracts.GATE_TESTNET_REST_BASE_URL
+GATE_TESTNET_FUTURES_REST_BASE_URL = _contracts.GATE_TESTNET_FUTURES_REST_BASE_URL
 GateEnvironment = _contracts.GateEnvironment
 GateMarketType = _contracts.GateMarketType
 GateReadCapabilityProfile = _contracts.GateReadCapabilityProfile
@@ -40,21 +41,27 @@ GateReadonlyContractError = _contracts.GateReadonlyContractError
 GateUnsupportedEnvironment = _contracts.GateUnsupportedEnvironment
 canonical_gate_testnet_base_url = _contracts.canonical_gate_testnet_base_url
 gate_testnet_api_url = _contracts.gate_testnet_api_url
+gate_testnet_base_url_for_market = _contracts.gate_testnet_base_url_for_market
 normalize_gate_ohlcv = _contracts.normalize_gate_ohlcv
 
 
 class GateReadonlyContractTests(unittest.TestCase):
     def test_only_official_testnet_endpoint_is_accepted(self) -> None:
         self.assertEqual(GATE_TESTNET_REST_BASE_URL, canonical_gate_testnet_base_url(GATE_TESTNET_REST_BASE_URL + "/"))
+        self.assertEqual(
+            GATE_TESTNET_FUTURES_REST_BASE_URL,
+            canonical_gate_testnet_base_url(GATE_TESTNET_FUTURES_REST_BASE_URL + "/", GateMarketType.PERPETUAL),
+        )
         with self.assertRaises(GateUnsupportedEnvironment):
             canonical_gate_testnet_base_url("https://api.gateio.ws")
         with self.assertRaises(GateUnsupportedEnvironment):
-            canonical_gate_testnet_base_url("https://fx-api.gateio.ws")
+            canonical_gate_testnet_base_url(GATE_TESTNET_FUTURES_REST_BASE_URL, GateMarketType.SPOT)
 
     def test_profile_is_testnet_scoped_and_write_disabled(self) -> None:
         profile = GateReadCapabilityProfile(
             environment=GateEnvironment.TESTNET,
             market_type=GateMarketType.PERPETUAL,
+            base_url=GATE_TESTNET_FUTURES_REST_BASE_URL,
             credential_ref="testnet-ref",
             supports_account_reads=True,
             supports_order_reads=True,
@@ -87,6 +94,10 @@ class GateReadonlyContractTests(unittest.TestCase):
         self.assertEqual(
             "https://api-testnet.gateapi.io/api/v4/futures/usdt/contracts",
             gate_testnet_api_url("/api/v4/futures/usdt/contracts"),
+        )
+        self.assertEqual(
+            "https://fx-api-testnet.gateio.ws/api/v4/futures/usdt/contracts",
+            gate_testnet_api_url("/api/v4/futures/usdt/contracts", GateMarketType.PERPETUAL),
         )
         with self.assertRaises(GateReadonlyContractError):
             gate_testnet_api_url("spot/currency_pairs")

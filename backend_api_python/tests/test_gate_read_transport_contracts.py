@@ -43,7 +43,12 @@ M, RO = load()
 
 
 def profile(market_type):
-    return RO.GateReadCapabilityProfile(RO.GateEnvironment.TESTNET, market_type, credential_ref="opaque-ref")
+    return RO.GateReadCapabilityProfile(
+        RO.GateEnvironment.TESTNET,
+        market_type,
+        base_url=RO.gate_testnet_base_url_for_market(market_type),
+        credential_ref="opaque-ref",
+    )
 
 
 class GateReadTransportTests(unittest.TestCase):
@@ -54,6 +59,16 @@ class GateReadTransportTests(unittest.TestCase):
         self.assertEqual(M.validate_gate_read_request(req, profile(RO.GateMarketType.SPOT)), req)
         with self.assertRaises(M.GateReadTransportError):
             M.validate_gate_read_request(req, profile(RO.GateMarketType.PERPETUAL))
+
+    def test_perpetual_request_uses_contract_parameter(self):
+        req = M.GateReadRequest(
+            M.GateMarketType.PERPETUAL,
+            M.GatePublicReadEndpoint.CANDLESTICKS,
+            "BTC_USDT",
+            (("interval", "1m"),),
+        )
+        self.assertEqual(req.params["contract"], "BTC_USDT")
+        self.assertNotIn("currency_pair", req.params)
 
     def test_query_is_canonical_and_instrument_required(self):
         with self.assertRaises(M.GateReadTransportError):

@@ -91,6 +91,11 @@ def _prepare_run(payload: dict[str, Any], user_id: int) -> dict[str, Any]:
     start_date = datetime.strptime(start_raw, "%Y-%m-%d")
     end_date = datetime.strptime(end_raw, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
     leverage_enabled = bool(payload.get("leverageEnabled", False))
+    # Keep the caller's raw leverage fact intact until Strategy API V2 has
+    # compiled the source manifest.  Converting here would leak a Python
+    # ValueError for malformed input and would make a disabled leverage field
+    # fail before the typed contract can resolve it to neutral 1x.
+    leverage_input = payload.get("leverage", 1)
     return {
         "user_id": user_id,
         "code": code,
@@ -98,7 +103,7 @@ def _prepare_run(payload: dict[str, Any], user_id: int) -> dict[str, Any]:
         "end_date": end_date,
         "initial_capital": float(payload.get("initialCapital") or 10_000),
         "leverage_enabled": leverage_enabled,
-        "leverage": float(payload.get("leverage") or 1),
+        "leverage": leverage_input,
         "commission": parse_rate(payload.get("commission"), default=default_commission_if_missing(None)),
         "slippage": parse_rate(payload.get("slippage"), default=default_slippage_if_missing(None)),
         "params": dict(payload.get("params") or {}),

@@ -23,7 +23,8 @@ AUTHORITATIVE_RISK_FACTS_MIGRATION = MIGRATIONS / "20260731_authoritative_risk_f
 INSTRUMENT_RISK_RULES_MIGRATION = MIGRATIONS / "20260801_authoritative_instrument_risk_rules.sql"
 RUNTIME_ENTRY_AUTHORITY_MIGRATION = MIGRATIONS / "20260802_runtime_entry_authority.sql"
 CONSUMER_INBOX_GUARDS_MIGRATION = MIGRATIONS / "20260803_consumer_inbox_guards.sql"
-INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION, DURABLE_RISK_V2_MIGRATION, AUTHORITATIVE_RISK_FACTS_MIGRATION, INSTRUMENT_RISK_RULES_MIGRATION, RUNTIME_ENTRY_AUTHORITY_MIGRATION, CONSUMER_INBOX_GUARDS_MIGRATION)
+DURABLE_ENTRY_FILL_BRIDGE_MIGRATION = MIGRATIONS / "20260805_durable_entry_fill_ledger_bridge.sql"
+INCREMENTAL_MIGRATIONS = (MIGRATION, PRECONDITION_MIGRATION, IMMUTABLE_LEDGER_MIGRATION, WAVE2_MIGRATION, SHADOW_DIFF_MIGRATION, RECONCILIATION_MIGRATION, DURABLE_ENTRY_MIGRATION, DURABLE_RISK_V2_MIGRATION, AUTHORITATIVE_RISK_FACTS_MIGRATION, INSTRUMENT_RISK_RULES_MIGRATION, RUNTIME_ENTRY_AUTHORITY_MIGRATION, CONSUMER_INBOX_GUARDS_MIGRATION, DURABLE_ENTRY_FILL_BRIDGE_MIGRATION)
 INIT_SQL = MIGRATIONS / "init.sql"
 
 EXPECTED_TABLES = {
@@ -76,6 +77,9 @@ EXPECTED_TABLES = {
     "qd_runtime_entry_instrument_authorities",
     "qd_runtime_entry_position_subjects",
     "qd_runtime_entry_ingresses",
+    "qd_durable_entry_fill_events",
+    "qd_durable_entry_ledger_valuation_evidence",
+    "qd_durable_entry_fill_fee_components",
 }
 
 # These are representative pre-existing upstream tables whose availability is
@@ -377,6 +381,20 @@ class UnifiedOrderSchemaTextTests(unittest.TestCase):
         init_sql = INIT_SQL.read_text(encoding="utf-8")
         for table in REQUIRED_UPSTREAM_TABLES:
             self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", init_sql)
+
+    def test_durable_entry_fill_bridge_is_explicit_and_append_only(self):
+        migration = DURABLE_ENTRY_FILL_BRIDGE_MIGRATION.read_text(encoding="utf-8")
+        for table in (
+            "qd_durable_entry_fill_events",
+            "qd_durable_entry_ledger_valuation_evidence",
+            "qd_durable_entry_fill_fee_components",
+        ):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", migration)
+        self.assertIn("durable_entry_command_id UUID", migration)
+        self.assertIn("qd_assert_durable_entry_fill_scope", migration)
+        self.assertIn("qd_reject_durable_entry_fill_mutation", migration)
+        self.assertIn("invent qd_order_intents_v2 or qd_economic_orders rows", migration)
+        self.assertNotIn("ON DELETE CASCADE", migration)
 
 
 @unittest.skipUnless(os.getenv("DATABASE_URL"), "requires CI PostgreSQL DATABASE_URL")

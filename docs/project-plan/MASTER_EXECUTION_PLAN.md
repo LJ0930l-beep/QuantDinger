@@ -4,7 +4,7 @@
 
 本项目是一个确定性、可审计、可回测、可重放的多资产量化交易系统。所有可执行交易事实必须来自版本化市场数据、确定性规则、Decimal 数值、用户明确配置、权威账户/持仓事实、Hard Risk、Reservation 与 Admission。
 
-AI、LLM、Agent 不拥有交易决策权；当前产品契约将其交易 authority 固定为 **0%**。Live 永久保持 OFF，系统最高只能达到 `CONTROLLED LIVE READY / LIVE OFF`。
+AI、LLM、Agent 不拥有交易决策权；当前产品契约将其交易 authority 固定为 **0%**。Live 不是永久禁用，而是必须经过独立的人工确认、Canary 证据和账户级 Kill Switch 闸门；在这些闸门完成前保持 OFF。
 
 ## 1. 当前基线
 
@@ -17,7 +17,7 @@ AI、LLM、Agent 不拥有交易决策权；当前产品契约将其交易 autho
 | Entry-Point legacy baseline | 31；只能下降，不能回升 |
 | Architecture Guard | 46；只能下降，不能回升 |
 | AI Boundary | 已登记遗留导入只能减少；不得新增 provider 或交易决策流 |
-| Live | OFF；不请求真实 API Key，不连接真实交易所 |
+| Live | 当前 OFF；必须通过 TestNet、Paper/Shadow、Canary 和人工确认闸门后才可单独启用 |
 | docs/codex | 不属于本路线，保持未跟踪且不修改 |
 
 ## 2. Gate First 顺序
@@ -31,7 +31,19 @@ AI、LLM、Agent 不拥有交易决策权；当前产品契约将其交易 autho
 5. **DATA-01 → BT-01 → PS-01**：市场数据、回测、Paper/Shadow 必须同一套确定性语义。
 6. **STRAT-01 → STRAT-RESEARCH → Strategy Library → SMC-01**：先审计旧策略，再内建确定性策略；策略只输出 Candidate Trade Plan。
 7. **PORT-01 → RISK-COOLDOWN → FE-01 → OPS-01**：仓位/保证金、连续亏损冷静期、前端只读产品、运维观测。
-8. **LIVE-R01**：只准备 Controlled Live Ready 证据，Live 仍 OFF。Binance/OKX 适配器只能在 Gate 垂直闭环后独立审批。
+8. **LIVE-R01**：在 Gate Spot/Perpetual TestNet、Paper/Shadow、恢复/对账和 Canary 证据完成后，准备受控 Live；Live 开关仍默认 OFF，且不由研究或 AI 自动打开。
+
+## 6. V8 完整产品交付目标
+
+本计划的阶段只是内部施工顺序，不是最终交付物。最终产品必须形成一条可操作的闭环：
+
+`Market Data → Strategy Runtime → Candidate Trade Plan → Position Sizing → Canonical Entry V2 → Hard Risk → Reservation → Admission → Durable Outbox → Trading Worker → Gate Executor → Order/Fill → Ledger/Position → Reconciliation → Read API → Frontend`。
+
+第一批正式产品为 Gate Spot 和 Gate Perpetual；Delivery、Options、Stock/ETF 只有在第一批产品稳定后再接入。Backtest、Paper、TestNet、Canary 和 Live 必须共享同一套 Entry、Risk、Admission、Idempotency、Outbox、Order、Fill、Ledger 与 Reconciliation 语义。
+
+正式环境集合为 `DISABLED / PAPER / SHADOW / TESTNET / CANARY / LIVE`。任何环境转换都必须有版本化证据、人工可见状态和可回滚路径；Live 不得从环境变量、Agent、LLM 或策略代码隐式启用。
+
+最终验收至少覆盖：凭证加密保存与权限检测、真实只读账户读取、确定性策略与回测、Paper/TestNet 生命周期、杠杆/保证金/费用/Funding、重启恢复、重复请求幂等、对账差异、Kill Switch、前端全操作流、Migration/Backend/Frontend/OpenAPI/Security/E2E 测试，以及 Gate Spot/Perpetual 的小额 Canary 证据。当前集成分支已增加 durable PAPER order/fill/event/checkpoint facts，但仍处于集成开发中；不得把任一单独合同或 Draft PR 宣称为项目完成。
 
 ## 3. 共同不可协商边界
 

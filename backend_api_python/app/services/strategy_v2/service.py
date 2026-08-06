@@ -18,7 +18,11 @@ from app.services.backtest_limits import (
 from app.services.fundamental_data import get_fundamental_data_service
 from app.services.universe import UniverseService, get_universe_service
 
-from .contract import StrategyV2ContractError, compile_strategy_v2
+from .contract import (
+    StrategyV2ContractError,
+    compile_strategy_v2,
+    validate_requested_leverage,
+)
 from .factor_research import FactorResearchEngine
 from .models import InstrumentSpec, StrategyManifest
 from .market_data import load_strategy_frame
@@ -144,17 +148,20 @@ class StrategyV2BacktestService:
             raise StrategyV2ContractError("strategyV2.invalidDateRange")
         if initial_capital <= 0:
             raise StrategyV2ContractError("strategyV2.invalidInitialCapital")
-
-        candidates, universe_id = self.resolve_candidates(
-            user_id=user_id,
-            manifest=manifest,
-            start_date=start_date,
-            end_date=end_date,
+        effective_leverage = validate_requested_leverage(
+            manifest,
+            leverage_enabled=bool(leverage_enabled),
+            leverage=leverage,
         )
-        if not candidates:
-            raise StrategyV2ContractError("strategyV2.universeHasNoData")
 
-        frequency = manifest.primary_frequency
+        candidate_params = dict(params or {})
+        # User-configurable: frequency and symbol override manifest defaults
+        user_frequency = candidate_params.get("frequency") or ""
+        frequency = user_frequency if user_frequency else manifest.primary_frequency
+        user_symbol = candidate_params.get("symbol") or ""
+        if user_symbol:
+            candidates = [{"key": user_symbol, "market": "Crypto", "market_type": "swap" if "@swap" in user_symbol else "spot", "symbol": user_symbol.split(":")[-1].split("@")[0] if ":" in user_symbol else user_symbol}]
+            universe_id = None
         fetch_start = start_date - timedelta(
             days=backtest_warmup_calendar_days(frequency, manifest.warmup_bars)
         )
@@ -187,7 +194,7 @@ class StrategyV2BacktestService:
             initial_capital=initial_capital,
             params=params,
             leverage_enabled=leverage_enabled,
-            leverage=leverage,
+            leverage=effective_leverage,
             commission=commission,
             slippage=slippage,
             universe_resolver=resolve_universe,
@@ -269,7 +276,7 @@ class StrategyV2BacktestService:
             "startDate": start_date.date().isoformat(),
             "endDate": end_date.date().isoformat(),
             "leverageEnabled": bool(leverage_enabled),
-            "leverage": float(leverage if leverage_enabled else 1.0),
+            "leverage": effective_leverage,
             "commission": float(commission),
             "slippage": float(slippage),
             "fundingMode": "not_modeled",
@@ -292,7 +299,7 @@ class StrategyV2BacktestService:
                 initial_capital=initial_capital,
                 commission=commission,
                 slippage=slippage,
-                leverage=float(leverage if leverage_enabled else 1),
+                leverage=effective_leverage,
                 manifest=manifest.metadata(),
                 params=dict(params or {}),
                 result=result,

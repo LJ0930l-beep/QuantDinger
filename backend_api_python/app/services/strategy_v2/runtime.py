@@ -19,7 +19,12 @@ from app.services.factors import (
     get_factor,
     is_talib_available,
 )
-from .contract import CompiledStrategyV2, StrategyV2ContractError, compile_strategy_v2
+from .contract import (
+    CompiledStrategyV2,
+    StrategyV2ContractError,
+    compile_strategy_v2,
+    validate_requested_leverage,
+)
 from .data import MultiAssetDataPortal
 from .protection import ProtectionDecision, ProtectionEngine, ProtectionSpec, ProtectionState
 
@@ -1087,11 +1092,11 @@ class StrategyV2BacktestRunner:
         universe_resolver=None,
     ) -> None:
         self.program: CompiledStrategyV2 = compile_strategy_v2(code)
-        requested_leverage = max(1.0, float(leverage or 1.0)) if leverage_enabled else 1.0
-        if requested_leverage > 1.0 and not self.program.manifest.leverage_allowed:
-            raise StrategyV2ContractError("strategyV2.leverageNotAllowed")
-        if requested_leverage > self.program.manifest.max_leverage:
-            raise StrategyV2ContractError("strategyV2.leverageExceedsStrategyLimit")
+        requested_leverage = validate_requested_leverage(
+            self.program.manifest,
+            leverage_enabled=bool(leverage_enabled),
+            leverage=leverage,
+        )
         self.portal = MultiAssetDataPortal(frames, universe_resolver=universe_resolver)
         self.broker = MultiAssetSimulationBroker(
             initial_capital=initial_capital,

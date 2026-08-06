@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from app.services.script_source import get_script_source_service
@@ -10,9 +11,22 @@ from app.services.strategy_direction import (
     direction_mode_position_side,
     normalize_direction_mode,
 )
+from app.services.market_context import normalize_exchange_id
+from app.domain.gate_leverage_contracts import (
+    GATE_CRYPTO_SWAP_LEVERAGE_MAX as _GATE_LEVERAGE_MAX,
+    GATE_CRYPTO_SWAP_LEVERAGE_MIN as _GATE_LEVERAGE_MIN,
+)
 from app.utils.db import get_db_connection
 
-from .contract import StrategyV2ContractError, compile_strategy_v2
+from .contract import (
+    StrategyV2ContractError,
+    compile_strategy_v2,
+    validate_requested_leverage,
+)
+
+
+GATE_CRYPTO_SWAP_LEVERAGE_MIN = float(_GATE_LEVERAGE_MIN)
+GATE_CRYPTO_SWAP_LEVERAGE_MAX = float(_GATE_LEVERAGE_MAX)
 
 
 class StrategyV2DeploymentService:
@@ -31,23 +45,42 @@ class StrategyV2DeploymentService:
             raise StrategyV2ContractError("strategyV2.invalidInitialCapital")
 
         execution_mode = str(payload.get("executionMode") or "signal").strip().lower()
-        if execution_mode not in {"signal", "live"}:
+        if execution_mode not in {"signal", "paper", "live"}:
             raise StrategyV2ContractError("strategyV2.invalidExecutionMode")
         credential_id = int(payload.get("credentialId") or 0)
-        exchange_id = self._credential_exchange(user_id, credential_id) if execution_mode == "live" else ""
-        if execution_mode == "live" and not exchange_id:
+        exchange_id = (
+            normalize_exchange_id(self._credential_exchange(user_id, credential_id))
+            if execution_mode in {"paper", "live"}
+            else ""
+        )
+        if execution_mode in {"paper", "live"} and (not credential_id or not exchange_id):
             raise StrategyV2ContractError("strategyV2.credentialRequired")
         self._validate_execution_account(manifest.markets, exchange_id, execution_mode)
 
         leverage_enabled = bool(payload.get("leverageEnabled"))
-        leverage = float(payload.get("leverage") or 1)
+        leverage_input = payload.get("leverage") or 1
         if leverage_enabled and not self._supports_contract_leverage(manifest.metadata()):
             raise StrategyV2ContractError("strategyV2.leverageCryptoSwapOnly")
-        if leverage_enabled and not manifest.leverage_allowed:
-            raise StrategyV2ContractError("strategyV2.leverageNotAllowed")
-        if leverage_enabled and leverage > manifest.max_leverage:
-            raise StrategyV2ContractError("strategyV2.leverageExceedsStrategyLimit")
-        leverage = max(1.0, leverage if leverage_enabled else 1.0)
+        leverage = validate_requested_leverage(
+            manifest,
+            leverage_enabled=leverage_enabled,
+            leverage=leverage_input,
+        )
+        manifest_market_type = self._manifest_market_type(manifest.metadata())
+        if (
+            leverage_enabled
+            and execution_mode in {"paper", "live"}
+            and exchange_id == "gate"
+            and manifest_market_type == "swap"
+            and (
+                not math.isclose(float(manifest.min_leverage), GATE_CRYPTO_SWAP_LEVERAGE_MIN)
+                or not math.isclose(float(manifest.max_leverage), GATE_CRYPTO_SWAP_LEVERAGE_MAX)
+            )
+        ):
+            # Do not silently upgrade a user-owned/legacy source.  The source
+            # must be recreated from the current Gate contract so the
+            # immutable strategy manifest records the 50–100x policy.
+            raise StrategyV2ContractError("strategyV2.gateLeverageContractStale")
         declared_payload_direction = payload.get("directionMode") or payload.get("direction_mode") or ""
         requested_direction = declared_payload_direction or (
             payload.get("positionSide") or payload.get("position_side") or ""
@@ -63,7 +96,6 @@ class StrategyV2DeploymentService:
         ):
             raise StrategyV2ContractError("strategyV2.directionModeMismatch")
         direction_mode = manifest.direction_mode or requested_direction_mode
-        manifest_market_type = self._manifest_market_type(manifest.metadata())
         if execution_mode == "live" and manifest_market_type == "swap" and not direction_mode:
             raise StrategyV2ContractError("strategyV2.directionModeRequired")
         position_side = direction_mode_position_side(direction_mode)
@@ -172,7 +204,13 @@ class StrategyV2DeploymentService:
             )
             row = cur.fetchone() or {}
             cur.close()
-        return str(row.get("exchange_id") or "").strip().lower()
+        # Credential rows may predate the canonical exchange identity contract
+        # and contain aliases such as ``gateio`` or ``gate.io``.  Normalize at
+        # the deployment boundary so the same venue scope is used by the UI,
+        # strategy manifest validation, and execution-account checks.  This is
+        # purely an identity normalization; it never changes credentials or
+        # enables a live request.
+        return normalize_exchange_id(row.get("exchange_id"))
 
     @staticmethod
     def _validate_execution_account(markets: tuple[str, ...], exchange_id: str, execution_mode: str) -> None:

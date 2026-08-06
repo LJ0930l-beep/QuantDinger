@@ -132,6 +132,36 @@ class OrderStateRepositoryPostgresTests(unittest.TestCase):
         self.assertEqual([], errors)
         self.assertEqual(sorted(item.disposition.value for item in results), ["APPLIED", "REPLAYED"])
 
+    def test_caller_owned_order_transition_rolls_back_with_outer_transaction(self):
+        import psycopg2
+
+        graph = self._setup_graph()
+        event = self._transition(graph, "pg-caller-owned-rollback", {"case": "caller-owned"})
+        connection = psycopg2.connect(os.environ["DATABASE_URL"])
+        connection.autocommit = False
+        try:
+            result = states.OrderStateRepository().apply_order_transition_caller_owned(connection, event)
+            self.assertEqual("APPLIED", result.disposition.value)
+            connection.rollback()
+        finally:
+            connection.close()
+
+        verify = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            with verify.cursor() as cursor:
+                cursor.execute(
+                    "SELECT state, version, last_event_seq FROM qd_economic_orders WHERE id=%s",
+                    (graph["economic_order_id"],),
+                )
+                self.assertEqual(("SUBMISSION_UNKNOWN", 0, 0), cursor.fetchone())
+                cursor.execute(
+                    "SELECT count(*) FROM qd_order_state_events WHERE economic_order_id=%s",
+                    (graph["economic_order_id"],),
+                )
+                self.assertEqual(0, cursor.fetchone()[0])
+        finally:
+            verify.close()
+
     def test_same_version_different_order_events_fail_closed(self):
         graph = self._setup_graph()
         results, errors = self._concurrent(graph, self._transition(graph, "pg-event-a", {"case":"a"}),

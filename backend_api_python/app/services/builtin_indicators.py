@@ -176,6 +176,115 @@ output = {
 '''
 
 
+_SMA_CODE = r'''# QuantDinger chart indicator: simple moving average
+my_indicator_name = "[内置] 简单移动平均线（SMA）"
+my_indicator_description = "用收盘价计算可调周期的简单移动平均线，仅用于图表研究。"
+# @param period int 20 range=5:200:1
+period = int(params.get("period", 20))
+df = df.copy()
+sma = df["close"].rolling(period, min_periods=period).mean()
+output = {
+    "name": my_indicator_name,
+    "plots": [{"name": "SMA", "data": sma.tolist(), "color": "#29B6F6", "overlay": True}],
+    "signals": [],
+}
+'''
+
+
+_RSI_CODE = r'''# QuantDinger chart indicator: relative strength index
+my_indicator_name = "[内置] 相对强弱指标（RSI）"
+my_indicator_description = "识别超买超卖区域的动量指标，仅用于图表研究。"
+# @param period int 14 range=5:50:1
+period = int(params.get("period", 14))
+df = df.copy()
+delta = df["close"].diff()
+gain = delta.clip(lower=0).rolling(period, min_periods=period).mean()
+loss = (-delta.clip(upper=0)).rolling(period, min_periods=period).mean()
+rs = gain / loss.replace(0, np.nan)
+rsi = (100 - (100 / (1 + rs))).fillna(50)
+output = {
+    "name": my_indicator_name,
+    "plots": [{"name": "RSI", "data": rsi.tolist(), "color": "#AB47BC", "overlay": False}],
+    "signals": [],
+}
+'''
+
+
+_MACD_CODE = r'''# QuantDinger chart indicator: MACD
+my_indicator_name = "[内置] MACD 动量指标"
+my_indicator_description = "比较快慢指数移动平均线与信号线的动量变化，仅用于图表研究。"
+# @param fast_period int 12 range=5:50:1
+# @param slow_period int 26 range=10:100:1
+# @param signal_period int 9 range=3:30:1
+fast_period = int(params.get("fast_period", 12))
+slow_period = int(params.get("slow_period", 26))
+signal_period = int(params.get("signal_period", 9))
+df = df.copy()
+fast = df["close"].ewm(span=fast_period, adjust=False).mean()
+slow = df["close"].ewm(span=slow_period, adjust=False).mean()
+line = fast - slow
+signal = line.ewm(span=signal_period, adjust=False).mean()
+histogram = line - signal
+output = {
+    "name": my_indicator_name,
+    "plots": [
+        {"name": "MACD", "data": line.tolist(), "color": "#26A69A", "overlay": False},
+        {"name": "Signal", "data": signal.tolist(), "color": "#FFCA28", "overlay": False},
+        {"name": "Histogram", "data": histogram.tolist(), "color": "#7E57C2", "overlay": False},
+    ],
+    "signals": [],
+}
+'''
+
+
+_BOLLINGER_CODE = r'''# QuantDinger chart indicator: Bollinger Bands
+my_indicator_name = "[内置] 布林带"
+my_indicator_description = "用移动平均和标准差描述价格波动通道，仅用于图表研究。"
+# @param period int 20 range=5:200:1
+# @param deviations float 2.0 range=0.5:5.0:0.5
+period = int(params.get("period", 20))
+deviations = float(params.get("deviations", 2.0))
+df = df.copy()
+middle = df["close"].rolling(period, min_periods=period).mean()
+std = df["close"].rolling(period, min_periods=period).std(ddof=0)
+upper = middle + deviations * std
+lower = middle - deviations * std
+output = {
+    "name": my_indicator_name,
+    "plots": [
+        {"name": "Upper", "data": upper.tolist(), "color": "#EF5350", "overlay": True},
+        {"name": "Middle", "data": middle.tolist(), "color": "#42A5F5", "overlay": True},
+        {"name": "Lower", "data": lower.tolist(), "color": "#66BB6A", "overlay": True},
+    ],
+    "signals": [],
+}
+'''
+
+
+_KDJ_CODE = r'''# QuantDinger chart indicator: KDJ stochastic oscillator
+my_indicator_name = "[内置] KDJ 随机指标"
+my_indicator_description = "观察收盘价在近期高低区间的位置和动量拐点，仅用于图表研究。"
+# @param period int 9 range=5:50:1
+period = int(params.get("period", 9))
+df = df.copy()
+lowest = df["low"].rolling(period, min_periods=period).min()
+highest = df["high"].rolling(period, min_periods=period).max()
+rsv = ((df["close"] - lowest) / (highest - lowest).replace(0, np.nan) * 100).fillna(50)
+k = rsv.ewm(alpha=1 / 3, adjust=False).mean()
+d = k.ewm(alpha=1 / 3, adjust=False).mean()
+j = 3 * k - 2 * d
+output = {
+    "name": my_indicator_name,
+    "plots": [
+        {"name": "K", "data": k.tolist(), "color": "#29B6F6", "overlay": False},
+        {"name": "D", "data": d.tolist(), "color": "#FFCA28", "overlay": False},
+        {"name": "J", "data": j.tolist(), "color": "#AB47BC", "overlay": False},
+    ],
+    "signals": [],
+}
+'''
+
+
 def _builtin_specs() -> List[Dict[str, str]]:
     """内置指标：name / description / code（与指标 IDE、回测引擎约定一致）。
 
@@ -193,6 +302,31 @@ def _builtin_specs() -> List[Dict[str, str]]:
             ),
             "code": _SUPERTREND_CODE,
         },
+        {
+            "name": "[内置] 简单移动平均线（SMA）",
+            "description": "收盘价的简单移动平均线，用于识别趋势方向。",
+            "code": _SMA_CODE,
+        },
+        {
+            "name": "[内置] 相对强弱指标（RSI）",
+            "description": "动量与超买超卖区域研究指标。",
+            "code": _RSI_CODE,
+        },
+        {
+            "name": "[内置] MACD 动量指标",
+            "description": "快慢均线与信号线的动量研究指标。",
+            "code": _MACD_CODE,
+        },
+        {
+            "name": "[内置] 布林带",
+            "description": "移动平均与标准差构成的波动通道指标。",
+            "code": _BOLLINGER_CODE,
+        },
+        {
+            "name": "[内置] KDJ 随机指标",
+            "description": "观察价格在近期高低区间位置的动量指标。",
+            "code": _KDJ_CODE,
+        },
     ]
 
 
@@ -208,18 +342,22 @@ def seed_builtin_indicators_for_new_user(db: Any, user_id: int) -> int:
     try:
         cur.execute(
             """
-            SELECT 1 AS x
+            SELECT name
             FROM qd_indicator_codes
-            WHERE user_id = ? AND name = ?
-            LIMIT 1
+            WHERE user_id = ?
             """,
-            (user_id, _BUILTIN_PACK_ANCHOR_NAME),
+            (user_id,),
         )
-        if cur.fetchone():
-            return 0
+        existing_names = {
+            str(row.get("name") or "")
+            for row in (cur.fetchall() or [])
+            if isinstance(row, dict)
+        }
 
         inserted = 0
         for spec in _builtin_specs():
+            if spec["name"] in existing_names:
+                continue
             cur.execute(
                 """
                 INSERT INTO qd_indicator_codes

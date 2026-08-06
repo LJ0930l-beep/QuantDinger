@@ -217,6 +217,10 @@ class GateOrderBookSnapshot:
     snapshot_id: str
     rule_version: str
     evidence_hash: str
+    # ``None`` preserves historical read-only evidence that predates the
+    # streaming contract.  A snapshot without this immutable REST request
+    # fact is intentionally ineligible to anchor a websocket depth stream.
+    depth_limit: int | None = None
     venue_id: str = "gate"
     kind: GateMarketKind = GateMarketKind.ORDER_BOOK
 
@@ -226,6 +230,9 @@ class GateOrderBookSnapshot:
             raise GateMarketContractError("order book levels must be typed and non-empty")
         if max(x.price for x in self.bids) >= min(x.price for x in self.asks):
             raise GateMarketContractError("order book crossed spread")
+        if self.depth_limit is not None:
+            if isinstance(self.depth_limit, bool) or not isinstance(self.depth_limit, int) or self.depth_limit <= 0:
+                raise GateMarketContractError("depth_limit must be a positive integer when supplied")
         object.__setattr__(self, "venue_id", common[0]); object.__setattr__(self, "instrument_id", common[2])
         object.__setattr__(self, "occurred_at", common[3]); object.__setattr__(self, "observed_at", common[4])
 

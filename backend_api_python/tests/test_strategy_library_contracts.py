@@ -49,5 +49,29 @@ class StrategyLibraryTests(unittest.TestCase):
         right = M.StrategySignalFact("s", definition(), "ETH_USDT", M.SignalDirection.BUY, Decimal("0.5"), UTC, 1, "d")
         self.assertNotEqual(M.strategy_fingerprint(left), M.strategy_fingerprint(right))
 
+    def test_timeframe_and_market_metadata_is_typed_and_fingerprinted(self):
+        base = definition()
+        short = M.StrategyDefinition(
+            base.strategy_id,
+            base.version,
+            base.family,
+            base.parameter_schema_fingerprint,
+            base.data_dependency_snapshot,
+            base.parameters,
+            ("5m", "15m"),
+            ("crypto",),
+        )
+        self.assertNotEqual(M.strategy_fingerprint(base), M.strategy_fingerprint(short))
+        with self.assertRaises(M.StrategyLibraryError):
+            M.StrategyDefinition("s", "v", M.StrategyFamily.SMC, "schema", "data", (M.StrategyParameterFact("x", "1"),), ("2m",), ("crypto",))
+        with self.assertRaises(M.StrategyLibraryError):
+            M.StrategyDefinition("s", "v", M.StrategyFamily.SMC, "schema", "data", (M.StrategyParameterFact("x", "1"),), ("5m",), ("crypto spot",))
+        with self.assertRaises(M.StrategyLibraryError):
+            M.StrategyDefinition("s", "v", M.StrategyFamily.SMC, "schema", "data", (M.StrategyParameterFact("x", "1"),), ("5m",), ("Crypto",))
+        self.assertTrue(M.strategy_supports_scope(short, timeframe="5m", market_type="crypto"))
+        self.assertFalse(M.strategy_supports_scope(short, timeframe="1h", market_type="crypto"))
+        with self.assertRaises(M.StrategyLibraryError):
+            M.strategy_supports_scope(short, timeframe="2m", market_type="crypto")
+
 
 if __name__ == "__main__": unittest.main()

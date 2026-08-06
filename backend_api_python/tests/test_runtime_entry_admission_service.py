@@ -132,6 +132,23 @@ class RuntimeEntryAdmissionServiceTests(unittest.TestCase):
         self.assertIs(authority.persist_calls[0][0], connection)
         self.assertEqual((connection.commits, connection.rollbacks), (0, 0))
 
+    def test_admit_with_graph_returns_same_typed_graph_without_transaction_control(self):
+        authority_value = self._authority()
+        authority = _AuthorityPort(
+            authority_value,
+            lambda graph, resolved: self.IngressResult(graph.command_id, self.IngressDisposition.CREATED, resolved),
+        )
+        admission = _AdmissionPort(self._admission_result(self.AdmissionDisposition.CREATED))
+        connection = _Connection()
+        result, graph = self.Service(authorities=authority, admissions=admission).admit_with_graph(
+            connection, self._ingress(), self._principal(), correlation_id="correlation-1",
+            occurred_at=datetime(2026, 8, 2, tzinfo=timezone.utc), mode=self.EntryMode.PAPER,
+        )
+        self.assertEqual(result.disposition, self.RuntimeDisposition.CREATED)
+        self.assertIsNotNone(graph)
+        self.assertIs(graph, admission.calls[0][1])
+        self.assertEqual((connection.commits, connection.rollbacks), (0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

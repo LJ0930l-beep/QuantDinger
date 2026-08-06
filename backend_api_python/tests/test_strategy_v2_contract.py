@@ -385,6 +385,7 @@ def handle_data(context, data):
 
     assert manifest.strategy_type == "cta"
     assert manifest.leverage_allowed is True
+    assert manifest.min_leverage == 1
     assert manifest.max_leverage == 5
     assert manifest.primary_frequency == "1h"
 
@@ -463,9 +464,44 @@ def handle_data(context, data):
     manifest = compile_strategy_v2(code).manifest
 
     assert manifest.leverage_allowed is True
+    assert manifest.min_leverage == 1
     assert manifest.max_leverage == 20
     assert manifest.universe.instruments[0].exchange_id == ""
     assert manifest.universe.instruments[0].market_type == "swap"
+
+
+def test_manifest_supports_explicit_crypto_leverage_interval():
+    code = """
+def initialize(context):
+    context.set_universe(["Crypto:BTC/USDT@gate:swap"])
+    context.subscribe(frequency="5m")
+    context.allow_leverage(max_leverage=100, min_leverage=50)
+
+def handle_data(context, data):
+    pass
+"""
+    manifest = compile_strategy_v2(code).manifest
+
+    assert manifest.leverage_allowed is True
+    assert manifest.min_leverage == 50
+    assert manifest.max_leverage == 100
+    assert manifest.metadata()["minLeverage"] == 50
+    assert manifest.metadata()["maxLeverage"] == 100
+
+
+def test_manifest_rejects_invalid_leverage_interval():
+    code = """
+def initialize(context):
+    context.set_universe(["Crypto:BTC/USDT@gate:swap"])
+    context.subscribe(frequency="5m")
+    context.allow_leverage(max_leverage=40, min_leverage=50)
+
+def handle_data(context, data):
+    pass
+"""
+
+    with pytest.raises(StrategyV2ContractError, match="strategyV2.leverageBoundsInvalid"):
+        compile_strategy_v2(code)
 
 
 def test_manifest_rejects_leverage_for_non_crypto_swap_instruments():

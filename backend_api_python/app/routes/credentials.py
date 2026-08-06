@@ -4,8 +4,8 @@ Exchange credentials vault.
 encrypted_config stores Fernet ciphertext managed by app.utils.credential_crypto.
 """
 
-import traceback
 import json
+import time
 from flask import g, jsonify, request
 from app.openapi.blueprint import HumanBlueprint as Blueprint
 from app.openapi.schemas.high_risk import (
@@ -27,7 +27,17 @@ from app.services.live_trading.factory import (
     exchange_trading_environment,
     validate_exchange_environment,
 )
+from app.services.exchange_execution import resolve_exchange_config
 from app.services.live_trading.capabilities import supported_crypto_exchange_ids
+from app.domain.gate_readonly_contracts import (
+    GateEnvironment,
+    GateMarketType,
+    GateReadCapabilityProfile,
+    gate_testnet_base_url_for_market,
+)
+from app.domain.multi_asset_capability_contracts import CapabilityEnvironment
+from app.services.gate_private_read_client import GatePrivateCredential
+from app.services.gate_private_read_http_transport import build_gate_private_read_client
 
 logger = get_logger(__name__)
 
@@ -63,6 +73,129 @@ def _api_key_hint(api_key: str) -> str:
     if len(s) <= 8:
         return s[:2] + '***'
     return f"{s[:4]}...{s[-4:]}"
+
+
+# Only stable, deliberately public contract codes may cross the HTTP boundary.
+# Provider exception text can contain request fragments or credential material,
+# so it must never be reflected to the browser or copied into application logs.
+_SAFE_CREDENTIAL_ERROR_CODES = frozenset(
+    {
+        "MISSING_EXCHANGE_API_CREDENTIALS",
+        "EXCHANGE_PRIVATE_ACCOUNT_PROBE_UNAVAILABLE",
+        "CREDENTIAL_CONNECTION_FAILED",
+        "GATE_TESTNET_NETWORK_UNAVAILABLE",
+        "GATE_TESTNET_AUTH_REJECTED",
+        "GATE_TESTNET_PERMISSION_OR_IP_REJECTED",
+        "CREDENTIAL_MARKET_SCOPE_MISMATCH",
+        "INVALID_CREDENTIAL_MARKET_SCOPE",
+        "UNSUPPORTED_TRADING_ENVIRONMENT",
+        "HTX_DEMO_NOT_SUPPORTED",
+    }
+)
+
+
+class GateCredentialProbeError(ValueError):
+    """Safe per-market Gate probe result for the HTTP boundary."""
+
+    def __init__(self, code: str, *, tested_markets=(), failed_markets=()):
+        self.code = str(code or "CREDENTIAL_CONNECTION_FAILED")
+        self.tested_markets = tuple(str(item) for item in (tested_markets or ()))
+        self.failed_markets = tuple(
+            {
+                "market_type": str(item.get("market_type") or ""),
+                "code": str(item.get("code") or "CREDENTIAL_CONNECTION_FAILED"),
+            }
+            for item in (failed_markets or ())
+            if isinstance(item, dict)
+        )
+        super().__init__(self.code)
+
+
+def _safe_credential_error(exc: Exception, fallback: str) -> str:
+    """Return a stable public error code without reflecting exception text."""
+
+    candidate = str(exc or "").strip()
+    return candidate if candidate in _SAFE_CREDENTIAL_ERROR_CODES else fallback
+
+
+def _gate_probe_error_code(exc: Exception) -> str:
+    """Classify Gate probe failures without reflecting provider payloads.
+
+    Gate's direct client intentionally keeps provider text out of the HTTP
+    response.  A small typed classification still lets the UI distinguish a
+    blocked TestNet network from rejected credentials or permissions.
+    """
+
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    texts: list[str] = []
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        texts.append(str(current).lower())
+        current = current.__cause__ or current.__context__
+    text = " ".join(texts)
+    if any(marker in text for marker in (
+        "connection refused", "failed to establish", "max retries exceeded",
+        "could not connect", "timed out", "timeout", "proxyerror",
+        "name or service not known", "temporary failure in name resolution",
+        "failed to connect", "connection reset", "remote end closed",
+        "winerror 10061", "errno 10061", "actively refused",
+        "gate private read network failed", "temporarily unavailable",
+    )):
+        return "GATE_TESTNET_NETWORK_UNAVAILABLE"
+    if "gate private read permission denied" in text or "permission denied" in text:
+        return "GATE_TESTNET_PERMISSION_OR_IP_REJECTED"
+    if (
+        "gate http 401" in text
+        or "invalid credentials" in text
+        or "invalid key" in text
+        or "authorization failed" in text
+    ):
+        return "GATE_TESTNET_AUTH_REJECTED"
+    if "gate http 403" in text or "ip_forbidden" in text or "permission" in text:
+        return "GATE_TESTNET_PERMISSION_OR_IP_REJECTED"
+    return "CREDENTIAL_CONNECTION_FAILED"
+
+
+def _probe_gate_testnet_readonly(config: dict, market_type: str) -> None:
+    """Probe one Gate TestNet market through the GET-only private adapter.
+
+    Credential validation must not inherit write-capable execution client
+    host quirks. It only performs a signed account read against the explicit
+    market-specific TestNet endpoint.
+    """
+
+    if str(config.get("environment") or "").strip().lower() != "testnet":
+        raise ValueError("UNSUPPORTED_TRADING_ENVIRONMENT")
+    market = str(market_type or "").strip().lower()
+    if market == "spot":
+        gate_market = GateMarketType.SPOT
+        read_accounts = "read_spot_accounts"
+    elif market == "swap":
+        gate_market = GateMarketType.PERPETUAL
+        read_accounts = "read_futures_accounts"
+    else:
+        raise ValueError("INVALID_CREDENTIAL_MARKET_SCOPE")
+    credential = GatePrivateCredential(
+        str(config.get("api_key") or "").strip(),
+        str(config.get("secret_key") or "").strip(),
+        CapabilityEnvironment.TESTNET,
+    )
+    profile = GateReadCapabilityProfile(
+        environment=GateEnvironment.TESTNET,
+        market_type=gate_market,
+        base_url=gate_testnet_base_url_for_market(gate_market),
+        credential_ref="credential-probe",
+        supports_account_reads=True,
+        supports_order_reads=True,
+        supports_fill_reads=True,
+    )
+    client = build_gate_private_read_client(
+        credential=credential,
+        profile=profile,
+        timestamp_provider=lambda: int(time.time()),
+    )
+    getattr(client, read_accounts)()
 
 
 @credentials_blp.route('/list', methods=['GET'])
@@ -107,9 +240,8 @@ def list_credentials():
 
         return jsonify({'code': 1, 'msg': 'success', 'data': {'items': items}})
     except Exception as e:
-        logger.error(f"list_credentials failed: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'code': 0, 'msg': str(e), 'data': {'items': []}}), 500
+        logger.error("list_credentials failed (%s)", type(e).__name__)
+        return jsonify({'code': 0, 'msg': _safe_credential_error(e, 'CREDENTIAL_LIST_FAILED'), 'data': {'items': []}}), 500
 
 
 CRYPTO_EXCHANGES = sorted(supported_crypto_exchange_ids(include_aliases=True))
@@ -138,21 +270,43 @@ def _probe_crypto_credential(config: dict) -> list[str]:
     scope = exchange_market_scope(config)
     markets = ['spot', 'swap'] if scope == 'both' else [scope]
     tested = []
+    failed = []
     for market_type in markets:
-        client = create_client(config, market_type=market_type)
-        if hasattr(client, 'get_account'):
-            client.get_account()
-        elif market_type == 'spot' and hasattr(client, 'get_assets'):
-            client.get_assets()
-        elif hasattr(client, 'get_wallet_balance'):
-            client.get_wallet_balance()
-        elif hasattr(client, 'get_balance'):
-            client.get_balance()
-        elif hasattr(client, 'get_accounts'):
-            client.get_accounts()
-        else:
-            raise ValueError('EXCHANGE_PRIVATE_ACCOUNT_PROBE_UNAVAILABLE')
+        try:
+            if (
+                str(config.get("exchange_id") or "").strip().lower() == "gate"
+                and str(config.get("environment") or "").strip().lower() == "testnet"
+            ):
+                _probe_gate_testnet_readonly(config, market_type)
+            else:
+                client = create_client(config, market_type=market_type)
+                if hasattr(client, 'get_account'):
+                    client.get_account()
+                elif market_type == 'spot' and hasattr(client, 'get_assets'):
+                    client.get_assets()
+                elif hasattr(client, 'get_wallet_balance'):
+                    client.get_wallet_balance()
+                elif hasattr(client, 'get_balance'):
+                    client.get_balance()
+                elif hasattr(client, 'get_accounts'):
+                    client.get_accounts()
+                else:
+                    raise ValueError('EXCHANGE_PRIVATE_ACCOUNT_PROBE_UNAVAILABLE')
+        except Exception as exc:
+            if str(config.get('exchange_id') or '').strip().lower() == 'gate':
+                failed.append({
+                    "market_type": market_type,
+                    "code": _gate_probe_error_code(exc),
+                })
+                continue
+            raise
         tested.append(market_type)
+    if failed and str(config.get('exchange_id') or '').strip().lower() == 'gate':
+        raise GateCredentialProbeError(
+            failed[0]["code"],
+            tested_markets=tested,
+            failed_markets=failed,
+        )
     return tested
 
 
@@ -235,7 +389,72 @@ def test_credential(data):
             return jsonify({'code': 1, 'msg': 'CREDENTIAL_CONNECTION_OK', 'data': None})
         return jsonify({'code': 0, 'msg': 'UNSUPPORTED_EXCHANGE', 'data': None}), 400
     except Exception as exc:
-        return jsonify({'code': 0, 'msg': str(exc) or 'CREDENTIAL_CONNECTION_FAILED', 'data': None}), 400
+        if isinstance(exc, GateCredentialProbeError):
+            return jsonify({
+                'code': 0,
+                'msg': exc.code,
+                'data': {
+                    'environment': config.get('environment'),
+                    'market_scope': config.get('market_scope'),
+                    'tested_markets': list(exc.tested_markets),
+                    'failed_markets': list(exc.failed_markets),
+                },
+            }), 400
+        return jsonify({'code': 0, 'msg': _safe_credential_error(exc, 'CREDENTIAL_CONNECTION_FAILED'), 'data': None}), 400
+
+
+@credentials_blp.route('/test-saved', methods=['POST'])
+@login_required
+def test_saved_credential():
+    """Probe one saved Gate TestNet credential without accepting raw secrets.
+
+    The credential is resolved by the authenticated user and remains encrypted
+    at rest.  This endpoint is deliberately TestNet-only and read-only; Live
+    credentials are rejected before a client is constructed.
+    """
+
+    try:
+        payload = request.get_json(silent=True) or {}
+        credential_id = payload.get('credential_id')
+        if isinstance(credential_id, bool) or credential_id in (None, ''):
+            return jsonify({'code': 0, 'msg': 'CREDENTIAL_ID_REQUIRED', 'data': None}), 400
+        credential_id = int(credential_id)
+        config = dict(resolve_exchange_config({'credential_id': credential_id}, user_id=int(g.user_id)) or {})
+        exchange_id = str(config.get('exchange_id') or config.get('exchangeId') or '').strip().lower()
+        environment = exchange_trading_environment(config, exchange_id)
+        if exchange_id != 'gate' or environment != 'testnet':
+            return jsonify({'code': 0, 'msg': 'GATE_TESTNET_CREDENTIAL_REQUIRED', 'data': None}), 400
+        tested = _probe_crypto_credential(config)
+        return jsonify({
+            'code': 1,
+            'msg': 'CREDENTIAL_CONNECTION_OK',
+            'data': {
+                'exchange_id': 'gate',
+                'environment': 'testnet',
+                'market_scope': exchange_market_scope(config),
+                'tested_markets': tested,
+                'live_enabled': False,
+                'writes_enabled': False,
+            },
+        }), 200
+    except GateCredentialProbeError as exc:
+        return jsonify({
+            'code': 0,
+            'msg': exc.code,
+            'data': {
+                'exchange_id': 'gate',
+                'environment': 'testnet',
+                'market_scope': exchange_market_scope(config),
+                'tested_markets': list(exc.tested_markets),
+                'failed_markets': list(exc.failed_markets),
+                'live_enabled': False,
+                'writes_enabled': False,
+            },
+        }), 400
+    except (TypeError, ValueError):
+        return jsonify({'code': 0, 'msg': 'CREDENTIAL_ID_INVALID', 'data': None}), 400
+    except Exception as exc:
+        return jsonify({'code': 0, 'msg': _safe_credential_error(exc, 'CREDENTIAL_CONNECTION_FAILED'), 'data': None}), 400
 
 
 @credentials_blp.route('/create', methods=['POST'])
@@ -306,7 +525,13 @@ def create_credential(data):
             try:
                 config = _crypto_credential_config(data, exchange_id)
             except Exception as exc:
-                return jsonify({'code': 0, 'msg': str(exc), 'data': None}), 400
+                return jsonify(
+                    {
+                        'code': 0,
+                        'msg': _safe_credential_error(exc, 'CREDENTIAL_CREATE_FAILED'),
+                        'data': None,
+                    }
+                ), 400
             hint = _api_key_hint(config['api_key'])
         else:
             return jsonify({'code': 0, 'msg': f'Unsupported exchange: {exchange_id}', 'data': None}), 400
@@ -331,9 +556,11 @@ def create_credential(data):
 
         return jsonify({'code': 1, 'msg': 'success', 'data': {'id': new_id}})
     except Exception as e:
-        logger.error(f"create_credential failed: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
+        # Keep provider/DB exception text out of logs and the response.  The
+        # exception class is enough for server-side triage without risking a
+        # credential, signed URL, or SQL fragment in the log stream.
+        logger.error("create_credential failed (%s)", type(e).__name__)
+        return jsonify({'code': 0, 'msg': _safe_credential_error(e, 'CREDENTIAL_CREATE_FAILED'), 'data': None}), 500
 
 
 @credentials_blp.route('/update-name', methods=['PUT', 'PATCH'])
@@ -378,9 +605,8 @@ def update_credential_name():
         item = dict(row or {})
         return jsonify({'code': 1, 'msg': 'success', 'data': item})
     except Exception as e:
-        logger.error(f"update_credential_name failed: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
+        logger.error("update_credential_name failed (%s)", type(e).__name__)
+        return jsonify({'code': 0, 'msg': _safe_credential_error(e, 'CREDENTIAL_UPDATE_FAILED'), 'data': None}), 500
 
 
 @credentials_blp.route('/delete', methods=['DELETE'])
@@ -405,9 +631,8 @@ def delete_credential(query):
 
         return jsonify({'code': 1, 'msg': 'success', 'data': None})
     except Exception as e:
-        logger.error(f"delete_credential failed: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'code': 0, 'msg': str(e), 'data': None}), 500
+        logger.error("delete_credential failed (%s)", type(e).__name__)
+        return jsonify({'code': 0, 'msg': _safe_credential_error(e, 'CREDENTIAL_DELETE_FAILED'), 'data': None}), 500
 
 
 # openapi-compat: legacy import name

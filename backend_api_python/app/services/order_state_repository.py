@@ -48,30 +48,66 @@ class OrderStateRepository:
     """One-transaction event append plus guarded aggregate update."""
 
     def apply_order_transition(self, connection: Connection, transition: AuthorizedTransition) -> StateEventResult:
+        """Apply one order transition using the legacy transaction contract.
+
+        Existing callers retain their historical ownership semantics: this
+        compatibility wrapper commits exactly once on success and rolls back
+        exactly once on failure.  New composition code should use
+        :meth:`apply_order_transition_caller_owned` instead.
+        """
+
+        try:
+            result = self.apply_order_transition_caller_owned(connection, transition)
+            connection.commit()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
+
+    def apply_order_transition_caller_owned(
+        self,
+        connection: Connection,
+        transition: AuthorizedTransition,
+    ) -> StateEventResult:
+        """Apply one order transition without committing or rolling back.
+
+        The caller may compose this operation with Durable Entry, Risk,
+        Reservation, Outbox, fill settlement, or other facts on the same
+        database transaction.  Cursor cleanup never changes transaction
+        ownership.
+        """
+
         if transition.aggregate_type is not AggregateType.ECONOMIC_ORDER:
             raise StateEventConflict("economic order repository requires an economic-order transition")
         cursor = connection.cursor()
         try:
-            result = self._apply_order_locked(cursor, transition)
-            connection.commit()
-            return result
-        except Exception:
-            connection.rollback()
-            raise
+            return self._apply_order_locked(cursor, transition)
         finally:
             cursor.close()
 
     def apply_attempt_transition(self, connection: Connection, transition: AuthorizedTransition) -> StateEventResult:
-        if transition.aggregate_type is not AggregateType.SUBMISSION_ATTEMPT:
-            raise StateEventConflict("attempt repository requires a submission-attempt transition")
-        cursor = connection.cursor()
+        """Apply one attempt transition using the legacy transaction contract."""
+
         try:
-            result = self._apply_attempt_locked(cursor, transition)
+            result = self.apply_attempt_transition_caller_owned(connection, transition)
             connection.commit()
             return result
         except Exception:
             connection.rollback()
             raise
+
+    def apply_attempt_transition_caller_owned(
+        self,
+        connection: Connection,
+        transition: AuthorizedTransition,
+    ) -> StateEventResult:
+        """Apply one submission-attempt transition without transaction I/O."""
+
+        if transition.aggregate_type is not AggregateType.SUBMISSION_ATTEMPT:
+            raise StateEventConflict("attempt repository requires a submission-attempt transition")
+        cursor = connection.cursor()
+        try:
+            return self._apply_attempt_locked(cursor, transition)
         finally:
             cursor.close()
 

@@ -26,6 +26,55 @@ import pytest
 from app import create_app
 
 
+def _register_uuid_adapter() -> None:
+    """Register psycopg2 UUID adaptation for PostgreSQL integration tests.
+
+    psycopg2 does not adapt ``uuid.UUID`` to the ``uuid`` column type unless
+    the adapter is registered explicitly.  A few contract tests pass
+    ``uuid4()`` directly; register the adapter once so those tests behave the
+    same on every environment instead of failing with
+    ``ProgrammingError: can't adapt type 'UUID'``.
+    """
+    try:
+        import psycopg2.extras
+
+        psycopg2.extras.register_uuid()
+    except Exception:
+        # psycopg2 absent or adapter unavailable; integration tests will skip.
+        pass
+
+
+_register_uuid_adapter()
+
+
+def _repair_app_package_links() -> None:
+    """Restore parent-package attributes after isolated contract loaders.
+
+    A number of contract tests load production modules under temporary ``app``
+    package objects.  Restoring ``sys.modules`` alone does not restore the
+    attribute that import normally places on the real parent package (for
+    example ``app.services``).  Later tests and pytest's monkeypatch resolver
+    access that attribute directly, so a previous loader can otherwise make
+    the result depend on collection order.  Keep this repair in the test
+    harness; it has no effect on the application package at runtime.
+    """
+    for module_name, module in tuple(sys.modules.items()):
+        if not module_name.startswith("app.") or module is None:
+            continue
+        parent_name, child_name = module_name.rsplit(".", 1)
+        parent = sys.modules.get(parent_name)
+        if parent is None:
+            continue
+        if getattr(parent, child_name, None) is not module:
+            setattr(parent, child_name, module)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    """Make test results independent of dynamic module-loader order."""
+    _repair_app_package_links()
+
+
 @pytest.fixture(scope="session")
 def app():
     """Create application for testing."""

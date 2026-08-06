@@ -60,8 +60,13 @@ class PositionSizingRequest:
 
     def __post_init__(self) -> None:
         for field in ("request_fingerprint", "instrument_id"): _text(getattr(self, field), field)
-        for field in ("mark_price", "requested_quantity", "available_margin", "max_notional", "max_leverage", "margin_rate"):
+        for field in ("mark_price", "requested_quantity", "available_margin", "max_notional", "max_leverage"):
             object.__setattr__(self, field, _decimal(getattr(self, field), field, positive=True))
+        # A zero margin rate is a valid input fact but never an allowed sizing
+        # result: the evaluator must return a typed deny instead of making an
+        # invalid infinite-leverage assumption.  Keeping the value representable
+        # also makes the guard below reachable and replayable.
+        object.__setattr__(self, "margin_rate", _decimal(self.margin_rate, "margin_rate", non_negative=True))
         if self.margin_rate > 1: raise PortfolioRiskError("margin_rate cannot exceed 1")
         object.__setattr__(self, "observed_at", _utc(self.observed_at, "observed_at"))
 

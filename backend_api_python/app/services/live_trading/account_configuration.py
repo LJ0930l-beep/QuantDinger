@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from decimal import Decimal, InvalidOperation
+from typing import Any, Dict, Tuple
 
 from app.services.live_trading.base import LiveTradingError
 
@@ -14,6 +15,40 @@ def normalize_margin_mode(value: str) -> str:
     if raw in {"isolated", "iso"}:
         return "isolated"
     raise LiveTradingError(f"Unsupported margin mode: {value}")
+
+
+def _decimal_contract_bound(value: Any, *, field: str) -> Decimal:
+    """Parse an exchange-provided leverage bound without a float round-trip."""
+
+    try:
+        bound = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise LiveTradingError(f"Invalid exchange leverage bound: {field}") from exc
+    if not bound.is_finite() or bound <= 0:
+        raise LiveTradingError(f"Invalid exchange leverage bound: {field}")
+    return bound
+
+
+def _gate_contract_leverage_bounds(client: Any, *, contract: str) -> Tuple[Decimal, Decimal]:
+    """Return the exact Gate contract leverage interval or fail closed.
+
+    Gate exposes these values in the contract metadata.  They are contract and
+    risk-tier facts, not a global ``50x``/``100x`` application setting.  An
+    absent or malformed interval must never be replaced with a guessed default.
+    """
+
+    metadata = client.get_contract(contract=contract)
+    if not isinstance(metadata, dict):
+        raise LiveTradingError("Gate leverage bounds unavailable")
+    minimum = _decimal_contract_bound(
+        metadata.get("leverage_min"), field="leverage_min"
+    )
+    maximum = _decimal_contract_bound(
+        metadata.get("leverage_max"), field="leverage_max"
+    )
+    if minimum > maximum:
+        raise LiveTradingError("Gate leverage bounds are inconsistent")
+    return minimum, maximum
 
 
 def configure_derivatives_account(
@@ -82,8 +117,27 @@ def configure_derivatives_account(
             leverage=target_leverage,
         )
     elif isinstance(client, GateUsdtFuturesClient):
+        contract = to_gate_currency_pair(symbol)
+        exchange_min, exchange_max = _gate_contract_leverage_bounds(
+            client, contract=contract
+        )
+        requested = Decimal(target_leverage)
+        if requested < exchange_min or requested > exchange_max:
+            raise LiveTradingError(
+                "Gate leverage outside contract bounds: "
+                f"requested={target_leverage}, "
+                f"allowed={format(exchange_min, 'f')}-{format(exchange_max, 'f')}"
+            )
+        details.update(
+            {
+                "contract": contract,
+                "exchange_leverage_min": format(exchange_min, "f"),
+                "exchange_leverage_max": format(exchange_max, "f"),
+                "leverage_verified": True,
+            }
+        )
         ok = client.set_leverage(
-            contract=to_gate_currency_pair(symbol),
+            contract=contract,
             leverage=target_leverage,
             margin_mode=mode,
         )

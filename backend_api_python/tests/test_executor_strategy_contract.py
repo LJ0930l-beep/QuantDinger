@@ -398,6 +398,41 @@ def test_live_robot_requires_a_saved_exchange_credential():
     assert payload["exchange_config"]["credential_id"] == 42
 
 
+def test_gate_perpetual_robot_enforces_venue_leverage_contract():
+    with pytest.raises(ValueError, match="gateLeverageContractInvalid"):
+        build_executor_strategy_payload(
+            _robot_payload(
+                "grid",
+                execution_mode="live",
+                leverage=5,
+                exchange_config={"credential_id": 42, "exchange_id": "gateio"},
+            ),
+            user_id=7,
+        )
+
+    accepted = build_executor_strategy_payload(
+        _robot_payload(
+            "grid",
+            execution_mode="paper",
+            leverage=50,
+            exchange_config={"credential_id": 42, "exchange_id": "gate"},
+        ),
+        user_id=7,
+    )
+    assert accepted["leverage"] == 50
+
+    accepted_max = build_executor_strategy_payload(
+        _robot_payload(
+            "grid",
+            execution_mode="paper",
+            leverage=100,
+            exchange_config={"credential_id": 42, "exchange_id": "gate.io"},
+        ),
+        user_id=7,
+    )
+    assert accepted_max["leverage"] == 100
+
+
 def test_dca_is_forced_to_spot_long_and_cannot_enable_leverage():
     payload = build_executor_strategy_payload(
         _robot_payload("dca", market_type="swap", side="short", leverage=20, timeframe="1m"),

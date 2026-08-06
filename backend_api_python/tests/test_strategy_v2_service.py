@@ -77,6 +77,37 @@ def handle_data(context, data):
     assert repository.persisted["manifest"]["apiVersion"] == 2
 
 
+def test_v2_service_rejects_non_finite_leverage_before_market_data_fetch():
+    code = """
+def initialize(context):
+    context.set_universe(["Crypto:BTC/USDT@gate:swap"])
+    context.subscribe(frequency="1d")
+    context.allow_leverage(max_leverage=100, min_leverage=50)
+
+def handle_data(context, data):
+    pass
+"""
+    fetch_calls = []
+
+    def fetch(*_args, **_kwargs):
+        fetch_calls.append(True)
+        return _frame()
+
+    service = StrategyV2BacktestService(repository=_Repository(), frame_fetcher=fetch)
+    with pytest.raises(StrategyV2ContractError, match="strategyV2.leverageInvalid"):
+        service.run(
+            user_id=1,
+            code=code,
+            start_date=datetime(2026, 1, 1),
+            end_date=datetime(2026, 1, 5, 23, 59),
+            initial_capital=10000,
+            leverage_enabled=True,
+            leverage=float("nan"),
+            persist=False,
+        )
+    assert fetch_calls == []
+
+
 def test_dynamic_universe_reference_matches_canonical_universe_code():
     assert _universe_matches(
         {"code": "nasdaq100", "source_ref": "NDX"},

@@ -30,6 +30,18 @@ class BacktestSide(str, Enum):
 class BacktestExecutionKind(str, Enum):
     MARKET = "market"
     LIMIT = "limit"
+    STOP_MARKET = "stop_market"
+    STOP_LIMIT = "stop_limit"
+
+
+class BacktestTriggerDirection(str, Enum):
+    CROSS_UP = "cross_up"
+    CROSS_DOWN = "cross_down"
+
+
+class BacktestTriggerPriceType(str, Enum):
+    HIGH_LOW = "high_low"
+    CLOSE = "close"
 
 
 class BacktestDecision(str, Enum):
@@ -79,6 +91,7 @@ class BacktestRunFacts:
     valuation_ccy: str
     clock_start: datetime
     clock_end: datetime
+    cost_policy_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         for field in ("run_id", "dataset_snapshot_id", "instrument_rule_version", "fee_policy_version", "slippage_policy_version", "valuation_ccy"):
@@ -87,6 +100,14 @@ class BacktestRunFacts:
         start, end = _utc(self.clock_start, "clock_start"), _utc(self.clock_end, "clock_end")
         if end <= start: raise BacktestContractError("clock_end must follow clock_start")
         object.__setattr__(self, "clock_start", start); object.__setattr__(self, "clock_end", end)
+        if self.cost_policy_fingerprint is not None:
+            if (
+                not isinstance(self.cost_policy_fingerprint, str)
+                or len(self.cost_policy_fingerprint) != 64
+                or self.cost_policy_fingerprint != self.cost_policy_fingerprint.lower()
+                or any(char not in "0123456789abcdef" for char in self.cost_policy_fingerprint)
+            ):
+                raise BacktestContractError("cost_policy_fingerprint must be lowercase sha256 text")
 
 
 @dataclass(frozen=True)
@@ -123,15 +144,36 @@ class BacktestOrderIntent:
     quantity: Decimal
     submitted_at: datetime
     limit_price: Decimal | None = None
+    trigger_price: Decimal | None = None
+    trigger_direction: BacktestTriggerDirection | None = None
+    trigger_price_type: BacktestTriggerPriceType | None = None
 
     def __post_init__(self) -> None:
         _text(self.order_id, "order_id"); _text(self.instrument_id, "instrument_id")
         if not isinstance(self.side, BacktestSide) or not isinstance(self.execution_kind, BacktestExecutionKind): raise BacktestContractError("typed order fields are required")
         object.__setattr__(self, "quantity", _decimal(self.quantity, "quantity", positive=True)); object.__setattr__(self, "submitted_at", _utc(self.submitted_at, "submitted_at"))
-        if self.execution_kind is BacktestExecutionKind.LIMIT:
+        if self.execution_kind in (BacktestExecutionKind.LIMIT, BacktestExecutionKind.STOP_LIMIT):
             if self.limit_price is None: raise BacktestContractError("limit order requires limit_price")
             object.__setattr__(self, "limit_price", _decimal(self.limit_price, "limit_price", positive=True))
         elif self.limit_price is not None: raise BacktestContractError("market order cannot carry limit_price")
+        is_stop = self.execution_kind in (BacktestExecutionKind.STOP_MARKET, BacktestExecutionKind.STOP_LIMIT)
+        if is_stop:
+            if self.trigger_price is None or not isinstance(self.trigger_direction, BacktestTriggerDirection) or not isinstance(self.trigger_price_type, BacktestTriggerPriceType):
+                raise BacktestContractError("stop orders require typed trigger facts")
+            if (
+                (self.side is BacktestSide.BUY and self.trigger_direction is not BacktestTriggerDirection.CROSS_UP)
+                or (self.side is BacktestSide.SELL and self.trigger_direction is not BacktestTriggerDirection.CROSS_DOWN)
+            ):
+                raise BacktestContractError("stop trigger direction is inconsistent with order side")
+            object.__setattr__(self, "trigger_price", _decimal(self.trigger_price, "trigger_price", positive=True))
+            if self.execution_kind is BacktestExecutionKind.STOP_LIMIT:
+                assert self.limit_price is not None
+                if self.side is BacktestSide.BUY and self.limit_price < self.trigger_price:
+                    raise BacktestContractError("buy stop-limit limit_price cannot be below trigger_price")
+                if self.side is BacktestSide.SELL and self.limit_price > self.trigger_price:
+                    raise BacktestContractError("sell stop-limit limit_price cannot be above trigger_price")
+        elif any(value is not None for value in (self.trigger_price, self.trigger_direction, self.trigger_price_type)):
+            raise BacktestContractError("non-stop orders cannot carry trigger facts")
 
 
 @dataclass(frozen=True)
@@ -156,12 +198,36 @@ def next_open_execution(order: BacktestOrderIntent, bar: BacktestBar) -> Backtes
         return BacktestExecutionDecision(order.order_id, BacktestDecision.INVALID, None, None, "bar is not a later eligible open")
     if order.execution_kind is BacktestExecutionKind.MARKET:
         return BacktestExecutionDecision(order.order_id, BacktestDecision.EXECUTED, bar.open_time, bar.open_price, "next_open_market")
+    if order.execution_kind is BacktestExecutionKind.LIMIT:
+        limit = order.limit_price
+        assert limit is not None
+        crossed = (order.side is BacktestSide.BUY and bar.low_price <= limit) or (order.side is BacktestSide.SELL and bar.high_price >= limit)
+        if not crossed:
+            return BacktestExecutionDecision(order.order_id, BacktestDecision.NOT_EXECUTED, None, None, "limit_not_reached")
+        return BacktestExecutionDecision(order.order_id, BacktestDecision.EXECUTED, bar.open_time, limit, "next_open_limit")
+
+    assert order.trigger_price is not None and order.trigger_direction is not None and order.trigger_price_type is not None
+    observed = bar.close_price if order.trigger_price_type is BacktestTriggerPriceType.CLOSE else None
+    triggered = (
+        (observed >= order.trigger_price if order.trigger_direction is BacktestTriggerDirection.CROSS_UP else observed <= order.trigger_price)
+        if observed is not None
+        else (bar.high_price >= order.trigger_price if order.trigger_direction is BacktestTriggerDirection.CROSS_UP else bar.low_price <= order.trigger_price)
+    )
+    if not triggered:
+        return BacktestExecutionDecision(order.order_id, BacktestDecision.NOT_EXECUTED, None, None, "stop_trigger_not_reached")
+    if order.execution_kind is BacktestExecutionKind.STOP_MARKET:
+        fill_price = (
+            max(bar.open_price, order.trigger_price)
+            if order.trigger_direction is BacktestTriggerDirection.CROSS_UP
+            else min(bar.open_price, order.trigger_price)
+        )
+        return BacktestExecutionDecision(order.order_id, BacktestDecision.EXECUTED, bar.open_time, fill_price, "stop_market_triggered")
     limit = order.limit_price
     assert limit is not None
     crossed = (order.side is BacktestSide.BUY and bar.low_price <= limit) or (order.side is BacktestSide.SELL and bar.high_price >= limit)
     if not crossed:
-        return BacktestExecutionDecision(order.order_id, BacktestDecision.NOT_EXECUTED, None, None, "limit_not_reached")
-    return BacktestExecutionDecision(order.order_id, BacktestDecision.EXECUTED, bar.open_time, limit, "next_open_limit")
+        return BacktestExecutionDecision(order.order_id, BacktestDecision.NOT_EXECUTED, None, None, "stop_limit_not_reached")
+    return BacktestExecutionDecision(order.order_id, BacktestDecision.EXECUTED, bar.open_time, limit, "stop_limit_triggered")
 
 
 def backtest_fingerprint(value: Any) -> str:
@@ -176,4 +242,4 @@ def backtest_fingerprint(value: Any) -> str:
     return hashlib.sha256(json.dumps(normalize(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
 
 
-__all__ = ["BACKTEST_CONTRACT_VERSION", "BacktestBar", "BacktestContractError", "BacktestDecision", "BacktestExecutionDecision", "BacktestExecutionKind", "BacktestOrderIntent", "BacktestRunFacts", "BacktestSide", "backtest_fingerprint", "next_open_execution"]
+__all__ = ["BACKTEST_CONTRACT_VERSION", "BacktestBar", "BacktestContractError", "BacktestDecision", "BacktestExecutionDecision", "BacktestExecutionKind", "BacktestOrderIntent", "BacktestRunFacts", "BacktestSide", "BacktestTriggerDirection", "BacktestTriggerPriceType", "backtest_fingerprint", "next_open_execution"]

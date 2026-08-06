@@ -86,6 +86,20 @@ def _get_requests_verify() -> Union[bool, str]:
     return _requests_verify_value
 
 
+def _get_exchange_proxy() -> Optional[str]:
+    """Return the explicit exchange/broker proxy without exposing credentials.
+
+    ``PROXY_URL`` is the application's documented proxy setting for market
+    data and exchange APIs.  Requests will still honor the normal system
+    proxy environment when this is unset; the explicit setting is needed for
+    deployments where the proxy is configured in the application rather than
+    exported to the API process.
+    """
+
+    value = (os.environ.get("PROXY_URL") or "").strip()
+    return value or None
+
+
 @dataclass
 class LiveOrderResult:
     exchange_id: str
@@ -134,15 +148,21 @@ class BaseRestClient:
             assert_fd_available("exchange REST")
             request_headers = dict(headers or {})
             request_headers.setdefault("Connection", "close")
+            proxy = _get_exchange_proxy()
+            request_kwargs = {
+                "method": str(method or "GET").upper(),
+                "url": url,
+                "params": params or None,
+                "json": json_body if json_body is not None else None,
+                "data": data,
+                "headers": request_headers or None,
+                "timeout": self.timeout_sec,
+                "verify": _get_requests_verify(),
+            }
+            if proxy:
+                request_kwargs["proxies"] = {"http": proxy, "https": proxy}
             with requests.request(
-                    method=str(method or "GET").upper(),
-                    url=url,
-                    params=params or None,
-                    json=json_body if json_body is not None else None,
-                    data=data,
-                    headers=request_headers or None,
-                    timeout=self.timeout_sec,
-                    verify=_get_requests_verify(),
+                    **request_kwargs,
             ) as resp:
                 text = resp.text or ""
                 parsed: Dict[str, Any] = {}

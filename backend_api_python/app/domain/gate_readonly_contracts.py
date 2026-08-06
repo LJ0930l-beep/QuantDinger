@@ -33,7 +33,12 @@ class GateEnvironment(str, Enum):
     TESTNET = "testnet"
 
 
+# Gate publishes separate TestNet REST hosts for Spot and USDT perpetuals.
+# Keep the historical spot constant for compatibility, but never reuse it for
+# a perpetual request: Gate signs and routes those requests on the futures
+# host instead.
 GATE_TESTNET_REST_BASE_URL = "https://api-testnet.gateapi.io"
+GATE_TESTNET_FUTURES_REST_BASE_URL = "https://fx-api-testnet.gateio.ws"
 GATE_TESTNET_API_PREFIX = "/api/v4"
 
 
@@ -48,11 +53,24 @@ def _canonical_base_url(value: str) -> str:
     return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, "", ""))
 
 
-def canonical_gate_testnet_base_url(value: str = GATE_TESTNET_REST_BASE_URL) -> str:
-    """Return the only endpoint accepted by the read-only Gate TestNet profile."""
+def gate_testnet_base_url_for_market(market_type: GateMarketType | str) -> str:
+    """Return the official TestNet host for one explicit Gate market."""
+
+    try:
+        market = market_type if isinstance(market_type, GateMarketType) else GateMarketType(str(market_type).strip().lower())
+    except (TypeError, ValueError) as exc:
+        raise GateReadonlyContractError("Gate market_type is invalid") from exc
+    return GATE_TESTNET_FUTURES_REST_BASE_URL if market is GateMarketType.PERPETUAL else GATE_TESTNET_REST_BASE_URL
+
+
+def canonical_gate_testnet_base_url(
+    value: str = GATE_TESTNET_REST_BASE_URL,
+    market_type: GateMarketType | str = GateMarketType.SPOT,
+) -> str:
+    """Return the official endpoint for the requested Gate TestNet market."""
 
     normalized = _canonical_base_url(value)
-    expected = _canonical_base_url(GATE_TESTNET_REST_BASE_URL)
+    expected = _canonical_base_url(gate_testnet_base_url_for_market(market_type))
     if normalized != expected:
         raise GateUnsupportedEnvironment("Gate TestNet profile rejects non-TestNet endpoint")
     return normalized
@@ -69,7 +87,7 @@ class GateReadCapabilityProfile:
 
     environment: GateEnvironment
     market_type: GateMarketType
-    base_url: str = GATE_TESTNET_REST_BASE_URL
+    base_url: str | None = None
     credential_ref: str = ""
     supports_public_market_data: bool = True
     supports_account_reads: bool = False
@@ -82,7 +100,9 @@ class GateReadCapabilityProfile:
             raise GateReadonlyContractError("Gate environment must be TESTNET")
         if not isinstance(self.market_type, GateMarketType):
             raise GateReadonlyContractError("Gate market_type is invalid")
-        canonical_gate_testnet_base_url(self.base_url)
+        base_url = self.base_url or gate_testnet_base_url_for_market(self.market_type)
+        object.__setattr__(self, "base_url", base_url)
+        canonical_gate_testnet_base_url(base_url, self.market_type)
         ref = str(self.credential_ref or "").strip()
         if not ref:
             raise GateReadonlyContractError("credential_ref is required but must not contain secret material")
@@ -97,13 +117,13 @@ def validate_gate_readonly_profile(profile: GateReadCapabilityProfile) -> GateRe
 
     if not isinstance(profile, GateReadCapabilityProfile):
         raise GateReadonlyContractError("Gate capability profile is required")
-    canonical_gate_testnet_base_url(profile.base_url)
+    canonical_gate_testnet_base_url(profile.base_url, profile.market_type)
     if profile.writes_enabled:
         raise GateReadonlyContractError("Gate write capability is not permitted by this contract")
     return profile
 
 
-def gate_testnet_api_url(path: str) -> str:
+def gate_testnet_api_url(path: str, market_type: GateMarketType | str = GateMarketType.SPOT) -> str:
     """Build a TestNet API URL from a relative API-v4 path, without network I/O."""
 
     value = str(path or "").strip()
@@ -113,7 +133,7 @@ def gate_testnet_api_url(path: str) -> str:
         suffix = value
     else:
         suffix = f"{GATE_TESTNET_API_PREFIX}{value}"
-    return f"{GATE_TESTNET_REST_BASE_URL}{suffix}"
+    return f"{gate_testnet_base_url_for_market(market_type)}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -178,6 +198,7 @@ def normalize_gate_ohlcv(rows: Iterable[Sequence[Any]]) -> Tuple[GateOhlcvBar, .
 
 __all__ = [
     "GATE_TESTNET_API_PREFIX",
+    "GATE_TESTNET_FUTURES_REST_BASE_URL",
     "GATE_TESTNET_REST_BASE_URL",
     "GateEnvironment",
     "GateMarketType",
@@ -186,6 +207,7 @@ __all__ = [
     "GateReadonlyContractError",
     "GateUnsupportedEnvironment",
     "canonical_gate_testnet_base_url",
+    "gate_testnet_base_url_for_market",
     "gate_testnet_api_url",
     "normalize_gate_ohlcv",
     "validate_gate_readonly_profile",
