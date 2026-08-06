@@ -1375,6 +1375,32 @@ paths:
       - Dashboard
       operationId: postApiQuantRuntimeEntryPipelineRun
       x-visibility: internal
+  /api/quant/runtime-entry/risk-facts/project:
+    post:
+      responses:
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanErrorEnvelope'
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HumanSuccessEnvelope'
+      summary: Project authoritative risk facts from a real Gate snapshot.
+      description: 'Writes conservative policy, instrument rules, account facts, kill
+        switches
+
+        (all OFF), and market observations so Hard Risk can evaluate Open/Increase
+
+        admission.  Repeated calls are idempotent (ON CONFLICT DO NOTHING).'
+      tags:
+      - Dashboard
+      operationId: postApiQuantRuntimeEntryRiskFactsProject
+      x-visibility: internal
   /api/quant/gate/testnet/order:
     post:
       responses:
