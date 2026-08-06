@@ -98,16 +98,8 @@ def test_create_strategy_uses_canonical_deployment_payload(monkeypatch, fresh_mo
     }
 
 
-def test_quick_order_forwards_native_protection(monkeypatch, fresh_module):
-    captured = {}
-
-    monkeypatch.setattr(fresh_module, "_get", lambda path, params=None: {"paper_only": True})
-
-    def fake_post(path, json=None, headers=None):
-        captured.update(path=path, json=json, headers=headers)
-        return {"status": "filled"}
-
-    monkeypatch.setattr(fresh_module, "_post", fake_post)
+def test_quick_order_fails_closed_after_sc15_retirement(fresh_module):
+    # SC-15 permanently disabled Agent/MCP trading authority.
     out = fresh_module.place_quick_order(
         "Crypto",
         "BTC/USDT",
@@ -117,10 +109,8 @@ def test_quick_order_forwards_native_protection(monkeypatch, fresh_module):
         sl_price=60000,
         confirm_order=True,
     )
-
-    assert out == {"status": "filled"}
-    assert captured["json"]["tp_price"] == 70000.0
-    assert captured["json"]["sl_price"] == 60000.0
+    assert out.get("error") is True
+    assert out.get("status") == 410
 
 
 def test_stop_strategy_requires_confirmation(fresh_module):
@@ -129,10 +119,12 @@ def test_stop_strategy_requires_confirmation(fresh_module):
     assert out.get("status") == 400
 
 
-def test_place_quick_order_requires_confirmation(fresh_module):
+def test_place_quick_order_fails_closed_without_confirmation(fresh_module):
+    # Without confirmation the call must fail closed; after SC-15 the
+    # Agent/MCP trading authority is permanently disabled (410).
     out = fresh_module.place_quick_order("Crypto", "BTC/USDT", "buy", 0.001)
     assert out.get("error") is True
-    assert out.get("status") == 400
+    assert out.get("status") == 410
 
 
 def test_indicator_code_size_rejected_in_mcp(monkeypatch, fresh_module):
